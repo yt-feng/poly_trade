@@ -1,0 +1,66 @@
+name: Build clean dataset and analysis for source run 24869603988_attempt1
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'analysis/build_run_24869603988_dataset.py'
+      - '.github/workflows/run-24869603988-analysis.yml'
+      - 'requirements.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-clean-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build cleaned dataset and report
+        run: |
+          python analysis/build_run_24869603988_dataset.py \
+            --source-dir source_poly/data/runs/24869603988_attempt1 \
+            --cleaned-dir data/cleaned/run_24869603988_attempt1 \
+            --report-dir reports/run_24869603988_attempt1
+
+      - name: Publish workflow summary
+        run: |
+          echo '## Cleaned dataset and analysis' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Source repo: `yt-feng/poly`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Source subdir: `data/runs/24869603988_attempt1`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Cleaned quote file: `data/cleaned/run_24869603988_attempt1/btc_updown_5m_quotes_clean.csv`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Cleaned market file: `data/cleaned/run_24869603988_attempt1/btc_updown_5m_markets_clean.csv`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Report: `reports/run_24869603988_attempt1/report.md`' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          cat reports/run_24869603988_attempt1/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-24869603988-attempt1-analysis-${{ github.run_id }}
+          path: |
+            data/cleaned/run_24869603988_attempt1
+            reports/run_24869603988_attempt1
+          if-no-files-found: error
