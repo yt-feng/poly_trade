@@ -1,0 +1,98 @@
+name: Import source run 24869603988 and analyze
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/import-run-24869603988-and-analyze.yml'
+      - 'analysis/fetch_and_merge_source_run.py'
+      - 'analysis/eda_polymarket_5m.py'
+      - 'requirements.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import_and_analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Clone source repository
+        run: |
+          git clone --depth 1 https://github.com/yt-feng/poly.git /tmp/source_poly
+
+      - name: Merge full 25-hour run into one clean csv
+        run: |
+          python analysis/fetch_and_merge_source_run.py \
+            --source-root /tmp/source_poly \
+            --source-run-dir data/runs/24869603988_attempt1 \
+            --output datasets/polymarket/btc_updown_5m_24869603988_attempt1_clean.csv \
+            --summary-path reports/import/24869603988_attempt1_merge_summary.json
+
+      - name: Commit merged dataset into poly_trade
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add datasets/polymarket/btc_updown_5m_24869603988_attempt1_clean.csv reports/import/24869603988_attempt1_merge_summary.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Import clean merged data for source run 24869603988_attempt1"
+          git push origin HEAD:main
+
+      - name: Run EDA with fixed input path
+        run: |
+          python analysis/eda_polymarket_5m.py \
+            --input datasets/polymarket/btc_updown_5m_24869603988_attempt1_clean.csv \
+            --output-dir reports/eda/24869603988_attempt1 \
+            --fee 0.01
+
+      - name: Publish analysis summary
+        run: |
+          {
+            echo '## Imported dataset'
+            echo
+            echo '- Source repo: `yt-feng/poly`'
+            echo '- Source run dir: `data/runs/24869603988_attempt1`'
+            echo '- Merged clean csv: `datasets/polymarket/btc_updown_5m_24869603988_attempt1_clean.csv`'
+            echo '- Fee used in EDA: `0.01`'
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f reports/import/24869603988_attempt1_merge_summary.json ]; then
+            echo '### Merge summary' >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat reports/import/24869603988_attempt1_merge_summary.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ -f reports/eda/24869603988_attempt1/report.md ]; then
+            cat reports/eda/24869603988_attempt1/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: import-and-eda-24869603988-attempt1-${{ github.run_id }}
+          path: |
+            datasets/polymarket/btc_updown_5m_24869603988_attempt1_clean.csv
+            reports/import/24869603988_attempt1_merge_summary.json
+            reports/eda/24869603988_attempt1
+          if-no-files-found: error
