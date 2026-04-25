@@ -1,0 +1,121 @@
+name: Polymarket BTC UpDown 5m EDA
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'data/**'
+      - 'analysis/**'
+      - 'requirements.txt'
+      - '.github/workflows/polymarket-eda.yml'
+  workflow_dispatch:
+    inputs:
+      input_path:
+        description: 'Optional csv/parquet path in the repo, for example data/btc_updown_5m.csv'
+        required: false
+        default: ''
+      fee:
+        description: 'Per-trade fixed fee in probability points'
+        required: false
+        default: '0.01'
+
+permissions:
+  contents: read
+
+jobs:
+  eda:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Resolve input file
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INPUT_PATH="${{ github.event.inputs.input_path }}"
+          if [ -n "$INPUT_PATH" ] && [ -f "$INPUT_PATH" ]; then
+            echo "input_path=$INPUT_PATH" >> "$GITHUB_OUTPUT"
+            echo "has_data=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          FOUND=""
+          if [ -d data ]; then
+            FOUND="$(find data -type f \( -name '*.csv' -o -name '*.parquet' \) | sort | head -n 1 || true)"
+          fi
+
+          if [ -n "$FOUND" ]; then
+            echo "input_path=$FOUND" >> "$GITHUB_OUTPUT"
+            echo "has_data=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_data=false" >> "$GITHUB_OUTPUT"
+            {
+              echo '## Polymarket EDA'
+              echo
+              echo 'No csv/parquet data file found under `data/`.'
+              echo
+              echo 'Push a file such as `data/btc_updown_5m.csv`, or run this workflow manually and fill `input_path`.'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Run EDA
+        if: steps.resolve.outputs.has_data == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FEE="${{ github.event.inputs.fee }}"
+          if [ -z "$FEE" ]; then
+            FEE='0.01'
+          fi
+
+          python analysis/eda_polymarket_5m.py \
+            --input "${{ steps.resolve.outputs.input_path }}" \
+            --output-dir reports/eda \
+            --fee "$FEE"
+
+      - name: Publish report to workflow summary
+        if: steps.resolve.outputs.has_data == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FEE="${{ github.event.inputs.fee }}"
+          if [ -z "$FEE" ]; then
+            FEE='0.01'
+          fi
+
+          {
+            echo '## Polymarket EDA'
+            echo
+            echo "- Input: `${{ steps.resolve.outputs.input_path }}`"
+            echo "- Fee: `$FEE`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f reports/eda/report.md ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            cat reports/eda/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload analysis artifacts
+        if: steps.resolve.outputs.has_data == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: polymarket-eda-${{ github.run_id }}
+          path: reports/eda
+          if-no-files-found: error
