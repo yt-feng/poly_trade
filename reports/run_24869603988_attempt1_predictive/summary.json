@@ -4,8 +4,6 @@
   "quote_rows": 36399,
   "market_rows": 302,
   "feature_rows": 302,
-  "threshold_rule_rows": 28,
-  "interval_strategy_rows": 40,
-  "model_rows": 2,
-  "figure_count": 12
+  "bankroll_strategy_rows": 55,
+  "figure_count": 6
 }
