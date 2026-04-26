@@ -5,7 +5,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List
 
 import numpy as np
 import pandas as pd
@@ -118,7 +118,6 @@ def prepare_quotes(raw: pd.DataFrame) -> pd.DataFrame:
     quotes["close_ts_utc"] = quotes["slug"].map(parse_close_ts_from_slug)
     quotes["seconds_to_close"] = (quotes["close_ts_utc"] - quotes["ts_utc"]).dt.total_seconds()
     quotes["time_to_close_bucket"] = quotes["seconds_to_close"].map(bucket_seconds_to_close)
-
     quotes["mid_sum_cents"] = quotes[["mid_up_cents", "mid_down_cents"]].sum(axis=1, min_count=2)
     quotes["mid_overround_cents"] = quotes["mid_sum_cents"] - 100.0
     quotes["mid_up_prob"] = quotes["mid_up_cents"] / 100.0
@@ -129,8 +128,9 @@ def prepare_quotes(raw: pd.DataFrame) -> pd.DataFrame:
         & quotes["sell_up_cents"].notna()
         & quotes["sell_down_cents"].notna()
     )
+    quotes["btc_move_from_target"] = quotes["final_price"] - quotes["target_price"]
 
-    quotes = quotes.sort_values(["ts_utc", "slug", "source_file"]).drop_duplicates(subset=["ts_iso", "slug"], keep="last")
+    quotes = quotes.sort_values(["slug", "ts_utc", "source_file"]).drop_duplicates(subset=["ts_iso", "slug"], keep="last")
     quotes = quotes.reset_index(drop=True)
     return quotes
 
@@ -152,104 +152,116 @@ def build_markets(quotes: pd.DataFrame) -> pd.DataFrame:
         mid_up_last=("mid_up_cents", last_non_null),
         mid_up_low=("mid_up_cents", "min"),
         mid_up_high=("mid_up_cents", "max"),
-        mid_down_open=("mid_down_cents", first_non_null),
-        mid_down_last=("mid_down_cents", last_non_null),
         spread_up_median=("spread_up_cents", "median"),
         spread_down_median=("spread_down_cents", "median"),
         overround_median=("mid_overround_cents", "median"),
     )
-
-    markets["window_seconds"] = (markets["close_ts_utc"] - markets["first_quote_ts"]).dt.total_seconds()
-    markets["has_target_price"] = markets["target_price"].notna()
-    markets["has_final_price_last"] = markets["final_price_last"].notna()
-    markets["can_resolve_outcome"] = markets["has_target_price"] & markets["has_final_price_last"]
+    markets["can_resolve_outcome"] = markets["target_price"].notna() & markets["final_price_last"].notna()
     markets["outcome_up"] = np.where(
         markets["can_resolve_outcome"],
         (markets["final_price_last"] > markets["target_price"]).astype(float),
         np.nan,
     )
-    markets["price_move_bps"] = np.where(
-        markets["can_resolve_outcome"] & markets["target_price"].ne(0),
-        (markets["final_price_last"] / markets["target_price"] - 1.0) * 10000.0,
-        np.nan,
-    )
+    markets["price_move_usd"] = markets["final_price_last"] - markets["target_price"]
     markets["mid_up_range"] = markets["mid_up_high"] - markets["mid_up_low"]
     return markets.sort_values("first_quote_ts").reset_index(drop=True)
 
 
-def build_snapshot_calibration(quotes: pd.DataFrame, markets: pd.DataFrame) -> pd.DataFrame:
-    outcome_map = markets.set_index("slug")["outcome_up"]
-    usable = quotes.copy()
-    usable["outcome_up"] = usable["slug"].map(outcome_map)
-    usable = usable[usable["outcome_up"].notna() & usable["mid_up_prob"].notna()].copy()
-    if usable.empty:
-        return pd.DataFrame()
+def build_first2m_features(quotes: pd.DataFrame, fee: float) -> pd.DataFrame:
+    rows: List[Dict[str, float]] = []
+    for slug, g in quotes.groupby("slug", dropna=False):
+        g = g.sort_values("ts_utc").copy()
+        if g.empty:
+            continue
+        first_ts = g["ts_utc"].min()
+        cutoff = first_ts + pd.Timedelta(minutes=2)
+        first2 = g[g["ts_utc"] <= cutoff].copy()
+        if first2.empty:
+            continue
+        last_row = first2.iloc[-1]
+        first_row = first2.iloc[0]
+        target_price = first_non_null(g["target_price"])
+        final_price = last_non_null(g["final_price"])
+        outcome_up = np.nan
+        if pd.notna(target_price) and pd.notna(final_price):
+            outcome_up = float(final_price > target_price)
+        btc_move_2m = np.nan
+        if pd.notna(last_row.get("final_price")) and pd.notna(target_price):
+            btc_move_2m = float(last_row["final_price"] - target_price)
+        mid_up_prob_2m = pd.to_numeric(last_row.get("mid_up_prob"), errors="coerce")
+        if pd.isna(mid_up_prob_2m) and pd.notna(last_row.get("mid_up_cents")):
+            mid_up_prob_2m = float(last_row["mid_up_cents"]) / 100.0
+        entry_prob = float(mid_up_prob_2m) if pd.notna(mid_up_prob_2m) else np.nan
+        realized_pnl_buy_up = np.nan
+        if pd.notna(outcome_up) and pd.notna(entry_prob):
+            realized_pnl_buy_up = float(outcome_up - entry_prob - fee)
+        rows.append(
+            {
+                "slug": slug,
+                "window_text": first_non_null(g["window_text"]),
+                "first_quote_ts": first_ts,
+                "close_ts_utc": first_non_null(g["close_ts_utc"]),
+                "quote_count_total": int(len(g)),
+                "quote_count_first2m": int(len(first2)),
+                "target_price": target_price,
+                "price_after_2m": last_non_null(first2["final_price"]),
+                "final_price_last": final_price,
+                "btc_move_2m": btc_move_2m,
+                "btc_return_bps_2m": np.nan if pd.isna(target_price) or target_price == 0 or pd.isna(btc_move_2m) else float(btc_move_2m / target_price * 10000.0),
+                "mid_up_prob_open": pd.to_numeric(first_row.get("mid_up_prob"), errors="coerce"),
+                "mid_up_prob_2m": entry_prob,
+                "mid_up_prob_change_2m": np.nan if pd.isna(entry_prob) or pd.isna(pd.to_numeric(first_row.get("mid_up_prob"), errors="coerce")) else float(entry_prob - pd.to_numeric(first_row.get("mid_up_prob"), errors="coerce")),
+                "spread_up_median_first2m": pd.to_numeric(first2["spread_up_cents"], errors="coerce").median(),
+                "spread_down_median_first2m": pd.to_numeric(first2["spread_down_cents"], errors="coerce").median(),
+                "overround_median_first2m": pd.to_numeric(first2["mid_overround_cents"], errors="coerce").median(),
+                "trade_count_sum_first2m": pd.to_numeric(first2["trade_count_1s"], errors="coerce").sum(min_count=1),
+                "trade_volume_sum_first2m": pd.to_numeric(first2["trade_volume_1s"], errors="coerce").sum(min_count=1),
+                "outcome_up": outcome_up,
+                "realized_pnl_buy_up_from_2m": realized_pnl_buy_up,
+            }
+        )
+    features = pd.DataFrame(rows)
+    if not features.empty:
+        features = features.sort_values("first_quote_ts").reset_index(drop=True)
+    return features
 
-    usable = usable[usable["time_to_close_bucket"].isin(["04_05m", "03_04m", "02_03m", "01_02m", "30_60s", "00_30s"])]
-    if usable.empty:
-        return pd.DataFrame()
 
-    usable = usable.sort_values(["slug", "seconds_to_close", "ts_utc"], ascending=[True, False, True])
-    snapshots = usable.groupby(["slug", "time_to_close_bucket"], as_index=False).tail(1)
-
-    bins = pd.cut(snapshots["mid_up_prob"], bins=np.linspace(0, 1, 11), include_lowest=True, duplicates="drop")
-    snapshots["prob_bin"] = bins.astype(str)
-
-    calibration = snapshots.groupby(["time_to_close_bucket", "prob_bin"], as_index=False).agg(
-        count=("outcome_up", "size"),
-        avg_mid_up_prob=("mid_up_prob", "mean"),
-        realized_up_rate=("outcome_up", "mean"),
-    )
-    calibration["edge"] = calibration["realized_up_rate"] - calibration["avg_mid_up_prob"]
-    return calibration.sort_values(["time_to_close_bucket", "avg_mid_up_prob"]).reset_index(drop=True)
-
-
-def build_last_quote_summary(quotes: pd.DataFrame, markets: pd.DataFrame) -> pd.DataFrame:
-    outcome_map = markets.set_index("slug")["outcome_up"]
-    usable = quotes.copy()
-    usable["outcome_up"] = usable["slug"].map(outcome_map)
-    usable = usable[usable["outcome_up"].notna() & usable["mid_up_prob"].notna()].copy()
-    if usable.empty:
-        return pd.DataFrame()
-
-    usable["abs_seconds_to_close"] = usable["seconds_to_close"].abs()
-    last_quotes = usable.sort_values(["slug", "abs_seconds_to_close", "ts_utc"]).groupby("slug", as_index=False).head(1)
-    bins = pd.cut(last_quotes["mid_up_prob"], bins=np.linspace(0, 1, 11), include_lowest=True, duplicates="drop")
-    last_quotes["prob_bin"] = bins.astype(str)
-
-    summary = last_quotes.groupby("prob_bin", as_index=False).agg(
-        count=("outcome_up", "size"),
-        avg_mid_up_prob=("mid_up_prob", "mean"),
-        realized_up_rate=("outcome_up", "mean"),
-        avg_seconds_to_close=("seconds_to_close", "mean"),
-    )
-    summary["edge"] = summary["realized_up_rate"] - summary["avg_mid_up_prob"]
-    return summary.sort_values("avg_mid_up_prob").reset_index(drop=True)
+def threshold_rule_table(features: pd.DataFrame, fee: float) -> pd.DataFrame:
+    usable = features[features["outcome_up"].notna() & features["mid_up_prob_2m"].notna() & features["btc_move_2m"].notna()].copy()
+    rows = []
+    for th in [10, 20, 30, 40, 50, 75, 100]:
+        for mode in ["momentum", "mean_reversion"]:
+            if mode == "momentum":
+                take = usable["btc_move_2m"] >= th
+            else:
+                take = usable["btc_move_2m"] >= th
+            subset = usable[take].copy()
+            if subset.empty:
+                continue
+            if mode == "momentum":
+                pnl = subset["outcome_up"] - subset["mid_up_prob_2m"] - fee
+                win = subset["outcome_up"]
+            else:
+                pnl = (1.0 - subset["outcome_up"]) - (1.0 - subset["mid_up_prob_2m"]) - fee
+                win = 1.0 - subset["outcome_up"]
+            rows.append({
+                "strategy": mode,
+                "threshold_usd": th,
+                "trades": int(len(subset)),
+                "win_rate": float(win.mean()),
+                "avg_entry_prob": float(subset["mid_up_prob_2m"].mean()),
+                "avg_pnl": float(pnl.mean()),
+                "cum_pnl": float(pnl.sum()),
+            })
+    return pd.DataFrame(rows)
 
 
 def missingness_table(df: pd.DataFrame) -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "column": df.columns,
-            "missing_ratio": [df[c].isna().mean() for c in df.columns],
-            "non_null": [int(df[c].notna().sum()) for c in df.columns],
-        }
-    ).sort_values("missing_ratio", ascending=False).reset_index(drop=True)
-
-
-def describe_series(series: pd.Series) -> Dict[str, float]:
-    clean = pd.to_numeric(series, errors="coerce").dropna()
-    if clean.empty:
-        return {}
-    return {
-        "count": float(clean.size),
-        "mean": float(clean.mean()),
-        "median": float(clean.median()),
-        "p10": float(clean.quantile(0.10)),
-        "p90": float(clean.quantile(0.90)),
-        "min": float(clean.min()),
-        "max": float(clean.max()),
-    }
+    return pd.DataFrame({
+        "column": df.columns,
+        "missing_ratio": [df[c].isna().mean() for c in df.columns],
+        "non_null": [int(df[c].notna().sum()) for c in df.columns],
+    }).sort_values("missing_ratio", ascending=False).reset_index(drop=True)
 
 
 def markdown_table(df: pd.DataFrame, rows: int = 20) -> str:
@@ -266,127 +278,133 @@ def write_json(path: Path, payload: Dict) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def build_report(
-    files: List[Path],
-    quotes: pd.DataFrame,
-    markets: pd.DataFrame,
-    calibration: pd.DataFrame,
-    last_quote_summary: pd.DataFrame,
-    missing: pd.DataFrame,
-) -> str:
-    summary: Dict[str, object] = {
-        "run_id": RUN_ID,
-        "source_file_count": len(files),
-        "quote_rows": int(len(quotes)),
-        "market_count": int(markets["slug"].nunique()),
-        "quote_time_start": None if quotes["ts_utc"].dropna().empty else str(quotes["ts_utc"].min()),
-        "quote_time_end": None if quotes["ts_utc"].dropna().empty else str(quotes["ts_utc"].max()),
-        "resolvable_market_count": int(markets["can_resolve_outcome"].sum()),
-        "resolvable_market_ratio": float(markets["can_resolve_outcome"].mean()) if len(markets) else math.nan,
-        "up_rate_on_resolved_markets": float(markets.loc[markets["outcome_up"].notna(), "outcome_up"].mean()) if markets["outcome_up"].notna().any() else math.nan,
-        "quote_count_stats": describe_series(markets["quote_count"]),
-        "spread_up_stats": describe_series(quotes.get("spread_up_cents", pd.Series(dtype=float))),
-        "spread_down_stats": describe_series(quotes.get("spread_down_cents", pd.Series(dtype=float))),
-        "overround_stats": describe_series(quotes.get("mid_overround_cents", pd.Series(dtype=float))),
-        "seconds_to_close_stats": describe_series(quotes.get("seconds_to_close", pd.Series(dtype=float))),
-    }
+def maybe_make_plots(features: pd.DataFrame, threshold_table: pd.DataFrame, fig_dir: Path) -> List[str]:
+    paths: List[str] = []
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        return paths
+    fig_dir.mkdir(parents=True, exist_ok=True)
 
+    if not features.empty and features["btc_move_2m"].notna().any():
+        plt.figure(figsize=(8, 4))
+        plt.hist(features["btc_move_2m"].dropna(), bins=30)
+        plt.title("BTC move in first 2 minutes (USD)")
+        plt.tight_layout()
+        p = fig_dir / "btc_move_2m_hist.png"
+        plt.savefig(p, dpi=150)
+        plt.close()
+        paths.append(str(p))
+
+    usable = features[features["btc_move_2m"].notna() & features["outcome_up"].notna()].copy()
+    if not usable.empty:
+        usable["move_bin"] = pd.cut(usable["btc_move_2m"], bins=[-1000, -100, -50, -30, -10, 10, 30, 50, 100, 1000], include_lowest=True)
+        agg = usable.groupby("move_bin", observed=False)["outcome_up"].mean()
+        plt.figure(figsize=(10, 4))
+        agg.plot(kind="bar")
+        plt.title("Up finish rate by first-2-minute BTC move bucket")
+        plt.tight_layout()
+        p = fig_dir / "up_rate_by_btc_move_bucket.png"
+        plt.savefig(p, dpi=150)
+        plt.close()
+        paths.append(str(p))
+
+    if not threshold_table.empty:
+        pivot = threshold_table.pivot(index="threshold_usd", columns="strategy", values="avg_pnl")
+        plt.figure(figsize=(8, 4))
+        pivot.plot(ax=plt.gca())
+        plt.title("Average PnL by threshold rule")
+        plt.tight_layout()
+        p = fig_dir / "avg_pnl_by_threshold_strategy.png"
+        plt.savefig(p, dpi=150)
+        plt.close()
+        paths.append(str(p))
+
+    return paths
+
+
+def build_report(files: List[Path], quotes: pd.DataFrame, features: pd.DataFrame, thresholds: pd.DataFrame, plots: List[str], fee: float) -> str:
     lines: List[str] = []
-    lines.append(f"# Analysis for source run {RUN_ID}")
+    lines.append(f"# First-2-minute predictive research for {RUN_ID}")
     lines.append("")
-    lines.append("## Headline")
+    lines.append("## Research question")
     lines.append("")
-    lines.append(f"- Source quote files: **{len(files)}**")
-    lines.append(f"- Clean quote rows: **{len(quotes)}**")
-    lines.append(f"- Markets: **{markets['slug'].nunique()}**")
-    if quotes["ts_utc"].notna().any():
-        lines.append(f"- Time range: **{quotes['ts_utc'].min()}** to **{quotes['ts_utc'].max()}**")
-    if markets["outcome_up"].notna().any():
-        lines.append(f"- Resolved markets: **{int(markets['outcome_up'].notna().sum())}**")
-        lines.append(f"- Up rate on resolved markets: **{markets.loc[markets['outcome_up'].notna(), 'outcome_up'].mean():.4f}**")
+    lines.append("Given the **first 2 minutes** of BTC move and quote information, can we predict the final 5-minute Up/Down result or choose a better trading rule?")
     lines.append("")
-    lines.append("## Summary JSON")
+    lines.append("## Data summary")
     lines.append("")
-    lines.append("```json")
-    lines.append(json.dumps(summary, indent=2, ensure_ascii=False))
-    lines.append("```")
+    lines.append(f"- Source files: **{len(files)}**")
+    lines.append(f"- Clean quotes: **{len(quotes)}**")
+    lines.append(f"- Market feature rows: **{len(features)}**")
+    lines.append(f"- Fee used in rule evaluation: **{fee:.4f}**")
+    if not features.empty and features["outcome_up"].notna().any():
+        lines.append(f"- Up rate on resolved markets: **{features.loc[features['outcome_up'].notna(), 'outcome_up'].mean():.4f}**")
     lines.append("")
-    lines.append("## Quote count per market")
+    lines.append("## First-2-minute feature sample")
     lines.append("")
-    lines.append(markdown_table(markets[["slug", "window_text", "quote_count", "target_price", "final_price_last", "outcome_up"]]))
+    sample_cols = ["slug", "window_text", "btc_move_2m", "mid_up_prob_2m", "outcome_up", "realized_pnl_buy_up_from_2m"]
+    lines.append(markdown_table(features[sample_cols] if not features.empty else pd.DataFrame(), rows=20))
     lines.append("")
-    lines.append("## Missingness (top 15)")
+    lines.append("## Threshold-rule comparison")
     lines.append("")
-    lines.append(markdown_table(missing, rows=15))
+    lines.append(markdown_table(thresholds, rows=30))
     lines.append("")
-    if not calibration.empty:
-        lines.append("## Calibration by time-to-close bucket")
+    lines.append("## Missingness")
+    lines.append("")
+    lines.append(markdown_table(missingness_table(quotes), rows=15))
+    lines.append("")
+    if plots:
+        lines.append("## Generated figures")
         lines.append("")
-        lines.append(markdown_table(calibration, rows=30))
+        for p in plots:
+            lines.append(f"- `{p}`")
         lines.append("")
-    if not last_quote_summary.empty:
-        lines.append("## Last-quote calibration summary")
-        lines.append("")
-        lines.append(markdown_table(last_quote_summary, rows=20))
-        lines.append("")
-    lines.append("## Market summary sample")
-    lines.append("")
-    sample_cols = [
-        "slug",
-        "window_text",
-        "quote_count",
-        "target_price",
-        "final_price_last",
-        "mid_up_open",
-        "mid_up_last",
-        "mid_up_range",
-        "price_move_bps",
-        "outcome_up",
-    ]
-    lines.append(markdown_table(markets[sample_cols], rows=20))
-    lines.append("")
     return "\n".join(lines)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build cleaned dataset and report for source run 24869603988_attempt1")
-    parser.add_argument("--source-dir", type=str, required=True, help="Directory containing raw quote csv chunks")
+    parser = argparse.ArgumentParser(description="Build cleaned dataset and first-2-minute predictive research for source run 24869603988_attempt1")
+    parser.add_argument("--source-dir", type=str, required=True)
     parser.add_argument("--cleaned-dir", type=str, default="data/cleaned/run_24869603988_attempt1")
-    parser.add_argument("--report-dir", type=str, default="reports/run_24869603988_attempt1")
+    parser.add_argument("--features-dir", type=str, default="data/features/run_24869603988_attempt1")
+    parser.add_argument("--report-dir", type=str, default="reports/run_24869603988_attempt1_predictive")
+    parser.add_argument("--fee", type=float, default=0.01)
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir)
     cleaned_dir = Path(args.cleaned_dir)
+    features_dir = Path(args.features_dir)
     report_dir = Path(args.report_dir)
+    fig_dir = report_dir / "figures"
     cleaned_dir.mkdir(parents=True, exist_ok=True)
+    features_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
 
     raw, files = read_source_files(source_dir)
     quotes = prepare_quotes(raw)
     markets = build_markets(quotes)
-    calibration = build_snapshot_calibration(quotes, markets)
-    last_quote_summary = build_last_quote_summary(quotes, markets)
-    missing = missingness_table(quotes)
+    features = build_first2m_features(quotes, fee=args.fee)
+    thresholds = threshold_rule_table(features, fee=args.fee)
+    plots = maybe_make_plots(features, thresholds, fig_dir)
 
     quotes.to_csv(cleaned_dir / "btc_updown_5m_quotes_clean.csv", index=False)
     markets.to_csv(cleaned_dir / "btc_updown_5m_markets_clean.csv", index=False)
-    calibration.to_csv(report_dir / "calibration_by_time_bucket.csv", index=False)
-    last_quote_summary.to_csv(report_dir / "last_quote_calibration.csv", index=False)
-    missing.to_csv(report_dir / "missingness.csv", index=False)
+    features.to_csv(features_dir / "market_features_first2m.csv", index=False)
+    thresholds.to_csv(report_dir / "threshold_rule_comparison.csv", index=False)
 
-    report_md = build_report(files, quotes, markets, calibration, last_quote_summary, missing)
+    report_md = build_report(files, quotes, features, thresholds, plots, fee=args.fee)
     (report_dir / "report.md").write_text(report_md, encoding="utf-8")
 
     summary = {
         "run_id": RUN_ID,
         "source_dir": str(source_dir),
-        "source_files": [p.name for p in files],
+        "source_file_count": len(files),
         "quote_rows": int(len(quotes)),
         "market_rows": int(len(markets)),
-        "resolved_markets": int(markets["outcome_up"].notna().sum()),
+        "feature_rows": int(len(features)),
+        "threshold_rows": int(len(thresholds)),
     }
     write_json(report_dir / "summary.json", summary)
-
     print(json.dumps(summary, ensure_ascii=False))
 
 
