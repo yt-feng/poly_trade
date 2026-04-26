@@ -10,6 +10,7 @@ on:
       - 'analysis/build_run_24869603988_deepdive.py'
       - 'analysis/build_run_24869603988_bankroll.py'
       - 'analysis/optimize_run_24869603988_bankroll.py'
+      - 'analysis/classic_run_24869603988_strategies.py'
       - '.github/workflows/run-24869603988-analysis.yml'
       - 'requirements.txt'
       - 'README.md'
@@ -71,6 +72,14 @@ jobs:
             --report-dir reports/run_24869603988_attempt1_predictive \
             --fee 0.01
 
+      - name: Run classic strategy layer
+        run: |
+          set -euxo pipefail
+          python analysis/classic_run_24869603988_strategies.py \
+            --features-file data/features/run_24869603988_attempt1/market_features_first2m.csv \
+            --report-dir reports/run_24869603988_attempt1_predictive \
+            --fee 0.01
+
       - name: Show generated outputs
         if: always()
         run: |
@@ -81,7 +90,7 @@ jobs:
       - name: Publish workflow summary
         if: always()
         run: |
-          echo '## First-2-minute predictive research (bankroll + optimizer)' >> "$GITHUB_STEP_SUMMARY"
+          echo '## First-2-minute predictive research (bankroll + optimizer + classic strategies)' >> "$GITHUB_STEP_SUMMARY"
           echo '' >> "$GITHUB_STEP_SUMMARY"
           echo '- Source repo: `yt-feng/poly`' >> "$GITHUB_STEP_SUMMARY"
           echo '- Source subdir: `data/runs/24869603988_attempt1`' >> "$GITHUB_STEP_SUMMARY"
@@ -97,6 +106,12 @@ jobs:
             echo '---' >> "$GITHUB_STEP_SUMMARY"
             echo '' >> "$GITHUB_STEP_SUMMARY"
             cat reports/run_24869603988_attempt1_predictive/optimization_report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f reports/run_24869603988_attempt1_predictive/classic_strategies_report.md ]; then
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo '---' >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            cat reports/run_24869603988_attempt1_predictive/classic_strategies_report.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload artifacts
@@ -117,7 +132,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add data/cleaned/run_24869603988_attempt1 data/features/run_24869603988_attempt1 reports/run_24869603988_attempt1_predictive
           if ! git diff --cached --quiet; then
-            git commit -m 'Update bankroll and optimizer research outputs for run 24869603988_attempt1 [skip ci]'
+            git commit -m 'Update bankroll, optimizer, and classic strategy outputs for run 24869603988_attempt1 [skip ci]'
             git push
           else
             echo 'No output changes to commit.'
