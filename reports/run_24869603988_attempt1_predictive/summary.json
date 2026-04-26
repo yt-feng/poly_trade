@@ -5,5 +5,7 @@
   "quote_rows": 36399,
   "market_rows": 302,
   "feature_rows": 302,
-  "threshold_rows": 14
+  "threshold_rule_rows": 28,
+  "model_rows": 2,
+  "figure_count": 10
 }
