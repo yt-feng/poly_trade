@@ -117,6 +117,7 @@ def build_dynamic_strategies(df: pd.DataFrame, fee: float, min_history: int = 60
     cols = {
         "value_down_margin2": [],
         "value_down_margin5": [],
+        "value_down_margin2_book": [],
         "value_down_margin2_q": [],
         "value_down_margin5_q": [],
         "value_down_margin2_book_q": [],
@@ -131,6 +132,7 @@ def build_dynamic_strategies(df: pd.DataFrame, fee: float, min_history: int = 60
         if i < min_history:
             cols["value_down_margin2"].append("skip")
             cols["value_down_margin5"].append("skip")
+            cols["value_down_margin2_book"].append("skip")
             cols["value_down_margin2_q"].append(np.nan)
             cols["value_down_margin5_q"].append(np.nan)
             cols["value_down_margin2_book_q"].append(np.nan)
@@ -161,7 +163,7 @@ def build_dynamic_strategies(df: pd.DataFrame, fee: float, min_history: int = 60
             if pd.notna(qd) and row["btc_move_2m"] <= -10 and qd > row["buy_down_price_2m"] + 0.02 and row["size_imbalance_updown_2m"] <= 0 and row["buy_down_size_2m"] >= 250:
                 cols["value_down_margin2_book"].append("buy_down")
             else:
-                cols.setdefault("value_down_margin2_book", []).append("skip")
+                cols["value_down_margin2_book"].append("skip")
 
             if pd.notna(qu) and (30 < row["btc_move_2m"] <= 50) and qu > row["buy_up_price_2m"] + 0.02:
                 cols["value_up_margin2"].append("buy_up")
@@ -285,7 +287,7 @@ def make_plots(summary: pd.DataFrame, logs: pd.DataFrame, fig_dir: Path) -> List
         plt.close()
         paths.append(str(p))
         best = summary.iloc[0]
-        s = logs[(logs["strategy"] == best["strategy"]) & (logs["sizing"] == best["sizing"])].copy().sort_values("first_quote_ts")
+        s = logs[(logs["strategy"] == best["strategy"]) & (logs["sizing"] == best["sizing"])] .copy().sort_values("first_quote_ts")
         if not s.empty:
             plt.figure(figsize=(10,4))
             plt.plot(s["first_quote_ts"], s["bankroll_after"])
