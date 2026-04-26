@@ -52,7 +52,7 @@
 |:-----------------------|------------:|-----------:|--------:|-----------:|---------:|--------------:|----------:|----------:|-----------:|
 | baseline_train_up_rate |          70 |     0.5286 |  0.2494 |     0.6919 |       67 |        0.9571 |   -0.0081 |     -0.54 |     0.3284 |
 | random_forest          |          70 |     0.6286 |  0.2107 |     0.6057 |       63 |        0.9    |   -0.0103 |     -0.65 |     0.4762 |
-| logistic_regression    |          70 |     0.6286 |  0.2075 |     0.5972 |       62 |        0.8857 |   -0.0242 |     -1.5  |     0.4194 |
+| logistic_regression    |          70 |     0.6286 |  0.208  |     0.5982 |       62 |        0.8857 |   -0.0242 |     -1.5  |     0.4194 |
 
 ## 100美元本金 bankroll 回测结果
 
@@ -85,8 +85,8 @@
 | rule_rise30to50_up                 | full_kelly    |        0 |          100      |         0      |                   nan      |         0      |
 | rule_rise30to50_up                 | half_kelly    |        0 |          100      |         0      |                   nan      |         0      |
 | rule_rise30to50_up                 | quarter_kelly |        0 |          100      |         0      |                   nan      |         0      |
-| model_value_logistic               | quarter_kelly |      153 |           67.1305 |        -0.3287 |                    -0.0339 |         0.694  |
-| model_value_logistic_edge2pct      | quarter_kelly |      135 |           63.6705 |        -0.3633 |                    -0.0791 |         0.6982 |
+| model_value_logistic               | quarter_kelly |      153 |           67.0035 |        -0.33   |                    -0.0339 |         0.6966 |
+| model_value_logistic_edge2pct      | quarter_kelly |      135 |           63.9035 |        -0.361  |                    -0.0791 |         0.6994 |
 | model_value_logistic               | fixed_10pct   |      153 |           34.3448 |        -0.6566 |                    -0.0339 |         0.8246 |
 | model_value_random_forest_edge2pct | quarter_kelly |      139 |           23.0932 |        -0.7691 |                    -0.2291 |         0.8786 |
 | model_value_random_forest          | quarter_kelly |      152 |           22.9932 |        -0.7701 |                    -0.228  |         0.8818 |
