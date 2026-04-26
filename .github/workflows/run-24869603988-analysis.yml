@@ -8,6 +8,7 @@ on:
     paths:
       - 'analysis/build_run_24869603988_dataset.py'
       - 'analysis/build_run_24869603988_deepdive.py'
+      - 'analysis/build_run_24869603988_bankroll.py'
       - '.github/workflows/run-24869603988-analysis.yml'
       - 'requirements.txt'
       - 'README.md'
@@ -51,10 +52,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run predictive research build
+      - name: Run bankroll research build
         run: |
           set -euxo pipefail
-          python analysis/build_run_24869603988_deepdive.py \
+          python analysis/build_run_24869603988_bankroll.py \
             --source-dir source_poly/data/runs/24869603988_attempt1 \
             --cleaned-dir data/cleaned/run_24869603988_attempt1 \
             --features-dir data/features/run_24869603988_attempt1 \
@@ -71,7 +72,7 @@ jobs:
       - name: Publish workflow summary
         if: always()
         run: |
-          echo '## First-2-minute predictive research (deep dive)' >> "$GITHUB_STEP_SUMMARY"
+          echo '## First-2-minute predictive research (bankroll + Kelly)' >> "$GITHUB_STEP_SUMMARY"
           echo '' >> "$GITHUB_STEP_SUMMARY"
           echo '- Source repo: `yt-feng/poly`' >> "$GITHUB_STEP_SUMMARY"
           echo '- Source subdir: `data/runs/24869603988_attempt1`' >> "$GITHUB_STEP_SUMMARY"
@@ -103,7 +104,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add data/cleaned/run_24869603988_attempt1 data/features/run_24869603988_attempt1 reports/run_24869603988_attempt1_predictive
           if ! git diff --cached --quiet; then
-            git commit -m 'Update deep-dive predictive research outputs for run 24869603988_attempt1 [skip ci]'
+            git commit -m 'Update bankroll backtest research outputs for run 24869603988_attempt1 [skip ci]'
             git push
           else
             echo 'No output changes to commit.'
