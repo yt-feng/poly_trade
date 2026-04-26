@@ -1,0 +1,9 @@
+{
+  "run_id": "24869603988_attempt1",
+  "source_dir": "source_poly/data/runs/24869603988_attempt1",
+  "source_file_count": 50,
+  "quote_rows": 36399,
+  "market_rows": 302,
+  "feature_rows": 302,
+  "threshold_rows": 14
+}
