@@ -12,6 +12,7 @@ on:
       - 'analysis/extended_classic_run_24869603988.py'
       - 'analysis/summarize_latest_strategy_results.py'
       - 'analysis/analyze_entry_timing_experience.py'
+      - 'analysis/compare_prior_top20_on_latest.py'
       - 'reports/strategy_definitions_all.md'
       - '.github/workflows/run-24949259015-latest-analysis.yml'
       - 'requirements.txt'
@@ -94,6 +95,14 @@ jobs:
             --report-dir reports/run_24949259015_attempt1_predictive \
             --min-ending-bankroll 400
 
+      - name: Compare prior top 20 strategies on latest data
+        run: |
+          set -euxo pipefail
+          python analysis/compare_prior_top20_on_latest.py \
+            --prior-report-dir reports/run_24869603988_attempt1_predictive \
+            --latest-report-dir reports/run_24949259015_attempt1_predictive \
+            --top-k 20
+
       - name: Analyze entry timing experience
         run: |
           set -euxo pipefail
@@ -117,7 +126,7 @@ jobs:
           echo '- Source dir: `source_poly/data/monthly_runs/24949259015_attempt1`' >> "$GITHUB_STEP_SUMMARY"
           echo '- Report dir: `reports/run_24949259015_attempt1_predictive/`' >> "$GITHUB_STEP_SUMMARY"
           echo '' >> "$GITHUB_STEP_SUMMARY"
-          for f in report.md optimization_report.md classic_strategies_report.md extended_classic_report.md strategies_over_400_summary.md entry_timing_experience_report.md; do
+          for f in report.md optimization_report.md classic_strategies_report.md extended_classic_report.md strategies_over_400_summary.md prior_top20_rerun_on_latest.md entry_timing_experience_report.md; do
             if [ -f "reports/run_24949259015_attempt1_predictive/$f" ]; then
               echo '---' >> "$GITHUB_STEP_SUMMARY"
               echo '' >> "$GITHUB_STEP_SUMMARY"
