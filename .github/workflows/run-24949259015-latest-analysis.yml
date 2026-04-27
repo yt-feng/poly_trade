@@ -1,0 +1,151 @@
+name: Build latest monthly run analysis for 24949259015
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'analysis/build_run_24869603988_bankroll.py'
+      - 'analysis/optimize_run_24869603988_bankroll.py'
+      - 'analysis/classic_run_24869603988_strategies.py'
+      - 'analysis/extended_classic_run_24869603988.py'
+      - 'analysis/summarize_latest_strategy_results.py'
+      - 'analysis/analyze_entry_timing_experience.py'
+      - 'reports/strategy_definitions_all.md'
+      - '.github/workflows/run-24949259015-latest-analysis.yml'
+      - 'requirements.txt'
+
+permissions:
+  contents: write
+
+jobs:
+  build-latest-monthly-run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Show source directory
+        run: |
+          pwd
+          ls -la source_poly/data/monthly_runs
+          ls -la source_poly/data/monthly_runs/24949259015_attempt1 | head -n 200
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run bankroll research on latest monthly data
+        run: |
+          set -euxo pipefail
+          python analysis/build_run_24869603988_bankroll.py \
+            --source-dir source_poly/data/monthly_runs/24949259015_attempt1 \
+            --cleaned-dir data/cleaned/run_24949259015_attempt1 \
+            --features-dir data/features/run_24949259015_attempt1 \
+            --report-dir reports/run_24949259015_attempt1_predictive \
+            --fee 0.01
+
+      - name: Run optimizer layer on latest monthly data
+        run: |
+          set -euxo pipefail
+          python analysis/optimize_run_24869603988_bankroll.py \
+            --features-file data/features/run_24949259015_attempt1/market_features_first2m.csv \
+            --report-dir reports/run_24949259015_attempt1_predictive \
+            --fee 0.01
+
+      - name: Run classic layer on latest monthly data
+        run: |
+          set -euxo pipefail
+          python analysis/classic_run_24869603988_strategies.py \
+            --features-file data/features/run_24949259015_attempt1/market_features_first2m.csv \
+            --report-dir reports/run_24949259015_attempt1_predictive \
+            --fee 0.01
+
+      - name: Run extended classic layer on latest monthly data
+        run: |
+          set -euxo pipefail
+          python analysis/extended_classic_run_24869603988.py \
+            --features-file data/features/run_24949259015_attempt1/market_features_first2m.csv \
+            --quotes-file data/cleaned/run_24949259015_attempt1/btc_updown_5m_quotes_clean.csv \
+            --report-dir reports/run_24949259015_attempt1_predictive \
+            --fee 0.01
+
+      - name: Summarize latest winners over 400 USD
+        run: |
+          set -euxo pipefail
+          python analysis/summarize_latest_strategy_results.py \
+            --report-dir reports/run_24949259015_attempt1_predictive \
+            --min-ending-bankroll 400
+
+      - name: Analyze entry timing experience
+        run: |
+          set -euxo pipefail
+          python analysis/analyze_entry_timing_experience.py \
+            --source-dir source_poly/data/monthly_runs/24949259015_attempt1 \
+            --report-dir reports/run_24949259015_attempt1_predictive \
+            --fee 0.01
+
+      - name: Show generated outputs
+        if: always()
+        run: |
+          find data/cleaned/run_24949259015_attempt1 -maxdepth 3 -type f | sort || true
+          find data/features/run_24949259015_attempt1 -maxdepth 3 -type f | sort || true
+          find reports/run_24949259015_attempt1_predictive -maxdepth 4 -type f | sort || true
+
+      - name: Publish workflow summary
+        if: always()
+        run: |
+          echo '## Latest monthly run analysis: 24949259015_attempt1' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Source dir: `source_poly/data/monthly_runs/24949259015_attempt1`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Report dir: `reports/run_24949259015_attempt1_predictive/`' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          for f in report.md optimization_report.md classic_strategies_report.md extended_classic_report.md strategies_over_400_summary.md entry_timing_experience_report.md; do
+            if [ -f "reports/run_24949259015_attempt1_predictive/$f" ]; then
+              echo '---' >> "$GITHUB_STEP_SUMMARY"
+              echo '' >> "$GITHUB_STEP_SUMMARY"
+              cat "reports/run_24949259015_attempt1_predictive/$f" >> "$GITHUB_STEP_SUMMARY"
+              echo '' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-monthly-run-24949259015-${{ github.run_id }}
+          path: |
+            data/cleaned/run_24949259015_attempt1
+            data/features/run_24949259015_attempt1
+            reports/run_24949259015_attempt1_predictive
+          if-no-files-found: warn
+
+      - name: Commit outputs back to repo
+        if: success()
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/cleaned/run_24949259015_attempt1 data/features/run_24949259015_attempt1 reports/run_24949259015_attempt1_predictive reports/strategy_definitions_all.md
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update latest monthly run analysis outputs for 24949259015_attempt1 [skip ci]'
+            git push
+          else
+            echo 'No output changes to commit.'
+          fi
