@@ -10,12 +10,20 @@ import pandas as pd
 
 
 FIXED_SIZINGS = [0.10, 0.15, 0.20, 0.25]
+MOVE_BINS = [-10000, -100, -50, -30, -10, 10, 30, 50, 100, 10000]
+MOVE_LABELS = ["<=-100", "-100~-50", "-50~-30", "-30~-10", "-10~10", "10~30", "30~50", "50~100", ">=100"]
+PRICE_BINS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+PRICE_LABELS = ["0.0~0.2", "0.2~0.4", "0.4~0.6", "0.6~0.8", "0.8~1.0"]
 
 
 def load_features(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path)
     df["first_quote_ts"] = pd.to_datetime(df["first_quote_ts"], utc=True, errors="coerce")
-    return df[df["outcome_up"].notna()].copy().sort_values("first_quote_ts").reset_index(drop=True)
+    df = df[df["outcome_up"].notna()].copy().sort_values("first_quote_ts").reset_index(drop=True)
+    df["move_bucket"] = pd.cut(df["btc_move_2m"], bins=MOVE_BINS, labels=MOVE_LABELS, include_lowest=True)
+    df["down_price_bucket"] = pd.cut(df["buy_down_price_2m"], bins=PRICE_BINS, labels=PRICE_LABELS, include_lowest=True)
+    df["up_price_bucket"] = pd.cut(df["buy_up_price_2m"], bins=PRICE_BINS, labels=PRICE_LABELS, include_lowest=True)
+    return df
 
 
 def load_quotes(path: Path) -> pd.DataFrame:
@@ -25,11 +33,6 @@ def load_quotes(path: Path) -> pd.DataFrame:
     elif "ts_iso" in df.columns:
         df["ts_utc"] = pd.to_datetime(df["ts_iso"], utc=True, errors="coerce")
     return df.sort_values(["slug", "ts_utc"]).reset_index(drop=True)
-
-
-def first_non_null(series: pd.Series):
-    non_null = series.dropna()
-    return np.nan if non_null.empty else non_null.iloc[0]
 
 
 def derive_path_features(quotes: pd.DataFrame) -> pd.DataFrame:
@@ -109,30 +112,25 @@ def add_static_strategies(df: pd.DataFrame) -> pd.DataFrame:
     chop = out["path_choppiness_2m"]
     regime = out["regime"]
 
-    # Baseline and price-only controls
     out["baseline_rule_drop10_down"] = np.where(move <= -10, "buy_down", "skip")
     out["price_interval_down_60_80"] = np.where((move <= -10) & (down_p >= 0.60) & (down_p <= 0.80), "buy_down", "skip")
     out["price_interval_down_65_80"] = np.where((move <= -10) & (down_p >= 0.65) & (down_p <= 0.80), "buy_down", "skip")
     out["price_interval_down_55_75"] = np.where((move <= -10) & (down_p >= 0.55) & (down_p <= 0.75), "buy_down", "skip")
     out["price_interval_up_45_65"] = np.where((move > 30) & (move <= 50) & (up_p >= 0.45) & (up_p <= 0.65), "buy_up", "skip")
 
-    # 1. Volatility / path filters
     out["vol_filter_down_clean"] = np.where((move <= -10) & (eff >= 0.60) & (chop <= 1.8), "buy_down", "skip")
     out["vol_filter_down_midrange"] = np.where((move <= -10) & (move > -50) & (eff >= 0.50) & (chop <= 2.0), "buy_down", "skip")
     out["vol_filter_up_clean"] = np.where((move > 30) & (move <= 50) & (eff >= 0.60) & (chop <= 1.8), "buy_up", "skip")
 
-    # 2. Price impact / order book pressure
     out["pressure_down_confirm"] = np.where((move <= -10) & (press >= 0.10) & (dsz >= 250), "buy_down", "skip")
     out["pressure_down_strong"] = np.where((move <= -10) & (press >= 0.20) & (down_p <= 0.80), "buy_down", "skip")
     out["pressure_up_confirm"] = np.where((move > 30) & (move <= 50) & (press <= -0.10) & (usz >= 250), "buy_up", "skip")
 
-    # 3. Regime filters
     out["regime_trend_down"] = np.where((move <= -10) & (regime == "trend_down"), "buy_down", "skip")
     out["regime_trend_down_price"] = np.where((move <= -10) & (regime == "trend_down") & (down_p <= 0.80), "buy_down", "skip")
     out["regime_trend_up"] = np.where((move > 30) & (move <= 50) & (regime == "trend_up"), "buy_up", "skip")
     out["regime_neutral_value_up"] = np.where((regime == "neutral") & (move > -10) & (move <= 10) & (up_p <= 0.55) & (imb >= 0), "buy_up", "skip")
 
-    # 5. Tiered position will use this signal with dynamic sizing
     out["tiered_down_score_signal"] = np.where(move <= -10, "buy_down", "skip")
 
     return out
@@ -142,7 +140,7 @@ def add_rolling_filters(df: pd.DataFrame, fee: float) -> pd.DataFrame:
     out = df.copy().reset_index(drop=True)
     mean_hist: List[float] = []
     win_hist: List[float] = []
-    sharpe_hist: List[float] = []
+    pnl_hist: List[float] = []
     roll_mean = []
     roll_win = []
     roll_sharpe = []
@@ -153,7 +151,11 @@ def add_rolling_filters(df: pd.DataFrame, fee: float) -> pd.DataFrame:
     for _, row in out.iterrows():
         recent_mean = float(np.mean(mean_hist[-20:])) if len(mean_hist) >= 8 else np.nan
         recent_win = float(np.mean(win_hist[-20:])) if len(win_hist) >= 8 else np.nan
-        recent_sharpe = float(np.mean(sharpe_hist[-20:])) if len(sharpe_hist) >= 8 else np.nan
+        if len(pnl_hist) >= 8:
+            recent_slice = np.array(pnl_hist[-20:], dtype=float)
+            recent_sharpe = float(recent_slice.mean() / recent_slice.std()) if recent_slice.std() > 0 else np.nan
+        else:
+            recent_sharpe = np.nan
         roll_mean.append(recent_mean)
         roll_win.append(recent_win)
         roll_sharpe.append(recent_sharpe)
@@ -167,7 +169,7 @@ def add_rolling_filters(df: pd.DataFrame, fee: float) -> pd.DataFrame:
             pnl_per_share = (1.0 - row["outcome_up"]) - row["buy_down_price_2m"] - fee
             mean_hist.append(float(pnl_per_share))
             win_hist.append(float(pnl_per_share > 0))
-            sharpe_hist.append(float(pnl_per_share))
+            pnl_hist.append(float(pnl_per_share))
 
     out["rolling_mean_pnl_20"] = roll_mean
     out["rolling_winrate_20"] = roll_win
@@ -200,11 +202,9 @@ def add_dynamic_value_strategies(df: pd.DataFrame) -> pd.DataFrame:
         def est_q(side: str) -> float:
             if side == "buy_down":
                 outcome = 1.0 - hist["outcome_up"]
-                masks = [
-                    (hist["regime"] == row["regime"]) & (hist["down_price_bucket"] == pd.cut(pd.Series([row["buy_down_price_2m"]]), bins=[0,0.2,0.4,0.6,0.8,1.0], include_lowest=True).astype(str).iloc[0] if False else True),
-                ]
-                # simpler fallback set
                 subsets = [
+                    hist[(hist["regime"] == row["regime"]) & (hist["move_bucket"] == row["move_bucket"]) & (hist["down_price_bucket"] == row["down_price_bucket"])],
+                    hist[(hist["move_bucket"] == row["move_bucket"]) & (hist["down_price_bucket"] == row["down_price_bucket"])],
                     hist[(hist["regime"] == row["regime"]) & (hist["move_bucket"] == row["move_bucket"])],
                     hist[(hist["move_bucket"] == row["move_bucket"])],
                     hist[(hist["regime"] == row["regime"])],
@@ -213,6 +213,8 @@ def add_dynamic_value_strategies(df: pd.DataFrame) -> pd.DataFrame:
             else:
                 outcome = hist["outcome_up"]
                 subsets = [
+                    hist[(hist["regime"] == row["regime"]) & (hist["move_bucket"] == row["move_bucket"]) & (hist["up_price_bucket"] == row["up_price_bucket"])],
+                    hist[(hist["move_bucket"] == row["move_bucket"]) & (hist["up_price_bucket"] == row["up_price_bucket"])],
                     hist[(hist["regime"] == row["regime"]) & (hist["move_bucket"] == row["move_bucket"])],
                     hist[(hist["move_bucket"] == row["move_bucket"])],
                     hist[(hist["regime"] == row["regime"])],
