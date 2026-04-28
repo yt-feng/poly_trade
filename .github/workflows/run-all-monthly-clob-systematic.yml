@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - 'analysis/all_monthly_clob_systematic_research.py'
+      - 'analysis/all_monthly_clob_systematic_research_v2.py'
       - '.github/workflows/run-all-monthly-clob-systematic.yml'
       - 'requirements.txt'
 
@@ -49,7 +50,7 @@ jobs:
       - name: Run all-monthly CLOB systematic research
         run: |
           set -euxo pipefail
-          python analysis/all_monthly_clob_systematic_research.py \
+          python analysis/all_monthly_clob_systematic_research_v2.py \
             --source-root source_poly/data/monthly_runs \
             --report-dir reports/all_monthly_runs_clob_systematic \
             --fee 0.01
