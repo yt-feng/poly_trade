@@ -11,7 +11,7 @@
 
 ## 1. 策略层总览
 
-目前 repo 里主要有 5 层策略：
+目前 repo 里主要有 7 层策略：
 
 1. **bankroll 基础层**
    - 脚本：`analysis/build_run_24869603988_bankroll.py`
@@ -32,6 +32,14 @@
 5. **latest regime 最新状态切换层**
    - 脚本：`analysis/discover_latest_regime_strategies.py`
    - 目的：针对最新数据集里暴露出的新结构，做“分钟感知 + 状态切换”的专门策略
+
+6. **selected fair-probability 精选层**
+   - 脚本：`analysis/select_latest_day_strategies.py`
+   - 目的：先估 fair probability，再和市场买价比较，只在 edge 足够大且 regime 合适时交易
+
+7. **all monthly history 全历史研究层**
+   - 脚本：`analysis/all_monthly_history_strategy_research.py`
+   - 目的：把 `data/monthly_runs/*` 下所有找到的 5 分钟 BTC 历史数据统一汇总，重新挑收益最高和稳定性最好的策略
 
 ---
 
@@ -332,21 +340,97 @@
 
 ---
 
-## 7. 不同策略层的关系
+## 7. selected fair-probability 精选层
 
-可以把 5 层理解成：
+这层更接近“交易决策”而不是纯方向预测。
+
+### 7.1 selected_fairprob_switch
+
+- 先用历史 walk-forward 条件分布估计 `fair_prob`
+- 候选微策略包括：
+  - `early_drop_continuation`
+  - `sharp_drop_reversal`
+  - `mild_drop_continuation`
+  - `neutral_down_value`
+  - `extreme_up_fade`
+  - `late_breakout_up`
+- 然后比较：
+  - `fair_prob - market_price`
+- 只有当 edge 大于：
+  - `fee + safety_margin + spread_penalty`
+  才交易
+
+**直觉：** 不再是“看到信号就做”，而是“只有当市场价格还没完全反映这个信号时才做”。
+
+---
+
+## 8. all monthly history 全历史研究层
+
+这层不是只研究单个 run，而是把 `data/monthly_runs/*` 全部可用数据统一汇总，再重新比较历史上更强、更稳的策略。
+
+### 8.1 hist_m1_drop20_down
+
+- 条件：第 1 分钟跌超 20
+- 行为：买 Down
+
+### 8.2 hist_m2_drop10_down
+
+- 条件：第 2 分钟跌超 10
+- 行为：买 Down
+
+### 8.3 hist_m2_sharpdrop_reversal_up
+
+- 条件：第 2 分钟跌在 `(-50,-30]`
+- 行为：买 Up
+
+### 8.4 hist_m2_milddrop_down
+
+- 条件：第 2 分钟跌在 `(-30,-10]`
+- 行为：买 Down
+
+### 8.5 hist_m2_extremeup_fade_down
+
+- 条件：第 2 分钟涨超 50
+- 行为：买 Down
+
+### 8.6 hist_m4_rise30to50_up
+
+- 条件：第 4 分钟涨在 `(30,50]`
+- 行为：买 Up
+
+### 8.7 hist_switch_v1 / hist_switch_v2 / hist_switch_conservative
+
+- 这几条是历史版的分钟感知组合策略
+- 会把不同分钟、不同局部 edge 拼接起来
+- `conservative` 版本对价格和点差要求更严
+
+### 8.8 hist_fairprob_switch / hist_fairprob_conservative / hist_fairprob_robust
+
+- 历史版 fair probability 策略
+- 不只是比较谁赚得多，还会在总结里同时给出：
+  - 收益最高
+  - 稳定性最好
+- `robust` 版本对 support、价格、margin 的要求更严格，更偏向实盘可拿住
+
+---
+
+## 9. 不同策略层的关系
+
+可以把 7 层理解成：
 
 - **bankroll 基础层**：找最简单且有效的主线
 - **optimizer 层**：围绕最强主线做细过滤
 - **classic 层**：把常见量化思想系统化测试
 - **extended classic 层**：把更细的价量路径、regime、rolling filter、分层仓位全部补齐
 - **latest regime 层**：当旧主线失效时，针对新数据结构直接做分钟感知策略
+- **selected fair-probability 层**：把“信号”升级成“fair p vs market price”的交易决策
+- **all monthly history 层**：在全历史 monthly_runs 上重新找收益和稳定性都更优的策略
 
 它们不是互相替代，而是层层加细。
 
 ---
 
-## 8. 怎么读结果
+## 10. 怎么读结果
 
 建议优先同时看这几个指标：
 
@@ -355,25 +439,27 @@
 3. `max_drawdown`
 4. `trades`
 5. `avg_trade_return_on_cost`
+6. `win_rate`
+7. `profit_factor`
+8. `max_consecutive_losses`
+9. `robustness_score`
 
 因为：
 
 - 只看收益率，容易被少量交易误导
 - 只看回撤，又可能错过真正有 edge 的主线
-- 最终还是要看“收益、风险、交易次数”是否平衡
+- 实盘上，“少失败、少连亏、尾部体验更好”通常和“赚得多”同样重要
 
 ---
 
-## 9. 当前一句话总结
+## 11. 当前一句话总结
 
 旧数据里最稳定的一条主线曾经是：
 
 - **前 2 分钟明显下跌后，继续做 Down**
 
-但最新数据里，这条主线已经明显衰减，因此新增的 `latest regime` 层是在回答：
+但新数据已经说明，这个主线会发生 regime drift。现在更合理的方向是：
 
-- 现在是不是更应该：
-  - 早期大跌追随
-  - 第 2 分钟 sharp drop 做反弹
-  - 第 4 分钟中等上涨再追突破
-  - 并在这些局部 edge 之间做状态切换
+- 在不同分钟识别不同局部 edge；
+- 先估 fair probability，再和市场价格比较；
+- 同时用收益和稳定性两套标准去精选策略。 
