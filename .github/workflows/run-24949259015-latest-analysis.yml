@@ -14,6 +14,7 @@ on:
       - 'analysis/analyze_entry_timing_experience.py'
       - 'analysis/compare_prior_top20_on_latest.py'
       - 'analysis/discover_latest_regime_strategies.py'
+      - 'analysis/evaluate_strategy_robustness.py'
       - 'reports/strategy_definitions_all.md'
       - '.github/workflows/run-24949259015-latest-analysis.yml'
       - 'requirements.txt'
@@ -120,6 +121,12 @@ jobs:
             --report-dir reports/run_24949259015_attempt1_predictive \
             --fee 0.01
 
+      - name: Evaluate robustness and consistency
+        run: |
+          set -euxo pipefail
+          python analysis/evaluate_strategy_robustness.py \
+            --report-dir reports/run_24949259015_attempt1_predictive
+
       - name: Show generated outputs
         if: always()
         run: |
@@ -135,7 +142,7 @@ jobs:
           echo '- Source dir: `source_poly/data/monthly_runs/24949259015_attempt1`' >> "$GITHUB_STEP_SUMMARY"
           echo '- Report dir: `reports/run_24949259015_attempt1_predictive/`' >> "$GITHUB_STEP_SUMMARY"
           echo '' >> "$GITHUB_STEP_SUMMARY"
-          for f in report.md optimization_report.md classic_strategies_report.md extended_classic_report.md latest_regime_report.md strategies_over_400_summary.md prior_top20_rerun_on_latest.md entry_timing_experience_report.md; do
+          for f in report.md optimization_report.md classic_strategies_report.md extended_classic_report.md latest_regime_report.md strategies_over_400_summary.md prior_top20_rerun_on_latest.md entry_timing_experience_report.md strategy_robustness_report.md; do
             if [ -f "reports/run_24949259015_attempt1_predictive/$f" ]; then
               echo '---' >> "$GITHUB_STEP_SUMMARY"
               echo '' >> "$GITHUB_STEP_SUMMARY"
