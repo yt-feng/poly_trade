@@ -1,0 +1,94 @@
+name: Build all monthly_runs CLOB systematic research
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'analysis/all_monthly_clob_systematic_research.py'
+      - '.github/workflows/run-all-monthly-clob-systematic.yml'
+      - 'requirements.txt'
+
+permissions:
+  contents: write
+
+jobs:
+  build-all-monthly-clob-systematic:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Show monthly_runs directory
+        run: |
+          pwd
+          ls -la source_poly/data/monthly_runs || true
+          find source_poly/data/monthly_runs -maxdepth 2 -type f | head -n 200 || true
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run all-monthly CLOB systematic research
+        run: |
+          set -euxo pipefail
+          python analysis/all_monthly_clob_systematic_research.py \
+            --source-root source_poly/data/monthly_runs \
+            --report-dir reports/all_monthly_runs_clob_systematic \
+            --fee 0.01
+
+      - name: Show generated outputs
+        if: always()
+        run: |
+          find reports/all_monthly_runs_clob_systematic -maxdepth 4 -type f | sort || true
+
+      - name: Publish workflow summary
+        if: always()
+        run: |
+          echo '## All monthly_runs CLOB systematic research' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Source root: `source_poly/data/monthly_runs`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Report dir: `reports/all_monthly_runs_clob_systematic/`' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f reports/all_monthly_runs_clob_systematic/all_monthly_clob_strategy_report.md ]; then
+            cat reports/all_monthly_runs_clob_systematic/all_monthly_clob_strategy_report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-monthly-runs-clob-systematic-${{ github.run_id }}
+          path: |
+            reports/all_monthly_runs_clob_systematic
+          if-no-files-found: warn
+
+      - name: Commit outputs back to repo
+        if: success()
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add reports/all_monthly_runs_clob_systematic
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update all monthly_runs CLOB systematic research outputs [skip ci]'
+            git push
+          else
+            echo 'No output changes to commit.'
+          fi
