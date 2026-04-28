@@ -11,7 +11,7 @@
 
 ## 1. 策略层总览
 
-目前 repo 里主要有 4 层策略：
+目前 repo 里主要有 5 层策略：
 
 1. **bankroll 基础层**
    - 脚本：`analysis/build_run_24869603988_bankroll.py`
@@ -28,6 +28,10 @@
 4. **extended classic 扩展经典层**
    - 脚本：`analysis/extended_classic_run_24869603988.py`
    - 目的：进一步覆盖波动率/路径过滤、盘口压力、regime filter、rolling 健康度、分层仓位、价格区间搜索
+
+5. **latest regime 最新状态切换层**
+   - 脚本：`analysis/discover_latest_regime_strategies.py`
+   - 目的：针对最新数据集里暴露出的新结构，做“分钟感知 + 状态切换”的专门策略
 
 ---
 
@@ -265,20 +269,84 @@
 
 ---
 
-## 6. 不同策略层的关系
+## 6. latest regime 最新状态切换层
 
-可以把 4 层理解成：
+这层是针对最新数据里出现的“状态切换”专门做的分钟感知策略。
+
+### 6.1 latest_m1_drop20_down
+
+- 条件：第 1 分钟 `move_m1 <= -20`
+- 行为：买 Down
+- 直觉：早期大跌在最新数据里仍然可能有延续
+
+### 6.2 latest_m2_sharpdrop_reversal_up
+
+- 条件：第 2 分钟 `-50 < move_m2 <= -30`
+- 行为：买 Up
+- 直觉：中等偏大下跌在最新数据里更像反弹区间
+
+### 6.3 latest_m2_milddrop_down
+
+- 条件：第 2 分钟 `-30 < move_m2 <= -10`
+- 行为：买 Down
+- 直觉：较温和的下跌仍然可能延续
+
+### 6.4 latest_m2_neutral_down
+
+- 条件：第 2 分钟 `-10 < move_m2 <= 10`
+- 行为：买 Down
+- 直觉：接近平盘状态下，最新数据里 Down 偏 value
+
+### 6.5 latest_m2_extremeup_fade_down
+
+- 条件：第 2 分钟 `move_m2 >= 50`
+- 行为：买 Down
+- 直觉：过度上涨后做反向 fade
+
+### 6.6 latest_m4_rise30to50_up
+
+- 条件：第 4 分钟 `30 < move_m4 <= 50`
+- 行为：买 Up
+- 直觉：上涨突破在更晚入场时更有效
+
+### 6.7 latest_switch_v1
+
+按分钟和状态切换：
+
+- 若第 1 分钟大跌且 `buy_down_price_m1 <= 0.90`，买 Down
+- 否则若第 2 分钟中等大跌且 `buy_up_price_m2 <= 0.40`，买 Up
+- 否则若第 2 分钟温和下跌且 `buy_down_price_m2 <= 0.75`，买 Down
+- 否则若第 2 分钟极端上涨且 `buy_down_price_m2 <= 0.20`，买 Down
+- 否则若第 4 分钟上涨突破且 `buy_up_price_m4 <= 0.90`，买 Up
+- 否则跳过
+
+**直觉：** 这是“把不同分钟的局部 edge 拼接起来”的组合策略。
+
+### 6.8 latest_switch_v2
+
+和 `latest_switch_v1` 类似，但更偏保守：
+
+- 更优先做第 2 分钟 sharp-drop reversal
+- 对早期 down continuation 的价格要求更严格
+- 仍保留第 4 分钟 breakout up 和第 2 分钟 extreme-up fade
+
+---
+
+## 7. 不同策略层的关系
+
+可以把 5 层理解成：
 
 - **bankroll 基础层**：找最简单且有效的主线
 - **optimizer 层**：围绕最强主线做细过滤
 - **classic 层**：把常见量化思想系统化测试
 - **extended classic 层**：把更细的价量路径、regime、rolling filter、分层仓位全部补齐
+- **latest regime 层**：当旧主线失效时，针对新数据结构直接做分钟感知策略
 
 它们不是互相替代，而是层层加细。
 
 ---
 
-## 7. 怎么读结果
+## 8. 怎么读结果
 
 建议优先同时看这几个指标：
 
@@ -296,16 +364,16 @@
 
 ---
 
-## 8. 当前一句话总结
+## 9. 当前一句话总结
 
-到目前为止，所有策略层里最稳定的一条主线仍然是：
+旧数据里最稳定的一条主线曾经是：
 
 - **前 2 分钟明显下跌后，继续做 Down**
 
-而后续所有优化，几乎都可以理解成是在问：
+但最新数据里，这条主线已经明显衰减，因此新增的 `latest regime` 层是在回答：
 
-- 这个主线需不需要额外过滤？
-- 需不需要只在特定价格区间交易？
-- 需不需要看盘口量能确认？
-- 需不需要用 regime 或 rolling 过滤？
-- 需不需要用更细的仓位分配？
+- 现在是不是更应该：
+  - 早期大跌追随
+  - 第 2 分钟 sharp drop 做反弹
+  - 第 4 分钟中等上涨再追突破
+  - 并在这些局部 edge 之间做状态切换
