@@ -1,0 +1,85 @@
+name: Build final v1 on latest complete monthly run
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'analysis/final_v1_latest_complete_run.py'
+      - '.github/workflows/run-final-v1-latest-complete.yml'
+      - 'requirements.txt'
+
+permissions:
+  contents: write
+
+jobs:
+  build-final-v1-latest-complete:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run final v1 on latest complete run
+        run: |
+          set -euxo pipefail
+          python analysis/final_v1_latest_complete_run.py \
+            --source-root source_poly/data/monthly_runs \
+            --report-dir reports/final_v1_latest_complete_run
+
+      - name: Show generated outputs
+        if: always()
+        run: |
+          find reports/final_v1_latest_complete_run -maxdepth 4 -type f | sort || true
+
+      - name: Publish workflow summary
+        if: always()
+        run: |
+          echo '## Final v1 on latest complete monthly run' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f reports/final_v1_latest_complete_run/final_v1_latest_complete_report.md ]; then
+            cat reports/final_v1_latest_complete_run/final_v1_latest_complete_report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-v1-latest-complete-${{ github.run_id }}
+          path: |
+            reports/final_v1_latest_complete_run
+          if-no-files-found: warn
+
+      - name: Commit outputs back to repo
+        if: success()
+        run: |
+          set -euxo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A reports/final_v1_latest_complete_run
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update final v1 latest complete run outputs [skip ci]'
+            git pull --rebase origin main || true
+            git push origin HEAD:main
+          else
+            echo 'No output changes to commit.'
+          fi
