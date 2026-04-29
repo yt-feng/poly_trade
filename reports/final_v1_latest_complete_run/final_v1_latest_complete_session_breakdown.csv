@@ -1,0 +1,11 @@
+strategy,session_et,component,trades,avg_pnl_usd,total_pnl_usd,avg_fraction,win_rate
+v1_active_fill_mix,london,london_milddrop,8,3.507037524137894,28.05630019310315,0.0525,1.0
+v1_active_fill_mix,us_afternoon,us_afternoon_milddrop,4,6.193652208970621,24.774608835882486,0.08,1.0
+v1_active_fill_mix,us_open,us_open_breakout,1,0.7742939081443446,0.7742939081443446,0.04,1.0
+v1_adaptive_mix,london,london_milddrop,5,4.2412388012545374,21.20619400627269,0.083034887677959,1.0
+v1_adaptive_mix,us_afternoon,us_afternoon_milddrop,4,6.709109281262112,26.836437125048448,0.09187045373116036,1.0
+v1_balanced_mix,london,london_milddrop,5,4.087306975811183,20.436534879055912,0.08,1.0
+v1_balanced_mix,us_afternoon,us_afternoon_milddrop,4,7.423247149160989,29.692988596643957,0.1,1.0
+v1_balanced_mix,us_open,breakout_filler,1,1.0923313628565536,1.0923313628565536,0.06,1.0
+v1_conservative_mix,london,london_milddrop,5,3.008821459691444,15.044107298457222,0.06,1.0
+v1_conservative_mix,us_afternoon,us_afternoon_milddrop,4,5.530853864868134,22.123415459472536,0.08,1.0
