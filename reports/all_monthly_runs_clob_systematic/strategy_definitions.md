@@ -1,166 +1,398 @@
 # all_monthly_runs_clob_systematic 策略定义
 
-这份文档专门说明 `analysis/all_monthly_clob_systematic_research_v3.py` 里当前回测过的策略。
+这份文档专门说明 `analysis/all_monthly_clob_systematic_research_v3.py` 里当前回测过的策略。它是整套研究里最重要的“中层基线”：
+
+- 不引入外部数据
+- 只使用你已经从 Polymarket CLOB 拉下来的历史事件级数据
+- 先把**价格路径、盘口、流动性、spread、overround、交易活跃度**这些内部信息用透
+- 再决定哪些原型值得进入更高一层的组合优化
 
 ---
 
 ## 一、研究目标
 
-这一层只使用 `data/monthly_runs/*` 里已经从 Polymarket CLOB 拉下来的真实事件数据，强调：
+这一层的目标不是直接给出最终上线版本，而是回答两个更基础的问题：
 
-- 价格路径
-- 流动性
-- 深度
-- spread
-- overround
-- trade activity
-- 以及收益/风险平衡
+1. **在纯 CLOB 历史数据里，哪些局部模式真的有 alpha？**
+2. **这些 alpha 是来自价格本身，还是来自盘口/流动性/交易活跃度的配合？**
 
-回测输出不是只看 `ending_bankroll`，还会同时看：
+所以这一层会同时看：
 
+- `ending_bankroll`
 - `max_drawdown`
 - `win_rate`
 - `profit_factor`
 - `max_consecutive_losses`
 - `robustness_score`
 
+它更像一层“alpha 原型发现器”。
+
 ---
 
-## 二、当前明确使用的 CLOB 指标
+## 二、明确使用了哪些 CLOB 指标
 
+这一层没有“口头上说用了 liquidity”，而是明确把这些变量做进了事件级特征：
+
+### 2.1 流动性
 - `buy_up_size_2m / buy_down_size_2m`
 - `sell_up_size_2m / sell_down_size_2m`
+
+### 2.2 深度与盘口压力
 - `bid_depth_imbalance_updown_2m`
 - `book_pressure_up_2m / book_pressure_down_2m`
+
+### 2.3 报价质量
 - `spread_up_median_first2m / spread_down_median_first2m`
 - `overround_median_first2m`
-- `trade_count_sum_first2m / trade_volume_sum_first2m`
+
+### 2.4 交易活跃度
+- `trade_count_sum_first2m`
+- `trade_volume_sum_first2m`
 - `quote_count_first2m`
-- `realized_vol_first2m / path_efficiency_first2m / max_drawdown_first2m / max_rebound_first2m`
+
+### 2.5 路径特征
+- `realized_vol_first2m`
+- `path_efficiency_first2m`
+- `max_drawdown_first2m`
+- `max_rebound_first2m`
+
+### 为什么这些变量重要
+
+因为 5 分钟事件不是长周期方向投资，而更像：
+
+- 一个短时间里的再定价博弈
+- 一个由盘口结构与行为反应共同决定的微观结算问题
+
+所以只看“前 2 分钟涨了多少”是远远不够的。
 
 ---
 
-## 三、静态规则策略
+## 三、这层策略分成哪三类
 
-### 1. `static_m1_drop20_down`
+## 3.1 静态规则类
 
-- 条件：第 1 分钟 BTC 相对目标价下跌超过 20 美元
-- 行为：买 Down
-- 直觉：早期急跌延续
+特点：
 
-### 2. `static_m2_drop10_down_liq`
+- 规则清楚、解释性强
+- 直接回答“某个简单 pattern 能否赚钱”
 
-- 条件：
-  - 第 2 分钟 BTC 下跌超过 10 美元
-  - `buy_down_size_2m >= 120`
-  - `spread_down_median_first2m <= 0.06`
-- 行为：买 Down
-- 直觉：不是所有跌势都追，只在 Down 侧流动性尚可、spread 不太差时做
+## 3.2 动态 state selector 类
 
-### 3. `static_m2_sharpdrop_up_liq`
+特点：
 
-- 条件：
-  - 第 2 分钟 BTC 跌幅处于 `(-50, -30]`
-  - `buy_up_size_2m >= 120`
-  - `spread_up_median_first2m <= 0.06`
-  - `buy_up_price_2m <= 0.45`
-- 行为：买 Up
-- 直觉：大幅下跌后做反弹，但只在 Up 赔率还不太贵且流动性足够时介入
+- 不固定死只做一种子策略
+- 会根据历史相似状态的真实 PnL 选边
 
-### 4. `static_m2_milddrop_down_book`
+## 3.3 滚动逻辑回归类
 
-- 条件：
-  - 第 2 分钟 BTC 跌幅处于 `(-30, -10]`
-  - `size_imbalance_updown_2m <= 0`
-  - `book_pressure_down_2m >= -0.2`
-- 行为：买 Down
-- 直觉：温和下跌 + Down 侧盘口没有明显变差，继续做 Down
+特点：
 
-### 5. `static_m2_extremeup_fade_down`
+- 用现有 CLOB 特征做 walk-forward 预测
+- 再把预测概率和盘口价格比较，只在 edge 足够大时交易
 
-- 条件：
-  - 第 2 分钟 BTC 上涨超过 50 美元
-  - `buy_down_price_2m <= 0.20`
-- 行为：买 Down
-- 直觉：极端上涨后做反向 fade，但只在 Down 很便宜时做
+这三类其实对应三种研究思路：
 
-### 6. `static_m4_breakout_up_tight`
-
-- 条件：
-  - 第 4 分钟 BTC 上涨处于 `(30, 50]`
-  - `buy_up_size_4m >= 100`
-  - `buy_up_price_4m <= 0.90`
-- 行为：买 Up
-- 直觉：偏晚的突破追涨，只在 Up 侧仍有一定可成交量时做
+- 规则派
+- 状态派
+- 概率派
 
 ---
 
-## 四、动态 state selector 策略
+## 四、静态规则策略
 
-### 7. `state_selector_pnl`
+## 4.1 `static_m1_drop20_down`
 
-- 候选微策略：
-  - `early_drop_cont`
-  - `sharp_drop_rev`
-  - `mild_drop_cont`
-  - `extreme_up_fade`
-  - `late_breakout`
-- 方法：
-  - 对当前事件，先识别其 `regime`
-  - 再从历史同类状态中统计实际实现 PnL
-  - 选平均 PnL 最优的一边
-- 直觉：不用一个固定规则打天下，而是在历史相似状态里选择表现最好的一种交易
+### 规则
+- 第 1 分钟 BTC 相对目标价下跌超过 20 美元
+- 买 Down
 
-### 8. `state_selector_robust`
+### 为什么这么做
+这是最早期、最朴素的“急跌延续”假设。
 
-- 和 `state_selector_pnl` 类似
-- 但要求更严格：
-  - `support >= 20`
-  - `win_rate >= 55%`
-  - `mean_pnl > 0.02`
-- 直觉：偏向牺牲部分收益，换取更稳的样本支持和更高胜率
+### 背后的行为直觉
+- 当非常短时间里价格突然下挫，很多交易者还没来得及重估
+- 盘口可能先表现出“撤买单、让下跌继续”的状态
+- 这更像短周期里的**过慢反应**，而不是长期均值回归
+
+### 它在研究里扮演什么角色
+它是一个很好的 baseline：
+
+- 如果它都没效果，很多更复杂的延续逻辑就不值得继续
+- 如果它有效，就说明“早期方向冲击”确实有信息
 
 ---
 
-## 五、滚动逻辑回归策略
+## 4.2 `static_m2_drop10_down_liq`
 
-### 9. `logistic_selector_edge`
+### 规则
+- 第 2 分钟 BTC 跌幅超过 10 美元
+- `buy_down_size_2m >= 120`
+- `spread_down_median_first2m <= 0.06`
+- 买 Down
 
-- 用现有 CLOB 特征滚动训练逻辑回归，输出 `pred_prob_up_logit`
+### 为什么这么做
+单纯“跌了就追”不够，必须再问两个问题：
+
+1. Down 这边你买不买得到？
+2. 你买到的价格是不是还划算？
+
+### 背后的行为直觉
+这是一种**方向延续 + 市场可交易性过滤**：
+
+- 价格下跌说明方向可能在延续
+- 但只有当 Down 侧流动性还在、spread 还没坏掉时，这个方向才可能真正可赚
+
+### 它的意义
+它把“信号对不对”推进到“信号能不能交易”。
+
+---
+
+## 4.3 `static_m2_sharpdrop_up_liq`
+
+### 规则
+- 第 2 分钟跌幅处于 `(-50, -30]`
+- `buy_up_size_2m >= 120`
+- `spread_up_median_first2m <= 0.06`
+- `buy_up_price_2m <= 0.45`
+- 买 Up
+
+### 为什么这么做
+这条不是追跌，而是在测：
+
+- 下跌够大时，市场是否已经短期过度反应
+- 如果 Up 侧赔率仍然便宜，是否可以做反弹
+
+### 背后的行为直觉
+这是一个**短周期过度反应 / 反转**假说：
+
+- 当下跌已经很剧烈时
+- 一部分参与者会把它继续外推
+- 但若盘口并没有完全封死反弹空间，反转可能更值钱
+
+### 它的意义
+它和 `drop10_down_liq` 是一对：
+
+- 一个测延续
+- 一个测反转
+
+这有助于判断市场在不同跌幅区间里到底更像哪种行为。
+
+---
+
+## 4.4 `static_m2_milddrop_down_book`
+
+### 规则
+- 第 2 分钟跌幅处于 `(-30, -10]`
+- `size_imbalance_updown_2m <= 0`
+- `book_pressure_down_2m >= -0.2`
+- 买 Down
+
+### 为什么这么做
+这是当前整套研究里最重要的一条“收益骨架”。
+
+它不是做极端下跌，而是做一种更常见的模式：
+
+- 跌了，但没跌到恐慌
+- 盘口没有显示出明显反向修复
+- Down 方向仍然有结构性优势
+
+### 背后的行为直觉
+这条策略的直觉其实很强：
+
+- 极端下跌时，市场容易过度反应并反弹
+- 但**温和、持续、盘口一致的下跌**，更像“慢慢 price in”
+- 这时最容易出现短周期动量延续
+
+### 它为什么强
+因为它不是只看价格，而是同时要求：
+
+- 跌幅不极端
+- 买卖盘不平衡对 Down 方向友好
+- Down 侧盘口压力没有明显走坏
+
+也就是说，它抓的不是“跌”，而是“**可延续的跌**”。
+
+---
+
+## 4.5 `static_m2_extremeup_fade_down`
+
+### 规则
+- 第 2 分钟上涨超过 50 美元
+- `buy_down_price_2m <= 0.20`
+- 买 Down
+
+### 为什么这么做
+这条是在测“极端上涨是不是最后一棒”。
+
+### 背后的行为直觉
+这是典型的**短周期过度追涨 / 反身性回吐**假说：
+
+- 一旦上涨已经很极端
+- 市场中最后追价的一群人，往往买在最差赔率
+- 如果 Down 还很便宜，做 fade 理论上有吸引力
+
+### 它为什么后来表现差
+这也说明了一件事：
+
+- 并不是所有听起来合理的行为金融学故事，都能稳定转化成实盘 alpha
+- 在你这批样本里，这条更像“故事成立，但交易质量不够好”
+
+---
+
+## 4.6 `static_m4_breakout_up_tight`
+
+### 规则
+- 第 4 分钟上涨处于 `(30, 50]`
+- `buy_up_size_4m >= 100`
+- `buy_up_price_4m <= 0.90`
+- 买 Up
+
+### 为什么这么做
+这条不是在最早期追涨，而是等到第 4 分钟确认后再做。
+
+### 背后的行为直觉
+它抓的不是“瞬时冲动”，而是：
+
+- 价格已经表现出一定突破
+- 市场还没完全把 Up 价格挤爆
+- 流动性还允许继续参与
+
+这更像一种**确认后的延续交易**。
+
+### 它为什么重要
+在后面的研究里，它逐渐变成了“**低回撤骨架**”：
+
+- 收益不一定是最高
+- 但风险特征更好
+- 很适合成为组合中的防守块
+
+---
+
+## 五、动态 state selector 策略
+
+## 5.1 `state_selector_pnl`
+
+### 规则
+对每个当前事件：
+
+1. 先识别它属于哪种 `regime`
+2. 再从历史相似状态中查：
+   - 做哪种微策略平均 PnL 更高
+3. 选历史平均 PnL 最好的那一边
+
+### 为什么这么做
+这条是在测试一个核心问题：
+
+> 与其预先写死“永远做 milddrop”或“永远做 breakout”，能不能让历史相似样本来决定今天做哪边？
+
+### 背后的直觉
+这是一种“**条件分布依赖**”思路：
+
+- 市场不是单一稳定机制
+- 同样的价格信号，在不同盘口状态和不同时段下可能对应不同结局
+
+### 它的价值
+它是从“规则派”向“状态派”迈出的第一步。
+
+---
+
+## 5.2 `state_selector_robust`
+
+### 规则
+和 `state_selector_pnl` 类似，但更严格：
+
+- `support >= 20`
+- `win_rate >= 55%`
+- `mean_pnl > 0.02`
+
+### 为什么这么做
+`state_selector_pnl` 的问题是，历史平均 PnL 有时可能被少量样本误导。
+
+### 背后的直觉
+这条是在问：
+
+- 不是“哪个策略最亮眼”
+- 而是“哪个策略在相似状态里更稳、更有统计支撑”
+
+### 它的意义
+它很像一个“状态选择版的风险偏好收缩器”。
+
+---
+
+## 六、滚动逻辑回归策略
+
+## 6.1 `logistic_selector_edge`
+
+### 规则
+- 用现有 CLOB 特征做滚动逻辑回归，输出 `pred_prob_up_logit`
 - 然后比较：
-  - 买 Up 时：`pred_prob_up_logit - buy_up_price`
-  - 买 Down 时：`(1 - pred_prob_up_logit) - buy_down_price`
-- 再扣除：
+  - 买 Up：`pred_prob_up_logit - buy_up_price`
+  - 买 Down：`(1 - pred_prob_up_logit) - buy_down_price`
+- 再扣掉：
   - fee
   - spread penalty
   - safety margin
-- 只在 edge 足够大时交易
+- 只在 edge 够大时交易
 
-### 10. `logistic_selector_robust`
+### 为什么这么做
+这条是为了测试：
 
-- 和 `logistic_selector_edge` 相同
-- 但额外更保守：
-  - 边际要求更高
-  - 对过贵的 Up 不做
-- 直觉：降低过拟合和高价追逐的风险
+- 盘口和路径特征能不能被一个轻量概率模型提炼成更好的 fair probability
+
+### 背后的直觉
+这不再是“条件满足就做”，而是：
+
+> **只有当我估计出来的概率，明显优于市场隐含概率时才做。**
+
+它本质上更接近“概率交易”而不是“规则交易”。
 
 ---
 
-## 六、当前结论（就这层而言）
+## 6.2 `logistic_selector_robust`
 
-从当前全历史回测看：
+### 规则
+与 `logistic_selector_edge` 类似，但：
 
-- **收益最高**的主线是：`static_m2_milddrop_down_book`
-- **稳健性最好**的主线是：`static_m4_breakout_up_tight`
+- 对边际要求更高
+- 对高价 Up 更保守
 
-但两者各有问题：
+### 为什么这么做
+因为短周期逻辑回归很容易看起来有一点 edge，但实际穿不过交易摩擦。
 
-- `static_m2_milddrop_down_book` 收益高，但回撤偏大
-- `static_m4_breakout_up_tight` 很稳，但交易笔数偏少、覆盖范围偏窄
+### 背后的直觉
+这是在承认：
 
-因此下一步更值得测试的是：
+- 模型的误差永远存在
+- 所以必须要求更大的安全边际，才能变成可交易信号
 
-1. 时间分段版策略（例如按美股开盘前后）
-2. 12 小时滚动窗口最差收益约束
-3. 仓位自适应 / 降杠杆版组合策略
-4. 只在 spread / liquidity / overround 同时达标时交易
+---
+
+## 七、这一层得到的核心认识
+
+从这一层的结果里，最重要的不是“哪条收益第一”，而是：
+
+1. `static_m2_milddrop_down_book` 是高收益骨架
+2. `static_m4_breakout_up_tight` 是低回撤骨架
+3. 单条规则虽然有 alpha，但全天裸用并不舒服
+4. 时段切分、交易质量过滤、组合化，才是下一步自然方向
+
+所以后面才会发展出：
+
+- session-aware 版本
+- triple gate 版本
+- adaptive sizing 版本
+- 最终的 v1 混合组合版本
+
+---
+
+## 八、这一层在整套研究里的位置
+
+可以这样理解：
+
+- `all_monthly_clob_systematic` = **发现 alpha 原型**
+- `all_monthly_clob_robust_optimization` = **把原型变成更稳的结构**
+- `final_v1_live_candidate_search` = **从更稳的结构中挑一个最接近上线的版本**
+
+所以这一层非常关键：
+
+> 它决定了后面组合策略到底该由哪些“零件”组成。
