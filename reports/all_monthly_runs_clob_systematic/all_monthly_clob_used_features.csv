@@ -1,0 +1,20 @@
+feature,category,description
+buy_up_size_2m,liquidity,2分钟买Up可成交量
+buy_down_size_2m,liquidity,2分钟买Down可成交量
+sell_up_size_2m,liquidity,2分钟卖Up对手量
+sell_down_size_2m,liquidity,2分钟卖Down对手量
+bid_depth_imbalance_updown_2m,depth,bid depth不平衡
+book_pressure_up_2m,book_pressure,Up侧盘口压力
+book_pressure_down_2m,book_pressure,Down侧盘口压力
+size_imbalance_updown_2m,imbalance,买盘量不平衡
+sell_size_imbalance_updown_2m,imbalance,卖盘量不平衡
+spread_up_median_first2m,spread,前2分钟Up spread中位数
+spread_down_median_first2m,spread,前2分钟Down spread中位数
+overround_median_first2m,pricing,前2分钟overround中位数
+trade_count_sum_first2m,trading_activity,前2分钟成交笔数总和
+trade_volume_sum_first2m,trading_activity,前2分钟成交量总和
+quote_count_first2m,quote_activity,前2分钟quote数量
+realized_vol_first2m,path,前2分钟路径波动
+path_efficiency_first2m,path,前2分钟路径效率
+max_drawdown_first2m,path,前2分钟最大下探
+max_rebound_first2m,path,前2分钟最大反弹
