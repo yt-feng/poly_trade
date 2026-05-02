@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Trigger note: keep this file touched so the latest-complete-run workflow can run on push.
+
 import argparse
 import json
 import sys
