@@ -1,0 +1,10 @@
+{
+  "enough_72h_data": true,
+  "window_count": 864,
+  "trades_72h": 40,
+  "return_72h": -0.13437524733988915,
+  "ending_bankroll_72h": 86.56247526601109,
+  "max_drawdown_72h": 0.38152808186021714,
+  "win_rate_72h": 0.65,
+  "profit_factor_72h": 0.8297593995725736
+}
