@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - 'analysis/monthly_runs_full_refresh_research.py'
+      - 'analysis/monthly_runs_full_refresh_research_v2.py'
       - '.github/workflows/run-monthly-runs-full-refresh.yml'
       - 'requirements.txt'
 
@@ -39,10 +40,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run monthly_runs full refresh research
+      - name: Run monthly_runs full refresh research v2
         run: |
           set -euxo pipefail
-          python analysis/monthly_runs_full_refresh_research.py \
+          python analysis/monthly_runs_full_refresh_research_v2.py \
             --source-root source_poly/data/monthly_runs \
             --report-dir reports/monthly_runs_full_refresh
 
