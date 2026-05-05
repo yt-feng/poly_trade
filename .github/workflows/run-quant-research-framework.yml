@@ -1,0 +1,85 @@
+name: Build monthly_runs quant research framework
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'analysis/monthly_runs_quant_research_framework.py'
+      - '.github/workflows/run-quant-research-framework.yml'
+      - 'requirements.txt'
+
+permissions:
+  contents: write
+
+jobs:
+  build-quant-research-framework:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run monthly_runs quant research framework
+        run: |
+          set -euxo pipefail
+          python analysis/monthly_runs_quant_research_framework.py \
+            --source-root source_poly/data/monthly_runs \
+            --report-dir reports/monthly_runs_quant_research_framework
+
+      - name: Show generated outputs
+        if: always()
+        run: |
+          find reports/monthly_runs_quant_research_framework -maxdepth 4 -type f | sort || true
+
+      - name: Publish workflow summary
+        if: always()
+        run: |
+          echo '## monthly_runs quant research framework' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f reports/monthly_runs_quant_research_framework/quant_research_framework_report.md ]; then
+            cat reports/monthly_runs_quant_research_framework/quant_research_framework_report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monthly-runs-quant-research-framework-${{ github.run_id }}
+          path: |
+            reports/monthly_runs_quant_research_framework
+          if-no-files-found: warn
+
+      - name: Commit outputs back to repo
+        if: success()
+        run: |
+          set -euxo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A reports/monthly_runs_quant_research_framework
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update monthly_runs quant research framework outputs [skip ci]'
+            git pull --rebase origin main || true
+            git push origin HEAD:main
+          else
+            echo 'No output changes to commit.'
+          fi
