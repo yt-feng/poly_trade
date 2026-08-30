@@ -139,7 +139,15 @@ single link, `root:ubuntu`, mode `0660`, and protocol
 `v264-persistent-block-v1`.  Registration, prepare, coordinator immediately
 before delegation, and execute immediately before the global attempt and again
 before unchanged v274 execution all reject replacement.  The file is never
-chmod/chown'd or recreated by v275.
+chmod/chown'd or recreated by v275.  Its historical parent is separately
+validated as the exact non-symlink directory
+`/var/lib/poly-bot-btc5m/canary/v264`, `root:ubuntu 01770`; only that path gets
+this dedicated shared-lock-parent exception.  Validation resumes with the
+ordinary trusted ancestry rule at its parent, so no sibling or other writable
+descendant is admitted.  Preserving this directory mode also preserves the
+existing ubuntu writer contract for the v264 journal/WAL and the shared
+`execution_block.json`; changing it to `0750` would silently disable those
+fail-closed canary paths even though the lock inode itself remained unchanged.
 
 Before starting execute, the coordinator O_EXCL+fsyncs a globally consuming
 `first_eligible_delegation.json`.  Its creation ends window iteration.  This
@@ -203,9 +211,11 @@ editing, static review, and SHA calculation.
    `/usr/local/lib/poly-bot-btc5m-v275/runtime-v1`; independently confirm the
    frozen v274 and every transitive dependency SHA.
 2. Preserve the accepted `/var/lib/poly-bot-btc5m` data root as exactly
-   `root:ubuntu 01770`; this is the sole group-writable ancestry exception.
-   Require every descendant v275 state directory to be root-owned and
-   non-group/world-writable.  Inspect,
+   `root:ubuntu 01770`; preserve the separate, exact shared-lock parent
+   `/var/lib/poly-bot-btc5m/canary/v264` as `root:ubuntu 01770`.  The latter is
+   accepted only by its dedicated path-specific validator, not by the generic
+   ancestry exception.  Require every descendant v275 state directory to be
+   root-owned and non-group/world-writable.  Inspect,
    but never replace/chmod/chown, the accepted `root:ubuntu 0660` shared-lock
    inode.
 3. Precreate `/etc/poly-bot-btc5m/v275-public-identity/` as exact
@@ -308,9 +318,10 @@ The candidate is not deployable until AWS passes, at minimum:
 20. inject broken symlinks at every global and cash-forbidden artifact path;
     `lexists`-based scans must refuse/return conservative unknown, never a false
     144-cash zero terminal.
-21. prove `/var/lib/poly-bot-btc5m` exact `root:ubuntu 01770` ancestry succeeds,
-    while missing sticky bit, non-root owner, wrong group, world-write, or any
-    writable descendant refuses before window 0.
+21. prove `/var/lib/poly-bot-btc5m` and the dedicated exact v264 shared-lock
+    parent are each `root:ubuntu 01770`; for v264 reject wrong mode, owner,
+    group, symlink, or sibling path, then resume generic ancestry at `canary/`.
+    Any other writable descendant refuses before window 0.
 22. change `live.env` to mode 0644, wrong owner/group, hardlink, symlink, or
     replaced inode; execute must refuse before `execute_invocation.json`, and
     coordinator/prepare must remain unable to access it.  Scan process output

@@ -153,12 +153,12 @@ CANONICAL_QUALIFICATION_ROOT = (
 CANONICAL_QUALIFICATION_MANIFEST = CANONICAL_QUALIFICATION_ROOT / "manifest.json"
 CANONICAL_QUALIFICATION_REPORT = CANONICAL_QUALIFICATION_ROOT / "forward_report.json"
 CANONICAL_SYSTEMCTL = Path("/usr/bin/systemctl")
-CANONICAL_SHARED_LOCK = (
-    CANONICAL_DATA_DIR / "canary" / "v264" / "execution.lock"
-)
+CANONICAL_SHARED_LOCK_DIRECTORY = CANONICAL_DATA_DIR / "canary" / "v264"
+CANONICAL_SHARED_LOCK = CANONICAL_SHARED_LOCK_DIRECTORY / "execution.lock"
 SHARED_LOCK_PROTOCOL = "v264-persistent-block-v1"
 SHARED_LOCK_OWNER_UID = 0
 SHARED_LOCK_GROUP_NAME = "ubuntu"
+SHARED_LOCK_DIRECTORY_MODE = 0o1770
 SHARED_LOCK_MODE = 0o660
 CANONICAL_PREPARE_UNIT = "poly-bot-bounded-horizon-canary-v275-prepare.service"
 CANONICAL_EXECUTE_UNIT = "poly-bot-bounded-horizon-canary-v275-execute.service"
@@ -922,6 +922,47 @@ def _validate_live_environment_identity(
         os.close(descriptor)
 
 
+def _require_trusted_shared_lock_parent(
+    directory: Path = CANONICAL_SHARED_LOCK_DIRECTORY,
+) -> None:
+    """Accept only the historical root:ubuntu 01770 v264 lock directory."""
+
+    normalized = Path(os.path.abspath(directory))
+    if normalized != CANONICAL_SHARED_LOCK_DIRECTORY:
+        raise HorizonRefusal(
+            "shared_lock_parent_path_invalid",
+            "shared execution lock parent is not the canonical v264 directory",
+        )
+    try:
+        metadata = os.lstat(normalized)
+    except OSError as exc:
+        raise HorizonRefusal(
+            "shared_lock_parent_unreadable",
+            f"shared execution lock parent: {type(exc).__name__}",
+        ) from exc
+    import grp
+
+    try:
+        expected_group_gid = grp.getgrnam(SHARED_LOCK_GROUP_NAME).gr_gid
+    except KeyError as exc:
+        raise HorizonRefusal(
+            "shared_lock_group_missing",
+            "accepted ubuntu signer-lock group does not exist",
+        ) from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != SHARED_LOCK_OWNER_UID
+        or metadata.st_gid != expected_group_gid
+        or stat.S_IMODE(metadata.st_mode) != SHARED_LOCK_DIRECTORY_MODE
+    ):
+        raise HorizonRefusal(
+            "shared_lock_parent_identity_invalid",
+            "shared execution lock parent is not exact root:ubuntu 01770",
+        )
+    _require_trusted_directory_chain(normalized.parent)
+
+
 def _shared_lock_identity(
     path: Path = CANONICAL_SHARED_LOCK,
     *,
@@ -935,7 +976,7 @@ def _shared_lock_identity(
             "shared execution lock path is not canonical",
         )
     if require_root_owned:
-        _require_trusted_directory_chain(path.parent)
+        _require_trusted_shared_lock_parent(path.parent)
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
     try:

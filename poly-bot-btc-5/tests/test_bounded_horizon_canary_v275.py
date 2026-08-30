@@ -2811,6 +2811,62 @@ class StaticIsolationTest(unittest.TestCase):
             ), self.assertRaises(horizon.HorizonRefusal):
                 horizon._require_trusted_directory_chain(target)
 
+    def test_only_exact_root_ubuntu_01770_shared_lock_parent_is_accepted(
+        self,
+    ) -> None:
+        accepted_gid = 1000
+        canonical = horizon.CANONICAL_SHARED_LOCK_DIRECTORY
+
+        def metadata(
+            *,
+            file_type: int = stat.S_IFDIR,
+            mode: int = 0o1770,
+            uid: int = 0,
+            gid: int = accepted_gid,
+        ):
+            return SimpleNamespace(
+                st_mode=file_type | mode,
+                st_uid=uid,
+                st_gid=gid,
+            )
+
+        with patch(
+            "os.lstat",
+            return_value=metadata(),
+        ), patch(
+            "grp.getgrnam",
+            return_value=SimpleNamespace(gr_gid=accepted_gid),
+        ), patch.object(
+            horizon,
+            "_require_trusted_directory_chain",
+        ) as validate_parent:
+            horizon._require_trusted_shared_lock_parent(canonical)
+        validate_parent.assert_called_once_with(canonical.parent)
+
+        attacks = (
+            ("wrong_mode", metadata(mode=0o750)),
+            ("wrong_group", metadata(gid=accepted_gid + 1)),
+            ("wrong_owner", metadata(uid=1000)),
+            (
+                "symlink",
+                metadata(file_type=stat.S_IFLNK, mode=0o777),
+            ),
+        )
+        for attack_name, attacked_metadata in attacks:
+            with self.subTest(attack_name=attack_name), patch(
+                "os.lstat",
+                return_value=attacked_metadata,
+            ), patch(
+                "grp.getgrnam",
+                return_value=SimpleNamespace(gr_gid=accepted_gid),
+            ), self.assertRaises(horizon.HorizonRefusal):
+                horizon._require_trusted_shared_lock_parent(canonical)
+
+        with self.assertRaises(horizon.HorizonRefusal):
+            horizon._require_trusted_shared_lock_parent(
+                canonical.parent / "v265"
+            )
+
     def test_coordinator_source_has_no_top_level_v274_or_broker_import(self) -> None:
         source = Path(horizon.__file__).read_text(encoding="utf-8")
         self.assertNotIn("import one_window_canary_v274", source)
