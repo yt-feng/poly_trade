@@ -98,13 +98,17 @@ sandbox, trigger/timer, reverse dependency, or non-static unit state.  The
 reverse manager properties `WantedBy`, `RequiredBy`, `UpheldBy`, `BoundBy`, and
 `OnFailureOf` must all be empty.  AWS systemd may omit `EnvironmentFiles` from
 `systemctl show` when the effective list is empty; only that one missing
-property is normalized to `EnvironmentFiles=""`.  When the property is
-present for a unit whose sealed list is empty, its raw value must be exactly
-the empty string; garbage, relative text, or an option marker without an
-absolute path refuses.  Any other omitted property, an `EnvironmentFiles`
-omission combined with any other missing property, or an omitted
-`EnvironmentFiles` for a unit whose sealed contract requires a file also
-refuses.  Thus a matching unit file on disk is not by itself accepted evidence.
+property is normalized to an empty ordered list.  A unit whose sealed list is
+empty must emit exactly zero `EnvironmentFiles` rows; even an explicit empty
+`EnvironmentFiles=` row refuses.  A nonempty sealed list must emit exactly one
+ordered row per expected path, each in the strict form
+`/absolute/path (ignore_errors=no)`.  Garbage, relative paths, blank or extra
+rows, another ignore-errors value, a duplicated wrong path, or changed order
+refuses.  Every other queried property must occur exactly once.  Any other
+omitted property, an `EnvironmentFiles` omission combined with any other
+missing property, or an omitted `EnvironmentFiles` for a unit whose sealed
+contract requires a file also refuses.  Thus a matching unit file on disk is
+not by itself accepted evidence.
 
 ## Frozen verifier/executor bridge
 
@@ -213,11 +217,14 @@ editing, static review, and SHA calculation.
    empty DropInPaths, exact effective ExecStart/EnvironmentFiles/network/
    Restart/read-only/inaccessible properties, static state, empty WantedBy/
    RequiredBy/UpheldBy/BoundBy/OnFailureOf, and no trigger, wants symlink, or
-   matching timer.  Treat an omitted empty EnvironmentFiles property as the
-   AWS-compatible empty representation, but reject every other missing
-   property.  Verify the pre-existing live credential path is one canonical
-   `root:root 0600`, single-link regular file without reading or printing its
-   contents.  Do not enable a timer.
+   matching timer.  Treat zero EnvironmentFiles rows as the AWS-compatible
+   representation only for the sealed-empty provisioner; require one ordered
+   row for coordinator and prepare, and two ordered rows for execute.  Reject
+   explicit blank rows, every malformed/extra/reordered row, every other
+   missing property, and every duplicate non-EnvironmentFiles property.
+   Verify the pre-existing live credential path is one canonical `root:root
+   0600`, single-link regular file without reading or printing its contents.
+   Do not enable a timer.
 4. With all units daemon-reloaded and the v275 parent still absent, manually
    start the static identity provisioner exactly once.  Require PrivateNetwork,
    `identity_provisioner_loads_live_env=false`, no credential variables, the
@@ -285,9 +292,10 @@ The candidate is not deployable until AWS passes, at minimum:
     DropInPaths empty, normalized ExecStart/EnvironmentFiles/PrivateNetwork/
     Restart/RestartSec/StartLimit/path sandbox exact, no stale loaded fragment,
     no trigger, empty WantedBy/RequiredBy/UpheldBy/BoundBy/OnFailureOf, no wants
-    symlink, and no matching timer; accept only AWS systemd's omission of an
-    otherwise empty EnvironmentFiles property, inject each other drift or
-    missing property, and require refusal.
+    symlink, and no matching timer; require 0/1/1/2 ordered EnvironmentFiles
+    rows for provisioner/coordinator/prepare/execute, respectively, inject
+    duplicate, malformed, reordered, extra and missing rows plus every other
+    property drift, and require refusal.
 17. malformed/unreadable delegation, damaged receipt after delegation, wrapper
     fsync failure, and process crash after global attempt each produce a durable
     enumerated one/unknown terminal and never a false zero or restart loop.

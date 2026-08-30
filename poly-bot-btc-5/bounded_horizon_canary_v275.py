@@ -1404,6 +1404,7 @@ def effective_systemd_contract(
                 f"{unit}: non-UTF8 systemctl output",
             ) from exc
         properties: dict[str, str] = {}
+        environment_file_lines: list[str] = []
         for line in lines:
             if "=" not in line:
                 raise HorizonRefusal(
@@ -1411,6 +1412,9 @@ def effective_systemd_contract(
                     f"{unit}: malformed systemctl property line",
                 )
             key, value = line.split("=", 1)
+            if key == "EnvironmentFiles":
+                environment_file_lines.append(value)
+                continue
             if key in properties:
                 raise HorizonRefusal(
                     "systemd_effective_output_invalid",
@@ -1418,26 +1422,33 @@ def effective_systemd_contract(
                 )
             properties[key] = value
         expected_property_names = set(EFFECTIVE_SYSTEMD_PROPERTIES)
-        missing_property_names = expected_property_names - set(properties)
+        observed_property_names = set(properties)
+        if environment_file_lines:
+            observed_property_names.add("EnvironmentFiles")
+        missing_property_names = (
+            expected_property_names - observed_property_names
+        )
         # Some systemd builds omit EnvironmentFiles entirely when the loaded
         # unit has no EnvironmentFile entries.  That single representation is
-        # equivalent to an explicitly empty EnvironmentFiles= value; every
-        # other missing or unexpected property remains a refusal.
+        # normalized separately; every other missing or unexpected property
+        # remains a refusal.
         if missing_property_names == {"EnvironmentFiles"}:
-            properties["EnvironmentFiles"] = ""
-        if set(properties) != expected_property_names:
+            observed_property_names.add("EnvironmentFiles")
+        if observed_property_names != expected_property_names:
             raise HorizonRefusal(
                 "systemd_effective_output_invalid",
                 f"{unit}: incomplete effective property set",
             )
-        if (
-            expected["environment_files"] == []
-            and properties["EnvironmentFiles"] != ""
-        ):
+        expected_environment_file_lines = [
+            f"{path} (ignore_errors=no)"
+            for path in expected["environment_files"]
+        ]
+        if environment_file_lines != expected_environment_file_lines:
             raise HorizonRefusal(
                 "systemd_effective_contract_mismatch",
-                f"{unit}: empty EnvironmentFiles contract has nonempty raw value",
+                f"{unit}: ordered EnvironmentFiles lines drifted",
             )
+        normalized_environment_files = list(expected["environment_files"])
         expected_fragment = str(CANONICAL_UNIT_DIRECTORY / unit)
         exec_start = properties["ExecStart"]
         path_match = re.search(r"(?:^|[ {;])path=([^ ;}]+)", exec_start)
@@ -1454,9 +1465,7 @@ def effective_systemd_contract(
             "drop_in_paths": properties["DropInPaths"],
             "exec_path": path_match.group(1) if path_match is not None else None,
             "command": actual_command,
-            "environment_files": _systemd_path_tokens(
-                properties["EnvironmentFiles"]
-            ),
+            "environment_files": normalized_environment_files,
             "environment": sorted(properties["Environment"].split()),
             "unset_environment": sorted(
                 properties["UnsetEnvironment"].split()

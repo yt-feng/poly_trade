@@ -2991,10 +2991,12 @@ class StaticIsolationTest(unittest.TestCase):
         *,
         forged_drop_in: bool = False,
         forged_unset_environment: bool = False,
-        omit_empty_environment_files: bool = False,
         omitted_property: str | None = None,
         forged_reverse_dependency: str | None = None,
-        raw_environment_files: str | None = None,
+        environment_file_lines_by_unit: (
+            dict[str, tuple[str, ...]] | None
+        ) = None,
+        duplicate_property: str | None = None,
     ):
         unit = command[2]
         expected = horizon._expected_effective_systemd_units()[unit]
@@ -3022,10 +3024,6 @@ class StaticIsolationTest(unittest.TestCase):
                 + " ; argv[]="
                 + " ".join(expected["command"])
                 + " ; ignore_errors=no ; }"
-            ),
-            "EnvironmentFiles": " ".join(
-                f"{path} (ignore_errors=no)"
-                for path in expected["environment_files"]
             ),
             "Environment": " ".join(sorted(expected["environment"])),
             "UnsetEnvironment": " ".join(
@@ -3084,26 +3082,44 @@ class StaticIsolationTest(unittest.TestCase):
             "BoundBy": "",
             "OnFailureOf": "",
         }
-        if raw_environment_files is not None:
-            properties["EnvironmentFiles"] = raw_environment_files
+        environment_file_lines = [
+            f"{path} (ignore_errors=no)"
+            for path in expected["environment_files"]
+        ]
+        if (
+            environment_file_lines_by_unit is not None
+            and unit in environment_file_lines_by_unit
+        ):
+            environment_file_lines = list(
+                environment_file_lines_by_unit[unit]
+            )
         if (
             forged_reverse_dependency is not None
             and unit.endswith("coordinator.service")
         ):
             properties[forged_reverse_dependency] = "rogue.service"
-        stdout = "".join(
-            f"{name}={properties[name]}\n"
-            for name in horizon.EFFECTIVE_SYSTEMD_PROPERTIES
-            if name != omitted_property
-            and not (
-                name == "EnvironmentFiles"
-                and omit_empty_environment_files
-                and not expected["environment_files"]
-            )
-        ).encode("utf-8")
+        output_lines: list[str] = []
+        for name in horizon.EFFECTIVE_SYSTEMD_PROPERTIES:
+            if name == omitted_property:
+                continue
+            if name == "EnvironmentFiles":
+                output_lines.extend(
+                    f"EnvironmentFiles={raw}\n"
+                    for raw in environment_file_lines
+                )
+                continue
+            output_lines.append(f"{name}={properties[name]}\n")
+            if name == duplicate_property:
+                output_lines.append(f"{name}={properties[name]}\n")
+        stdout = "".join(output_lines).encode("utf-8")
         return SimpleNamespace(returncode=0, stdout=stdout, stderr=b"")
 
     def test_effective_loaded_units_reject_dropins_and_bind_normalized_sha(self) -> None:
+        self.assertEqual(len(horizon.EFFECTIVE_SYSTEMD_PROPERTIES), 36)
+        self.assertEqual(
+            horizon.EFFECTIVE_SYSTEMD_PROPERTIES.count("EnvironmentFiles"),
+            1,
+        )
         with patch.object(
             horizon.subprocess,
             "run",
@@ -3125,31 +3141,21 @@ class StaticIsolationTest(unittest.TestCase):
         self.assertEqual(coordinator["upheld_by"], "")
         self.assertEqual(coordinator["bound_by"], "")
         self.assertEqual(coordinator["on_failure_of"], "")
+        execute_unit = (
+            "poly-bot-bounded-horizon-canary-v275-execute.service"
+        )
+        self.assertEqual(
+            contract["units"][execute_unit]["environment_files"],
+            horizon._expected_effective_systemd_units()[execute_unit][
+                "environment_files"
+            ],
+        )
         with patch.object(
             horizon.subprocess,
             "run",
             side_effect=lambda command, **_kwargs: self._systemd_show_result(
                 command,
                 forged_drop_in=True,
-            ),
-        ), self.assertRaises(horizon.HorizonRefusal):
-            horizon.effective_systemd_contract()
-        with patch.object(
-            horizon.subprocess,
-            "run",
-            side_effect=lambda command, **_kwargs: self._systemd_show_result(
-                command,
-                raw_environment_files="garbage",
-            ),
-        ), self.assertRaises(horizon.HorizonRefusal):
-            horizon.effective_systemd_contract()
-        with patch.object(
-            horizon.subprocess,
-            "run",
-            side_effect=lambda command, **_kwargs: self._systemd_show_result(
-                command,
-                omit_empty_environment_files=True,
-                omitted_property="PrivateNetwork",
             ),
         ), self.assertRaises(horizon.HorizonRefusal):
             horizon.effective_systemd_contract()
@@ -3166,20 +3172,35 @@ class StaticIsolationTest(unittest.TestCase):
     def test_effective_systemd_normalizes_only_omitted_empty_environment_files(
         self,
     ) -> None:
+        provisioner_unit = (
+            "poly-bot-bounded-horizon-canary-v275-provision-identity.service"
+        )
         with patch.object(
             horizon.subprocess,
             "run",
             side_effect=lambda command, **_kwargs: self._systemd_show_result(
-                command,
-                omit_empty_environment_files=True,
+                command
             ),
         ):
             contract = horizon.effective_systemd_contract()
-        provisioner = contract["units"][
-            "poly-bot-bounded-horizon-canary-v275-provision-identity.service"
-        ]
+        provisioner = contract["units"][provisioner_unit]
         self.assertEqual(provisioner["environment_files"], [])
 
+        for raw_value in ("", "garbage"):
+            with self.subTest(raw_value=raw_value), patch.object(
+                horizon.subprocess,
+                "run",
+                side_effect=lambda command, **_kwargs: self._systemd_show_result(
+                    command,
+                    environment_file_lines_by_unit={
+                        provisioner_unit: (raw_value,)
+                    },
+                ),
+            ), self.assertRaises(horizon.HorizonRefusal):
+                horizon.effective_systemd_contract()
+
+        # The sole EnvironmentFiles omission is compatible.  The same
+        # omission combined with any other missing property is not.
         with patch.object(
             horizon.subprocess,
             "run",
@@ -3195,6 +3216,87 @@ class StaticIsolationTest(unittest.TestCase):
             side_effect=lambda command, **_kwargs: self._systemd_show_result(
                 command,
                 omitted_property="EnvironmentFiles",
+            ),
+        ), self.assertRaises(horizon.HorizonRefusal):
+            horizon.effective_systemd_contract()
+
+    def test_effective_systemd_environment_file_lines_are_exact_and_ordered(
+        self,
+    ) -> None:
+        expected_units = horizon._expected_effective_systemd_units()
+        coordinator_unit = (
+            "poly-bot-bounded-horizon-canary-v275-coordinator.service"
+        )
+        execute_unit = (
+            "poly-bot-bounded-horizon-canary-v275-execute.service"
+        )
+        coordinator_line = (
+            f"{expected_units[coordinator_unit]['environment_files'][0]} "
+            "(ignore_errors=no)"
+        )
+        execute_lines = tuple(
+            f"{path} (ignore_errors=no)"
+            for path in expected_units[execute_unit]["environment_files"]
+        )
+        attacks = (
+            (
+                "relative_path",
+                {coordinator_unit: ("relative.env (ignore_errors=no)",)},
+            ),
+            (
+                "ignore_errors_yes",
+                {
+                    coordinator_unit: (
+                        coordinator_line.replace(
+                            "ignore_errors=no",
+                            "ignore_errors=yes",
+                        ),
+                    )
+                },
+            ),
+            ("blank_line", {coordinator_unit: ("",)}),
+            (
+                "extra_line",
+                {
+                    coordinator_unit: (
+                        coordinator_line,
+                        "/etc/poly-bot-btc5m/extra.env (ignore_errors=no)",
+                    )
+                },
+            ),
+            (
+                "missing_execute_line",
+                {execute_unit: (execute_lines[0],)},
+            ),
+            (
+                "duplicate_wrong_execute_path",
+                {execute_unit: (execute_lines[0], execute_lines[0])},
+            ),
+            (
+                "wrong_execute_order",
+                {execute_unit: tuple(reversed(execute_lines))},
+            ),
+        )
+        for attack_name, overrides in attacks:
+            with self.subTest(attack_name=attack_name), patch.object(
+                horizon.subprocess,
+                "run",
+                side_effect=lambda command, **_kwargs: self._systemd_show_result(
+                    command,
+                    environment_file_lines_by_unit=overrides,
+                ),
+            ), self.assertRaises(horizon.HorizonRefusal):
+                horizon.effective_systemd_contract()
+
+    def test_effective_systemd_rejects_duplicate_non_environment_property(
+        self,
+    ) -> None:
+        with patch.object(
+            horizon.subprocess,
+            "run",
+            side_effect=lambda command, **_kwargs: self._systemd_show_result(
+                command,
+                duplicate_property="PrivateNetwork",
             ),
         ), self.assertRaises(horizon.HorizonRefusal):
             horizon.effective_systemd_contract()
