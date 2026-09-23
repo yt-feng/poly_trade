@@ -1,0 +1,53 @@
+name: canary-forward
+on:
+  pull_request:
+    paths:
+      - 'config/canary_forward*.json'
+      - 'analysis/forward_*.py'
+      - 'tests/test_forward_canary.py'
+      - '.github/workflows/canary-forward.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  forward-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Regression tests
+        run: python -m unittest discover -s tests -p 'test_*canary.py' -v
+      - name: Acquire paginated checksum-verified production archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -u analysis/forward_acquire.py --output forward_inputs --max-releases 16 --max-bytes 471859200
+      - name: Evaluate preregistered forward candidate
+        run: python -u analysis/forward_roll_conflict.py --input forward_inputs/captured --output forward_results --registry config/canary_forward_v1.json
+      - name: Show non-activating decision
+        run: |
+          python - <<'PY'
+          import json
+          r=json.load(open('forward_results/forward_readiness.json'))
+          print(json.dumps({
+            'coverage':r['coverage'],
+            'primary':r['primary'],
+            'stress_3s':r['stress_3s'],
+            'decision':r['decision'],
+          },indent=2))
+          assert r['decision']['live_canary_eligible'] is False
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canary-forward-${{ github.run_id }}
+          path: |
+            config/canary_forward_v1.json
+            forward_inputs/acquisition_manifest.json
+            forward_results/
+          retention-days: 7
+          compression-level: 6
