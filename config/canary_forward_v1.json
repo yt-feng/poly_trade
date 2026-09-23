@@ -29,8 +29,8 @@
     "max_entry_slippage_ticks": 1,
     "adverse_slippage_stress_ticks": 1,
     "minimum_seconds_to_market_end_at_signal": 50,
-    "fee_source": "market observed fee_rate_bps/fee_exponent when present; crypto fallback only if the production row lacks parameters",
-    "fee_formula": "fee_usdc = shares * fee_rate * p * (1-p), each taker match, rounded to 5 decimals for the precision stress view",
+    "fee_source": "market-observed fee rate/exponent from a fresh production rule payload; unknown or stale fee metadata rejects the attempt",
+    "fee_formula": "fee_usdc = shares * fee_rate * p * (1-p), each taker match; also report a 5-decimal protocol fee-precision view",
     "rebates_assumed_usdc": 0,
     "partial_fill_assumption": "no synthetic partial fills; insufficient displayed capacity is a rejected attempt",
     "missing_exit_policy": "retain attempt as unvalued and charge worst-case capital loss in lower-bound ledger",
@@ -72,6 +72,7 @@
   "notes": [
     "The forward boundary is a window-start boundary, not a row receive-time filter. Entire windows starting before it are excluded from forward returns.",
     "All causal warm-up observations may be read, but no pre-boundary outcome contributes to v1 performance statistics.",
+    "Current public Polymarket documentation states taker fees are denominated in USDC; the replay therefore keeps purchased share count unchanged while retaining private matched-position reconciliation as a live gate.",
     "Real trading remains disabled. This registry can only support a later recommendation for manual review."
   ]
 }
