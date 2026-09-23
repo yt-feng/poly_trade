@@ -1,0 +1,102 @@
+{
+  "source_root": "/Users/ytfeng/Code_Pj/poly/data/monthly_runs",
+  "docs_dir": "/Users/ytfeng/Code_Pj/poly_trade/docs",
+  "lookback_days": 30,
+  "raw_runs": 33,
+  "raw_files": 1460,
+  "raw_rows": 1238638,
+  "feature_markets_all": 7833,
+  "window_run_level_markets": 5989,
+  "window_events": 5989,
+  "duplicate_slugs_in_window": 0,
+  "max_runs_per_slug_in_window": 1,
+  "window_start_utc": "2026-05-03T15:45:00+00:00",
+  "window_end_utc": "2026-06-02T15:45:00+00:00",
+  "window_start_cst": "2026-05-03T23:45:00+08:00",
+  "window_end_cst": "2026-06-02T23:45:00+08:00",
+  "train_start_cst": "2026-05-03T23:35:00+08:00",
+  "train_end_cst": "2026-05-23T23:35:00+08:00",
+  "validation_start_cst": "2026-05-23T23:40:00+08:00",
+  "validation_end_cst": "2026-05-28T23:40:00+08:00",
+  "test_start_cst": "2026-05-28T23:45:00+08:00",
+  "test_end_cst": "2026-06-02T23:45:00+08:00",
+  "embargo_seconds": 300,
+  "candidates": 761427,
+  "train_rows": 662478,
+  "validation_rows": 30499,
+  "test_rows": 68450,
+  "model_train_rows": 120000,
+  "model_validation_rows": 30499,
+  "entry_mode": "dense4s",
+  "entry_step_seconds": 4,
+  "entry_start_seconds": 4,
+  "entry_end_buffer_seconds": 10,
+  "config_search_mode": "fixed_selected_execution",
+  "config_combinations": 1,
+  "full_config_combinations": 1080,
+  "selected_config": "q_edge_ne0.02_be0.06_d50_cap0.01_mt1_gap4s__settle",
+  "selected_model_kind": "mixed_blend",
+  "selected_feature_set": "mixed_top2_logit_blend",
+  "selected_feature_count": 15,
+  "selected_l2": 0.01,
+  "selected_model_validation_logloss": 0.5044236859655171,
+  "selected_model_selection_loss": 0.5052236859655171,
+  "selected_model_complexity_penalty": 0.0008,
+  "selected_model_members": [
+    "prior_plus_btc@l2=0.01",
+    "prior_btc_liquidity@l2=0.01"
+  ],
+  "selected_max_trades_per_market": 1,
+  "selected_min_entry_gap_seconds": 4,
+  "calibration_intercept": 0.003991065419197033,
+  "calibration_slope": 1.0061097627047153,
+  "fee": 0.01,
+  "starting_bankroll": 100.0,
+  "boundary_definition": "entry_price >= 0.90 or <= 0.10",
+  "exit_policies_tested": [
+    "settle",
+    "tp04_sl02_buf3s",
+    "tp06_sl03_buf3s",
+    "tp08_sl04_buf5s",
+    "trail08_gap03_buf5s"
+  ],
+  "execution_search_grid": {
+    "normal_edge": [
+      0.012,
+      0.02,
+      0.035
+    ],
+    "boundary_edge": [
+      0.06,
+      999.0
+    ],
+    "min_depth": [
+      50.0,
+      150.0
+    ],
+    "event_cap": [
+      0.005,
+      0.01
+    ],
+    "max_trades_per_market": [
+      1,
+      2,
+      4
+    ],
+    "min_entry_gap_seconds": [
+      4,
+      8,
+      16
+    ]
+  },
+  "workbook_alignment": "q_model + calibration + edge decision + fractional Kelly + price bucket / depth / drawdown gates",
+  "walk_forward_train_days": 10,
+  "walk_forward_validation_days": 3,
+  "walk_forward_test_days": 3,
+  "walk_forward_step_days": 5,
+  "walk_forward_max_folds": 2,
+  "walk_forward_folds_run": 2,
+  "walk_forward_tune_config": false,
+  "paper_delay_seconds": 4,
+  "paper_max_adverse_slippage": 0.01
+}

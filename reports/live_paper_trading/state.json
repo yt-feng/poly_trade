@@ -1,0 +1,29 @@
+{
+  "started_at": "2026-06-04T00:52:28.357902+00:00",
+  "updated_at": "2026-06-04T00:53:19.143430+00:00",
+  "bankroll": 100.0,
+  "starting_bankroll": 100.0,
+  "realized_pnl": 0.0,
+  "signals": 0,
+  "fills": 0,
+  "settlements": 0,
+  "skips": 0,
+  "current_slug": "",
+  "feed_status": "error",
+  "last_error": "No market found for slug btc-updown-5m-1780534200; errors=[\"https://gamma-api.polymarket.com/markets?slug=btc-updown-5m-1780534200: HTTPSConnectionPool(host='gamma-api.polymarket.com', port=443): Max retries exceeded with url: /markets?slug=btc-updown-5m-1780534200 (Caused by ConnectTimeoutError(<HTTPSConnection(host='gamma-api.polymarket.com', port=443) at 0x108a79fd0>, 'Connection to gamma-api.polymarket.com timed out. (connect timeout=3.0)'))\", \"https://gamma-api.polymarket.com/markets/slug/btc-updown-5m-1780534200: HTTPSConnectionPool(host='gamma-api.polymarket.com', port=443): Max retries exceeded with url: /markets/slug/btc-updown-5m-1780534200 (Caused by ConnectTimeoutError(<HTTPSConnection(host='gamma-api.polymarket.com', port=443) at 0x108ac4b50>, 'Connection to gamma-api.polymarket.com timed out. (connect timeout=3.0)'))\"]",
+  "last_error_at": "2026-06-04T00:53:19.143405+00:00",
+  "last_snapshot_at": "",
+  "operator_note": "Dashboard initialized. Run analysis/live_paper_trader.py to start live paper trading.",
+  "pending_orders": [],
+  "open_positions": [],
+  "traded_slugs": [],
+  "last_final_by_slug": {},
+  "target_by_slug": {},
+  "model": {
+    "status": "initialized_without_live_feed",
+    "members": [
+      "prior_plus_btc@l2=0.01",
+      "prior_btc_liquidity@l2=0.01"
+    ]
+  }
+}

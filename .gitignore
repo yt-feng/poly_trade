@@ -1,0 +1,25 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.venv/
+__pycache__/
+*.py[cod]
+reports/live_paper_trading/live_model_cache.pkl
+api_key/
+
+# Local bot checkout, runtime state, and bulk historical archives are kept
+# outside this research repository and are not part of the GitHub backup.
+/poly-bot-btc-5/
+/tmp/
+/docs/QuantML论文库doc/
+/docs/quantml_paper_archive_20260810_142657/
+/docs/quantml_paper_archive_20260810_142657.zip
+
+# Large replay logs are reproducible from the checked-in research scripts and
+# summarized in the accompanying reports; keep the repository reviewable.
+reports/**/*trade_logs.csv
+reports/**/*events.csv
+reports/**/*snapshots.csv

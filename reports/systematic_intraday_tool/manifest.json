@@ -1,0 +1,20 @@
+{
+  "source_root": "/Users/ytfeng/Code_Pj/poly/data/monthly_runs",
+  "docs_dir": "/Users/ytfeng/Code_Pj/poly_trade/docs",
+  "lookback_days": 30,
+  "raw_runs": 33,
+  "raw_files": 1460,
+  "raw_rows": 1238638,
+  "feature_markets_all": 7833,
+  "window_run_level_markets": 5989,
+  "window_events": 5989,
+  "duplicate_slugs_in_window": 0,
+  "max_runs_per_slug_in_window": 1,
+  "window_start_utc": "2026-05-03T15:45:00+00:00",
+  "window_end_utc": "2026-06-02T15:45:00+00:00",
+  "window_start_cst": "2026-05-03T23:45:00+08:00",
+  "window_end_cst": "2026-06-02T23:45:00+08:00",
+  "strategy_variants": 609,
+  "fee": 0.01,
+  "starting_bankroll": 100.0
+}

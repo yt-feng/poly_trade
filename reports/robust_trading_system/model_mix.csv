@@ -1,0 +1,4 @@
+layer,name,weight,features,l2,formula
+mixed_meta,intercept,-0.02410470561935495,0,0.01,z_mix = intercept + sum(alpha_j * z_j)
+mixed_member,prior_plus_btc@l2=0.01,0.5662706222222236,4,0.01,member raw logit 输入上层 mixed meta
+mixed_member,prior_btc_liquidity@l2=0.01,0.557609242819062,15,0.01,member raw logit 输入上层 mixed meta

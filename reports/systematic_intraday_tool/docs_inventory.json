@@ -1,0 +1,54 @@
+[
+  {
+    "file": "/Users/ytfeng/Code_Pj/poly_trade/docs/Polymarket_5min_binary_trading_system_v2.xlsx",
+    "name": "Polymarket_5min_binary_trading_system_v2.xlsx",
+    "size_bytes": 218341,
+    "sheets": []
+  },
+  {
+    "file": "/Users/ytfeng/Code_Pj/poly_trade/docs/short_horizon_quant_strategy_longlist_300.xlsx",
+    "name": "short_horizon_quant_strategy_longlist_300.xlsx",
+    "size_bytes": 150608,
+    "sheets": []
+  },
+  {
+    "file": "/Users/ytfeng/Code_Pj/poly_trade/docs/short_horizon_ts_game_theory_strategy_longlist_300.xlsx",
+    "name": "short_horizon_ts_game_theory_strategy_longlist_300.xlsx",
+    "size_bytes": 63905,
+    "sheets": []
+  },
+  {
+    "file": "/Users/ytfeng/Code_Pj/poly_trade/docs/short_horizon_ts_game_theory_strategy_longlist_300_UPDATED_polymarket.xlsx",
+    "name": "short_horizon_ts_game_theory_strategy_longlist_300_UPDATED_polymarket.xlsx",
+    "size_bytes": 103644,
+    "sheets": []
+  },
+  {
+    "file": "/Users/ytfeng/Code_Pj/poly_trade/docs/external_data_setup_plan.md",
+    "name": "external_data_setup_plan.md",
+    "size_bytes": 7245,
+    "type": "markdown",
+    "headings": [
+      "外部数据补充方案（优先级、获取方式、成本与接入计划）",
+      "1. 最值得补的数据，按优先级排序",
+      "P0：最高优先级",
+      "P1：强烈建议补",
+      "P2：增强层",
+      "2. 每个外部源的作用和推荐获取方式",
+      "2.1 Chainlink 对齐标签 / 历史 report",
+      "为什么关键",
+      "最想拿到的内容",
+      "现实判断",
+      "你可以怎么帮我",
+      "成本判断",
+      "在 repo 里的接入优先级",
+      "2.2 Polymarket 自己的盘口 / 成交 / 价格历史",
+      "为什么关键",
+      "最想拿到的内容",
+      "优先级理由",
+      "成本判断",
+      "你可以怎么帮我",
+      "在 repo 里的接入优先级"
+    ]
+  }
+]

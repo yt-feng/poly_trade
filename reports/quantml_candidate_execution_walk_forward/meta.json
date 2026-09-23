@@ -1,0 +1,19 @@
+{
+  "complete_run_count": 82,
+  "fold_count": 78,
+  "feature_rows": 21259,
+  "candidate_count": 3,
+  "execution_config_count": 128,
+  "validation_grid_rows": 59904,
+  "selected_metric_rows": 702,
+  "trade_log_rows": 124719,
+  "figure_count": 3,
+  "price_min": 0.05,
+  "price_max": 0.95,
+  "fill_price_max": 0.98,
+  "fill_ratio": 0.25,
+  "quota_window_events": 144,
+  "max_trades_per_window": 10,
+  "cooldown_after_losses": 2,
+  "cooldown_events": 6
+}

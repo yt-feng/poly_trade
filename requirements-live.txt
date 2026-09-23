@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Official Polymarket CLOB V2 SDK. Requires Python 3.11+.
+polymarket-client>=0.1.0

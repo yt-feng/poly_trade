@@ -1,0 +1,2 @@
+max_trades_per_market,min_entry_gap_seconds,exit_policy,best_system,validation_score,trades,ending_bankroll,total_return,max_drawdown,profit_factor,multi_trade_markets
+1,4,settle,q_edge_ne0.02_be0.06_d50_cap0.01_mt1_gap4s__settle,1.202044454807812,162,209.25122726973441,1.092512272697344,0.040251851343804546,2.2748189316164518,0

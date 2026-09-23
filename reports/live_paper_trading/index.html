@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Paper Trading</title>
+  <style>
+    body { margin:0; background:#f4f5f2; color:#202124; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    header { padding:16px 22px; border-bottom:1px solid #d8dcd2; background:#fafaf7; position:sticky; top:0; }
+    h1 { margin:0 0 6px; font-size:20px; }
+    .sub { color:#667085; }
+    .status { margin:14px 0; padding:12px 14px; border:1px solid #d8dcd2; border-radius:8px; background:#fff; }
+    .status b { display:block; margin-bottom:4px; }
+    .status code { background:#f2f4f7; padding:2px 5px; border-radius:4px; }
+    .status.error { border-color:#f5b5ae; background:#fff7f5; }
+    .status.live { border-color:#abefc6; background:#f6fef9; }
+    main { padding:18px 22px 34px; max-width:1400px; margin:0 auto; }
+    .cards { display:grid; grid-template-columns:repeat(6,minmax(140px,1fr)); gap:10px; margin-bottom:14px; }
+    .card,.panel { background:white; border:1px solid #d8dcd2; border-radius:8px; padding:12px; }
+    .label { color:#667085; font-size:12px; }
+    .value { font-size:22px; font-weight:720; margin-top:4px; overflow-wrap:anywhere; }
+    .grid { display:grid; grid-template-columns:1.1fr 1fr; gap:12px; }
+    table { width:100%; border-collapse:collapse; min-width:900px; }
+    th,td { border-bottom:1px solid #e4e7ec; padding:7px 8px; text-align:left; white-space:nowrap; }
+    th { background:#eff1ec; color:#344054; font-size:12px; position:sticky; top:0; }
+    .scroll { overflow:auto; max-height:420px; border:1px solid #d8dcd2; border-radius:8px; background:white; }
+    canvas { width:100%; height:260px; display:block; }
+    .good { color:#137333; font-weight:650; } .bad { color:#b42318; font-weight:650; }
+    @media(max-width:1000px) { .cards { grid-template-columns:repeat(2,1fr); } .grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Polymarket 5min Live Paper Trading</h1>
+  <div class="sub">只读实时盘口并模拟交易，不调用真钱下单接口。页面自动写入最新状态，浏览器刷新即可看更新。</div>
+</header>
+<main>
+  <section class="status" id="statusBox">
+    <b>Live feed status</b>
+    <div>正在读取状态...</div>
+  </section>
+  <section class="cards" id="cards"></section>
+  <section class="grid">
+    <div class="panel"><h2>Bankroll / Event Timeline</h2><canvas id="curve" width="900" height="300"></canvas></div>
+    <div class="panel"><h2>实时解释</h2><p>signal 表示策略看到 q-edge 机会；fill 表示延迟后仍能按容忍滑点模拟成交；settle 表示按窗口结束时 BTC 是否高于目标价结算 paper PnL。</p><div id="explain"></div></div>
+  </section>
+  <h2>Paper Events</h2><div class="scroll"><table id="events"></table></div>
+  <h2>Latest Snapshots</h2><div class="scroll"><table id="snapshots"></table></div>
+</main>
+<script id="payload" type="application/json">{"state": {"started_at": "2026-06-04T00:52:28.357902+00:00", "updated_at": "2026-06-04T00:53:19.143430+00:00", "bankroll": 100.0, "starting_bankroll": 100.0, "realized_pnl": 0.0, "signals": 0, "fills": 0, "settlements": 0, "skips": 0, "current_slug": "", "feed_status": "error", "last_error": "No market found for slug btc-updown-5m-1780534200; errors=[\"https://gamma-api.polymarket.com/markets?slug=btc-updown-5m-1780534200: HTTPSConnectionPool(host='gamma-api.polymarket.com', port=443): Max retries exceeded with url: /markets?slug=btc-updown-5m-1780534200 (Caused by ConnectTimeoutError(<HTTPSConnection(host='gamma-api.polymarket.com', port=443) at 0x108a79fd0>, 'Connection to gamma-api.polymarket.com timed out. (connect timeout=3.0)'))\", \"https://gamma-api.polymarket.com/markets/slug/btc-updown-5m-1780534200: HTTPSConnectionPool(host='gamma-api.polymarket.com', port=443): Max retries exceeded with url: /markets/slug/btc-updown-5m-1780534200 (Caused by ConnectTimeoutError(<HTTPSConnection(host='gamma-api.polymarket.com', port=443) at 0x108ac4b50>, 'Connection to gamma-api.polymarket.com timed out. (connect timeout=3.0)'))\"]", "last_error_at": "2026-06-04T00:53:19.143405+00:00", "last_snapshot_at": "", "operator_note": "Dashboard initialized. Run analysis/live_paper_trader.py to start live paper trading.", "pending_orders": [], "open_positions": [], "traded_slugs": [], "last_final_by_slug": {}, "target_by_slug": {}, "model": {"status": "initialized_without_live_feed", "members": ["prior_plus_btc@l2=0.01", "prior_btc_liquidity@l2=0.01"]}}, "events": [], "snapshots": []}</script>
+<script>
+const data = JSON.parse(document.getElementById('payload').textContent);
+const fmtMoney = v => v == null || v === '' || Number.isNaN(Number(v)) ? '' : '$' + Number(v).toFixed(2);
+const fmtNum = v => v == null || v === '' || Number.isNaN(Number(v)) ? '' : Number(v).toFixed(4);
+const fmtPct = v => v == null || v === '' || Number.isNaN(Number(v)) ? '' : (Number(v)*100).toFixed(1) + '%';
+function table(id, rows, cols) {
+  document.getElementById(id).innerHTML = '<thead><tr>' + cols.map(c=>'<th>'+c[0]+'</th>').join('') + '</tr></thead><tbody>' +
+    rows.slice().reverse().map(r=>'<tr>' + cols.map(c=>'<td>'+c[1](r)+'</td>').join('') + '</tr>').join('') + '</tbody>';
+}
+const s = data.state || {};
+document.getElementById('cards').innerHTML = [
+  ['Bankroll', fmtMoney(s.bankroll), 'start ' + fmtMoney(s.starting_bankroll)],
+  ['Realized PnL', fmtMoney(s.realized_pnl), 'paper only'],
+  ['Signals', s.signals || 0, 'q-edge 触发'],
+  ['Fills', s.fills || 0, '延迟后成交'],
+  ['Open', (s.open_positions||[]).length, '未结算持仓'],
+  ['Pending', (s.pending_orders||[]).length, '等待延迟检查']
+].map(c=>'<div class="card"><div class="label">'+c[0]+'</div><div class="value">'+c[1]+'</div><div class="label">'+c[2]+'</div></div>').join('');
+const statusText = s.feed_status === 'live'
+  ? '实时行情已连接，最近快照：' + (s.last_snapshot_at || '')
+  : s.feed_status === 'error'
+    ? '行情连接失败：' + (s.last_error || '')
+    : '尚未连接实时行情。这个页面已经初始化，但 live paper 进程还没有成功写入快照。';
+document.getElementById('statusBox').innerHTML =
+  '<b>Live feed status: ' + (s.feed_status || 'unknown') + '</b>' +
+  '<div>' + statusText + '</div>' +
+  '<div class="label">这个 HTML 不会自己拉行情；必须让 Python 进程持续运行，它才会写入 snapshots/events。</div>' +
+  '<div class="label">启动命令：<code>cd /Users/ytfeng/Code_Pj/poly_trade && python3 analysis/live_paper_trader.py</code></div>' +
+  (s.last_error_at ? '<div class="label">last_error_at: ' + s.last_error_at + '</div>' : '');
+document.getElementById('statusBox').classList.add(s.feed_status === 'live' ? 'live' : s.feed_status === 'error' ? 'error' : 'idle');
+document.getElementById('explain').innerHTML =
+  '<p><b>当前 market:</b> ' + (s.current_slug || '未连接实时行情') + '</p>' +
+  '<p><b>模型:</b> mixed_top2_logit_blend，执行配置 ' + (s.model?.members || []).join(' + ') + '</p>' +
+  '<p><b>状态更新时间:</b> ' + (s.updated_at || '') + '</p>';
+table('events', data.events || [], [
+  ['time', r=>r.event_ts], ['type', r=>r.event_type], ['status', r=>r.status], ['slug', r=>r.slug],
+  ['side', r=>r.side], ['q', r=>fmtNum(r.q_model)], ['edge', r=>fmtNum(r.edge)], ['signal', r=>fmtNum(r.signal_price)],
+  ['paper', r=>fmtNum(r.paper_price)], ['fill cost', r=>fmtMoney(r.fill_cost)], ['PnL', r=>fmtMoney(r.pnl_usd)], ['bankroll', r=>fmtMoney(r.bankroll_after)]
+]);
+table('snapshots', data.snapshots || [], [
+  ['time', r=>r.ts_iso], ['slug', r=>r.slug], ['window', r=>r.window_text], ['up ask', r=>r.buy_up_cents],
+  ['down ask', r=>r.buy_down_cents], ['up size', r=>r.buy_up_size], ['down size', r=>r.buy_down_size],
+  ['target', r=>r.target_price], ['BTC', r=>r.final_price]
+]);
+const canvas = document.getElementById('curve'), ctx = canvas.getContext('2d');
+const bankrollEvents = (data.events || []).filter(r=>r.bankroll_after);
+if (bankrollEvents.length) {
+  const vals = bankrollEvents.map(r=>Number(r.bankroll_after)).filter(Number.isFinite);
+  const w=canvas.width,h=canvas.height,p=34,min=Math.min(...vals),max=Math.max(...vals),span=Math.max(1e-9,max-min);
+  ctx.clearRect(0,0,w,h); ctx.strokeStyle='#d8dcd2'; ctx.beginPath(); ctx.moveTo(p,h-p); ctx.lineTo(w-p,h-p); ctx.lineTo(w-p,p); ctx.stroke();
+  ctx.strokeStyle='#0f766e'; ctx.lineWidth=2; ctx.beginPath();
+  vals.forEach((v,i)=>{ const x=p+i/Math.max(1,vals.length-1)*(w-2*p), y=h-p-(v-min)/span*(h-2*p); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); });
+  ctx.stroke(); ctx.fillStyle='#344054'; ctx.fillText('latest ' + fmtMoney(vals[vals.length-1]), p, 20);
+}
+setTimeout(() => location.reload(), 10000);
+</script>
+</body>
+</html>

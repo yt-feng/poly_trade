@@ -1,0 +1,27 @@
+group,group_description,feature,selected,weight,description
+boundary,接近 0/1 的边界价格单独标记，因为尾部亏损不对称。,boundary_price_flag,1,,entry price >=0.90 或 <=0.10。
+btc,BTC 现货相对该 5min 合约目标价的方向和幅度，用买入方向统一成 signed 特征。,abs_btc_move_entry,1,,入场时 BTC 偏移绝对值，表示行情运动强度。
+btc,BTC 现货相对该 5min 合约目标价的方向和幅度，用买入方向统一成 signed 特征。,signed_btc_move_2m,1,,按交易方向统一后的前 2 分钟 BTC 价格偏移。
+btc,BTC 现货相对该 5min 合约目标价的方向和幅度，用买入方向统一成 signed 特征。,signed_btc_move_entry,1,,按 buy_up/buy_down 方向统一后的入场时 BTC 价格偏移。
+interactions,把 BTC/盘口方向和不确定性、深度相乘，测试“信号在什么状态下更有用”。,btc_move_2m_x_uncertainty,1,,2 分钟 BTC 方向信号乘以价格不确定性。
+interactions,把 BTC/盘口方向和不确定性、深度相乘，测试“信号在什么状态下更有用”。,btc_move_entry_x_depth,1,,BTC 方向信号乘以可买深度，测试信号和成交深度是否同向。
+interactions,把 BTC/盘口方向和不确定性、深度相乘，测试“信号在什么状态下更有用”。,btc_move_entry_x_uncertainty,1,,入场 BTC 方向信号乘以价格不确定性，测试 50/50 附近信号是否更强。
+interactions,把 BTC/盘口方向和不确定性、深度相乘，测试“信号在什么状态下更有用”。,market_momentum_x_uncertainty,1,,Polymarket 动量乘以不确定性。
+liquidity_micro,价差、overround、深度、买卖盘不平衡，用来描述可成交性和盘口质量。,book_pressure_side_2m,1,,当前方向近端 bid/ask 深度压力。
+liquidity_micro,价差、overround、深度、买卖盘不平衡，用来描述可成交性和盘口质量。,log_depth_side,1,,当前方向可买深度的 log1p。
+liquidity_micro,价差、overround、深度、买卖盘不平衡，用来描述可成交性和盘口质量。,overround_median_first2m,1,,up/down mid 之和超过 1 的程度，过高说明盘口成本重。
+liquidity_micro,价差、overround、深度、买卖盘不平衡，用来描述可成交性和盘口质量。,realized_vol_first2m,1,,前 2 分钟报价波动。
+liquidity_micro,价差、overround、深度、买卖盘不平衡，用来描述可成交性和盘口质量。,signed_size_imbalance_2m,1,,买 up/down 可买量不平衡，按方向统一符号。
+liquidity_micro,价差、overround、深度、买卖盘不平衡，用来描述可成交性和盘口质量。,spread_side,1,,当前方向的买卖价差。
+market_prior,盘口 mid/可买价给出的市场隐含胜率，是模型的先验基线。,logit_market_p,1,,把 market mid 概率转成 logit，代表市场当前共识。
+market_path,Polymarket 自身价格在前 2 分钟的漂移和路径效率。,path_efficiency_first2m,0,,前 2 分钟路径是否顺滑，避免只看头尾。
+market_path,Polymarket 自身价格在前 2 分钟的漂移和路径效率。,signed_market_momentum_2m,0,,Polymarket mid 概率的方向性漂移。
+timing,入场时间、距离收盘、交易时段，捕捉 5 分钟内和日内时段差异。,entry_minute_1,0,,入场落在第一段时间桶。
+timing,入场时间、距离收盘、交易时段，捕捉 5 分钟内和日内时段差异。,entry_minute_2,0,,入场落在第二段时间桶。
+timing,入场时间、距离收盘、交易时段，捕捉 5 分钟内和日内时段差异。,entry_minute_4,0,,入场落在后段时间桶。
+timing,入场时间、距离收盘、交易时段，捕捉 5 分钟内和日内时段差异。,entry_progress,0,,入场时间占 5 分钟窗口的比例。
+timing,入场时间、距离收盘、交易时段，捕捉 5 分钟内和日内时段差异。,seconds_to_close_norm,0,,距离收盘秒数归一化。
+timing,入场时间、距离收盘、交易时段，捕捉 5 分钟内和日内时段差异。,session_asia,0,,美东夜盘/亚洲时段。
+timing,入场时间、距离收盘、交易时段，捕捉 5 分钟内和日内时段差异。,session_london,0,,伦敦时段。
+timing,入场时间、距离收盘、交易时段，捕捉 5 分钟内和日内时段差异。,session_us_afternoon,0,,美股下午时段。
+timing,入场时间、距离收盘、交易时段，捕捉 5 分钟内和日内时段差异。,session_us_open,0,,美股开盘附近时段。

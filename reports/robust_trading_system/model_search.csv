@@ -1,0 +1,91 @@
+feature_set,model_kind,feature_count,member_count,l2,validation_logloss,complexity_penalty,selection_loss,members
+mixed_top2_logit_blend,mixed_blend,15,2,0.01,0.5044236859655171,0.0008,0.5052236859655171,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01
+mixed_top2_logit_blend,mixed_blend,15,2,0.05,0.5044236910046642,0.0008,0.5052236910046642,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01
+mixed_top2_logit_blend,mixed_blend,15,2,0.1,0.5044236973076787,0.0008,0.5052236973076787,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01
+mixed_top2_logit_blend,mixed_blend,15,2,0.5,0.5044237478949947,0.0008,0.5052237478949947,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01
+mixed_top2_logit_blend,mixed_blend,15,2,1.0,0.5044238115370475,0.0008,0.5052238115370475,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01
+mixed_top2_logit_blend,mixed_blend,15,2,2.0,0.50442394018022,0.0008,0.50522394018022,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01
+prior_plus_btc,single,4,1,0.01,0.5062792175109058,0.0,0.5062792175109058,prior_plus_btc
+prior_plus_btc,single,4,1,0.05,0.5062792584269717,0.0,0.5062792584269717,prior_plus_btc
+prior_plus_btc,single,4,1,0.1,0.506279309572541,0.0,0.506279309572541,prior_plus_btc
+prior_plus_btc,single,4,1,0.5,0.5062797187565634,0.0,0.5062797187565634,prior_plus_btc
+prior_plus_btc,single,4,1,1.0,0.5062802302852601,0.0,0.5062802302852601,prior_plus_btc
+prior_plus_btc,single,4,1,2.0,0.506281253504858,0.0,0.506281253504858,prior_plus_btc
+mixed_top3_logit_blend,mixed_blend,17,3,0.01,0.5050612082056195,0.0016,0.5066612082056196,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01
+mixed_top3_logit_blend,mixed_blend,17,3,0.05,0.5050612091734499,0.0016,0.5066612091734499,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01
+mixed_top3_logit_blend,mixed_blend,17,3,0.1,0.505061210385099,0.0016,0.506661210385099,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01
+mixed_top3_logit_blend,mixed_blend,17,3,0.5,0.505061220152728,0.0016,0.5066612201527281,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01
+mixed_top3_logit_blend,mixed_blend,17,3,1.0,0.5050612325483227,0.0016,0.5066612325483227,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01
+mixed_top3_logit_blend,mixed_blend,17,3,2.0,0.505061257959491,0.0016,0.506661257959491,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01
+prior_btc_liquidity,single,15,1,0.01,0.5069955294769909,0.0,0.5069955294769909,prior_btc_liquidity
+prior_btc_liquidity,single,15,1,0.05,0.5069955625098566,0.0,0.5069955625098566,prior_btc_liquidity
+prior_btc_liquidity,single,15,1,0.1,0.5069956038011348,0.0,0.5069956038011348,prior_btc_liquidity
+prior_btc_liquidity,single,15,1,0.5,0.5069959341392076,0.0,0.5069959341392076,prior_btc_liquidity
+prior_btc_liquidity,single,15,1,1.0,0.5069963470814128,0.0,0.5069963470814128,prior_btc_liquidity
+prior_btc_liquidity,single,15,1,2.0,0.5069971730311945,0.0,0.5069971730311945,prior_btc_liquidity
+no_timing_boundary,single,16,1,0.01,0.5072916336230082,0.0,0.5072916336230082,no_timing_boundary
+no_timing_boundary,single,16,1,0.05,0.5072916558639476,0.0,0.5072916558639476,no_timing_boundary
+no_timing_boundary,single,16,1,0.1,0.5072916836652895,0.0,0.5072916836652895,no_timing_boundary
+no_timing_boundary,single,16,1,0.5,0.5072919060827358,0.0,0.5072919060827358,no_timing_boundary
+no_timing_boundary,single,16,1,1.0,0.5072921841213192,0.0,0.5072921841213192,no_timing_boundary
+no_timing_boundary,single,16,1,2.0,0.5072927402543965,0.0,0.5072927402543965,no_timing_boundary
+core_no_timing,single,17,1,0.01,0.5072958903150656,0.0,0.5072958903150656,core_no_timing
+core_no_timing,single,17,1,0.05,0.5072959125468515,0.0,0.5072959125468515,core_no_timing
+core_no_timing,single,17,1,0.1,0.5072959403367512,0.0,0.5072959403367512,core_no_timing
+core_no_timing,single,17,1,0.5,0.5072961626626465,0.0,0.5072961626626465,core_no_timing
+core_no_timing,single,17,1,1.0,0.5072964405867587,0.0,0.5072964405867587,core_no_timing
+core_no_timing,single,17,1,2.0,0.5072969964907852,0.0,0.5072969964907852,core_no_timing
+full,single,26,1,0.01,0.5073060603703433,0.0,0.5073060603703433,full
+full,single,26,1,0.05,0.5073060825835229,0.0,0.5073060825835229,full
+full,single,26,1,0.1,0.5073061103501647,0.0,0.5073061103501647,full
+full,single,26,1,0.5,0.5073063324899885,0.0,0.5073063324899885,full
+full,single,26,1,1.0,0.5073066101814909,0.0,0.5073066101814909,full
+full,single,26,1,2.0,0.5073071656202307,0.0,0.5073071656202307,full
+prior_btc_interactions,single,9,1,0.01,0.5086010729277171,0.0,0.5086010729277171,prior_btc_interactions
+prior_btc_interactions,single,9,1,0.05,0.5086011079164835,0.0,0.5086011079164835,prior_btc_interactions
+prior_btc_interactions,single,9,1,0.1,0.5086011516526431,0.0,0.5086011516526431,prior_btc_interactions
+prior_btc_interactions,single,9,1,0.5,0.50860150154998,0.0,0.50860150154998,prior_btc_interactions
+prior_btc_interactions,single,9,1,1.0,0.5086019389418007,0.0,0.5086019389418007,prior_btc_interactions
+prior_btc_interactions,single,9,1,2.0,0.5086028137925974,0.0,0.5086028137925974,prior_btc_interactions
+prior_btc_market,single,11,1,0.01,0.5087858199657664,0.0,0.5087858199657664,prior_btc_market
+prior_btc_market,single,11,1,0.05,0.5087858433632088,0.0,0.5087858433632088,prior_btc_market
+prior_btc_market,single,11,1,0.1,0.5087858726101843,0.0,0.5087858726101843,prior_btc_market
+prior_btc_market,single,11,1,0.5,0.5087861065928933,0.0,0.5087861065928933,prior_btc_market
+prior_btc_market,single,11,1,1.0,0.5087863990885406,0.0,0.5087863990885406,prior_btc_market
+prior_btc_market,single,11,1,2.0,0.5087869841373649,0.0,0.5087869841373649,prior_btc_market
+no_liquidity_micro,single,20,1,0.01,0.5088038027040135,0.0,0.5088038027040135,no_liquidity_micro
+no_liquidity_micro,single,20,1,0.05,0.5088038260974371,0.0,0.5088038260974371,no_liquidity_micro
+no_liquidity_micro,single,20,1,0.1,0.5088038553393888,0.0,0.5088038553393888,no_liquidity_micro
+no_liquidity_micro,single,20,1,0.5,0.5088040892818786,0.0,0.5088040892818786,no_liquidity_micro
+no_liquidity_micro,single,20,1,1.0,0.5088043817271829,0.0,0.5088043817271829,no_liquidity_micro
+no_liquidity_micro,single,20,1,2.0,0.5088049666750899,0.0,0.5088049666750899,no_liquidity_micro
+mixed_top5_logit_blend,mixed_blend,26,5,0.01,0.505666869506864,0.0032,0.508866869506864,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01 + core_no_timing@l2=0.01 + full@l2=0.01
+mixed_top5_logit_blend,mixed_blend,26,5,0.05,0.5056668708832325,0.0032,0.5088668708832325,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01 + core_no_timing@l2=0.01 + full@l2=0.01
+mixed_top5_logit_blend,mixed_blend,26,5,0.1,0.505666872604302,0.0032,0.508866872604302,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01 + core_no_timing@l2=0.01 + full@l2=0.01
+mixed_top5_logit_blend,mixed_blend,26,5,0.5,0.5056668863972178,0.0032,0.5088668863972178,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01 + core_no_timing@l2=0.01 + full@l2=0.01
+mixed_top5_logit_blend,mixed_blend,26,5,1.0,0.505666903699255,0.0032,0.508866903699255,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01 + core_no_timing@l2=0.01 + full@l2=0.01
+mixed_top5_logit_blend,mixed_blend,26,5,2.0,0.5056669385062627,0.0032,0.5088669385062626,prior_plus_btc@l2=0.01 + prior_btc_liquidity@l2=0.01 + no_timing_boundary@l2=0.01 + core_no_timing@l2=0.01 + full@l2=0.01
+prior_market_liquidity,single,14,1,0.01,0.5091124992196268,0.0,0.5091124992196268,prior_market_liquidity
+prior_market_liquidity,single,14,1,0.05,0.5091125291386842,0.0,0.5091125291386842,prior_market_liquidity
+prior_market_liquidity,single,14,1,0.1,0.5091125665376856,0.0,0.5091125665376856,prior_market_liquidity
+prior_market_liquidity,single,14,1,0.5,0.5091128657368773,0.0,0.5091128657368773,prior_market_liquidity
+prior_market_liquidity,single,14,1,1.0,0.5091132397538173,0.0,0.5091132397538173,prior_market_liquidity
+prior_market_liquidity,single,14,1,2.0,0.509113987847522,0.0,0.509113987847522,prior_market_liquidity
+no_btc,single,23,1,0.01,0.5091250469953411,0.0,0.5091250469953411,no_btc
+no_btc,single,23,1,0.05,0.5091250769008623,0.0,0.5091250769008623,no_btc
+no_btc,single,23,1,0.1,0.5091251142829428,0.0,0.5091251142829428,no_btc
+no_btc,single,23,1,0.5,0.5091254133467535,0.0,0.5091254133467535,no_btc
+no_btc,single,23,1,1.0,0.5091257871944304,0.0,0.5091257871944304,no_btc
+no_btc,single,23,1,2.0,0.5091265349494871,0.0,0.5091265349494871,no_btc
+market_prior_only,single,1,1,0.01,0.5216632726960826,0.0,0.5216632726960826,market_prior_only
+market_prior_only,single,1,1,0.05,0.5216633450163334,0.0,0.5216633450163334,market_prior_only
+market_prior_only,single,1,1,0.1,0.5216634354170573,0.0,0.5216634354170573,market_prior_only
+market_prior_only,single,1,1,0.5,0.521664158639265,0.0,0.521664158639265,market_prior_only
+market_prior_only,single,1,1,1.0,0.5216650627080636,0.0,0.5216650627080636,market_prior_only
+market_prior_only,single,1,1,2.0,0.521666870982435,0.0,0.521666870982435,market_prior_only
+prior_plus_momentum,single,3,1,0.01,0.5231076013441733,0.0,0.5231076013441733,prior_plus_momentum
+prior_plus_momentum,single,3,1,0.05,0.5231076076897961,0.0,0.5231076076897961,prior_plus_momentum
+prior_plus_momentum,single,3,1,0.1,0.5231076156223813,0.0,0.5231076156223813,prior_plus_momentum
+prior_plus_momentum,single,3,1,0.5,0.5231076791053284,0.0,0.5231076791053284,prior_plus_momentum
+prior_plus_momentum,single,3,1,1.0,0.5231077585146734,0.0,0.5231077585146734,prior_plus_momentum
+prior_plus_momentum,single,3,1,2.0,0.5231079175188762,0.0,0.5231079175188762,prior_plus_momentum

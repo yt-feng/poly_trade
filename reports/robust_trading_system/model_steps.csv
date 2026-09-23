@@ -1,0 +1,9 @@
+step,input,operation,output,learned_on,why
+1 数据切分,本地 quote path + market 结算结果,按时间切成 train/validation/test，中间留 300 秒 embargo,互不重叠的候选集合,固定规则,避免相邻 5min market 的信息泄漏到测试段。
+2 候选生成,每个 5min market 的逐秒报价,从第 4 秒开始，每 4 秒取一次 buy_up/buy_down 快照，最后 10 秒不新开仓,候选交易点,固定规则,允许 5 分钟内多次观察，但保留 4 秒 buffer，不按超高频假设。
+3 特征工程,候选点的价格、深度、BTC 偏移、时段,按交易方向把 up/down 统一成 signed 特征，并按 train 均值/标准差标准化,15 个候选特征进入选中模型,train scaler,让权重可比较，避免 up/down 两套规则互相割裂。
+4 概率模型,标准化特征或基础模型 logit,single logistic 或 mixed logit blend 计算 raw logit,raw z,train 或 validation blend,先估计真实胜率 q，而不是直接写死策略规则。
+5 概率校准,raw z,q = sigmoid(0.0040 + 1.0061 * z),校准后胜率 q,validation,logistic 分数排序好不等于概率刻度准，交易 edge 需要概率刻度。
+6 交易边际,q、可买价、fee,edge = q - entry_price - fee,扣掉价格和费用后的可交易优势,固定公式,Polymarket 不是预测比赛，q 高但价格更高仍然不能买。
+7 Gate 和仓位,edge、depth、spread、overround、boundary flag,edge 阈值 0.020/0.060，深度>=50，fractional Kelly=0.25,是否下单 + stake fraction,validation 搜索,把预测优势变成受限风险，而不是无限加仓。
+8 执行/退出,通过 gate 的候选,每 market 最多 1 笔，最小间隔 4s，exit=settle,交易日志和权益曲线,validation 搜索,把 5min 内可多次交易作为执行层参数，而不是模型层偷看未来。
