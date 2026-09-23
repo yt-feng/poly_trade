@@ -1,0 +1,42 @@
+name: canary-forward-audit
+on:
+  pull_request:
+    paths: ['analysis/forward_*.py', 'tests/test_forward*.py', 'config/canary_forward*.json', '.github/workflows/canary-forward*.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Regression tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Acquire recent production snapshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -u analysis/forward_acquire.py --output forward_inputs
+      - name: Evaluate when available
+        run: |
+          if [ -f analysis/forward_evaluate.py ]; then
+            python -u analysis/forward_evaluate.py --input forward_inputs --output forward_results
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canary-forward-${{ github.run_id }}
+          path: |
+            forward_inputs/
+            forward_results/
+            analysis/canary*.py
+            analysis/forward*.py
+            tests/test_forward*.py
+            config/canary*.json
+          retention-days: 14
+          compression-level: 1
