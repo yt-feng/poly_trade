@@ -1,0 +1,37 @@
+name: canary-readiness-research
+on:
+  pull_request:
+    paths: ['analysis/canary*.py', 'tests/test_canary*.py', '.github/workflows/canary-research.yml', 'config/canary*.json']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Regression tests when research module exists
+        run: |
+          if test -f tests/test_canary.py; then python -m unittest discover -s tests -p 'test_canary*.py' -v; fi
+      - name: Acquire public research captures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -u analysis/canary_acquire.py
+      - name: Offline evaluation when research module exists
+        run: |
+          if test -f analysis/canary_readiness.py; then python analysis/canary_readiness.py --input canary_inputs/captured --output canary_results; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canary-research-${{ github.run_id }}
+          path: |
+            canary_inputs/
+            canary_results/
+          retention-days: 7
+          compression-level: 1
