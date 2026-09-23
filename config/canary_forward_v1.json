@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "registry_name": "canary_forward_v1",
+  "mode": "research_shadow_only",
+  "candidate": {
+    "hypothesis": "roll_conflict",
+    "execution_model": "taker",
+    "hold_seconds": 30,
+    "primary_latency_seconds": 1,
+    "stress_latency_seconds": 3,
+    "shares": 5,
+    "roll_threshold_usd_per_second": 0.10,
+    "adverse_return_bps": 1.0
+  },
+  "registration": {
+    "forward_min_window_start_utc": "2026-09-23T08:30:00Z",
+    "forward_min_window_start_ms": 1790152200000,
+    "exclude_window_starts_before_ms": 1790152200000,
+    "exclude_all_previously_observed_returns": true,
+    "selection_basis": "Exploratory roll_conflict signal identified before this registry. No post-registration threshold, holding-period, direction, or execution-model refit is permitted in v1.",
+    "candidate_substitution_allowed": false,
+    "new_mechanism_requires_new_registry_version": true
+  },
+  "execution": {
+    "quote_lifetime_seconds": 5,
+    "max_quote_age_ms": 1500,
+    "max_quote_skew_ms": 250,
+    "max_new_quote_wait_ms": 2500,
+    "max_entry_slippage_ticks": 1,
+    "adverse_slippage_stress_ticks": 1,
+    "minimum_seconds_to_market_end_at_signal": 50,
+    "fee_source": "market-observed fee rate/exponent from a fresh production rule payload; unknown or stale fee metadata rejects the attempt",
+    "fee_formula": "fee_usdc = shares * fee_rate * p * (1-p), each taker match; also report a 5-decimal protocol fee-precision view",
+    "rebates_assumed_usdc": 0,
+    "partial_fill_assumption": "no synthetic partial fills; insufficient displayed capacity is a rejected attempt",
+    "missing_exit_policy": "retain attempt as unvalued and charge worst-case capital loss in lower-bound ledger",
+    "private_fill_fee_net_share_reconciliation_required_before_live": true
+  },
+  "fixed_checkpoints": {
+    "valued_attempts": [25, 50, 100],
+    "distinct_windows": [50, 100, 300],
+    "checkpoint_results_are_monitoring_only": true,
+    "minimum_final_valued_attempts": 100,
+    "minimum_final_distinct_windows": 300,
+    "minimum_final_utc_days": 7,
+    "minimum_valued_exit_fraction": 0.99
+  },
+  "confidence": {
+    "one_sided_alpha": 0.05,
+    "family_candidate_count": 1,
+    "multiple_testing_method": "single pre-registered primary; no within-v1 winner reselection",
+    "utc_day_block_lower_bound_required": true,
+    "minimum_utc_day_blocks": 7,
+    "time_block_hours": 2,
+    "time_block_lower_bound_required": true,
+    "minimum_time_blocks": 12,
+    "bootstrap_resamples": 10000,
+    "bootstrap_seed": 20260923
+  },
+  "approval_gate": {
+    "primary_mean_net_cents_per_share_gt": 0,
+    "primary_day_block_lower95_gt": 0,
+    "primary_time_block_lower95_gt": 0,
+    "stress_3s_mean_net_cents_per_share_gt": 0,
+    "stress_3s_day_block_lower95_gt": 0,
+    "extra_exit_tick_mean_net_cents_per_share_gt": 0,
+    "unknown_exit_worst_case_total_usd_gt": 0,
+    "live_activation": false,
+    "human_approval_required": true,
+    "private_execution_reconciliation_required": true
+  },
+  "notes": [
+    "The forward boundary is a window-start boundary, not a row receive-time filter. Entire windows starting before it are excluded from forward returns.",
+    "All causal warm-up observations may be read, but no pre-boundary outcome contributes to v1 performance statistics.",
+    "Current public Polymarket documentation states taker fees are denominated in USDC; the replay therefore keeps purchased share count unchanged while retaining private matched-position reconciliation as a live gate.",
+    "Real trading remains disabled. This registry can only support a later recommendation for manual review."
+  ]
+}
