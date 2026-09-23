@@ -29,38 +29,38 @@ jobs:
       - name: Acquire bounded recent public snapshots and labels
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          SINCE="$(date -u -d '2 days ago' +%F)"
-          echo "Acquisition release-date lower bound (UTC): ${SINCE}"
-          python -u analysis/forward_acquire.py --output forward_inputs --since "$SINCE"
-      - name: Verify acquisition completeness and record deployment scope
+        run: python -u analysis/forward_acquire.py --output forward_inputs --max-releases 16 --max-bytes 268435456
+      - name: Verify listed archive coverage and record deployment scope
         run: |
           python - <<'PY'
           import json
           import os
           from pathlib import Path
-          p = Path('forward_inputs/acquisition.json')
-          m = json.loads(p.read_text(encoding='utf-8'))
+          m = json.loads(Path('forward_inputs/acquisition_manifest.json').read_text(encoding='utf-8'))
+          expected = sum(r['eligible_snapshot_label_archives'] for r in m.get('releases', []))
           status = {
               'scope': 'public archive acquisition and checksum validation only',
               'source_repository': m.get('source_repository'),
-              'inventory_complete': bool(m.get('complete_this_inventory')),
+              'selected_release_count': len(m.get('releases', [])),
+              'listed_archive_count': expected,
               'downloaded_files': len(m.get('files', [])),
               'downloaded_bytes': m.get('downloaded_bytes'),
               'errors': m.get('errors', []),
-              'new_forward_strategy_modules_deployed': False,
+              'listed_files_complete': expected > 0 and expected == len(m.get('files', [])) and not m.get('errors'),
+              'full_history_complete': False,
+              'new_blocked_strategy_modules_deployed': False,
               'live_trading_enabled': False,
               'note': 'No strategy evaluation or order submission in this workflow. '
-                      'This is a bounded recent-release download, not lifetime data completeness.'
+                      'The download is limited to listed assets of up to 16 recent releases and 256 MiB; '
+                      'it does not certify all historical releases or pagination beyond the acquisition limits.'
           }
           Path('forward_inputs/deployment_status.json').write_text(
               json.dumps(status, ensure_ascii=False, indent=2), encoding='utf-8')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as f:
               f.write('# Read-only acquisition deployment\n\n```json\n'
                       + json.dumps(status, ensure_ascii=False, indent=2) + '\n```\n')
-          if not status['inventory_complete'] or not status['downloaded_files']:
-              raise SystemExit('Incomplete acquisition: inspect acquisition.json; not a green data run.')
+          if not status['listed_files_complete']:
+              raise SystemExit('Incomplete acquisition: inspect acquisition_manifest.json; not a green data run.')
           PY
       - uses: actions/upload-artifact@v4
         if: always()
