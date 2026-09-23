@@ -1,0 +1,13 @@
+{
+  "locked_after_exploratory_cohort_end_ms": 1790141784669,
+  "exclude_all_previously_seen_slugs_through": "btc-updown-5m-1790141700",
+  "forward_min_window_start_ms": 1790142000000,
+  "candidate": "roll_veto",
+  "mode": "taker",
+  "hold_seconds": 30,
+  "latency_seconds": 1,
+  "stress_latency_seconds": 3,
+  "selection": "post-hoc shortlist from first four production windows; only later entirely unseen windows are forward observations",
+  "live_activation": false,
+  "source_acquisition_run": 35823585851
+}
