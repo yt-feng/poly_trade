@@ -1,10 +1,10 @@
 name: canary-forward-audit
 on:
   pull_request:
-    paths: ['analysis/forward_acquire.py', 'tests/test_canary*.py', '.github/workflows/canary-forward-audit.yml']
+    paths: ['analysis/forward_acquire.py', 'analysis/acquire_event_evidence.py', 'tests/test_event_evidence.py', 'tests/test_canary*.py', '.github/workflows/canary-forward-audit.yml']
   push:
     branches: [main]
-    paths: ['analysis/forward_acquire.py', '.github/workflows/canary-forward-audit.yml']
+    paths: ['analysis/forward_acquire.py', 'analysis/acquire_event_evidence.py', '.github/workflows/canary-forward-audit.yml']
   workflow_dispatch:
   schedule:
     - cron: '43 */6 * * *'
@@ -26,6 +26,8 @@ jobs:
           python-version: '3.11'
       - name: Existing read-only regression tests
         run: python -m unittest discover -s tests -p 'test_canary*.py' -v
+      - name: Event evidence safety and integrity tests
+        run: python -m unittest discover -s tests -p 'test_event_evidence.py' -v
       - name: Acquire bounded recent public snapshots and labels
         env:
           GH_TOKEN: ${{ github.token }}
@@ -51,8 +53,8 @@ jobs:
               'new_blocked_strategy_modules_deployed': False,
               'live_trading_enabled': False,
               'note': 'No strategy evaluation or order submission in this workflow. '
-                      'The download is limited to listed assets of up to 16 recent releases and 256 MiB; '
-                      'it does not certify all historical releases or pagination beyond the acquisition limits.'
+                      'Snapshots and labels are limited to listed assets of up to 16 recent releases and 256 MiB. '
+                      'A separate raw-message sample has a two-file/32 MiB limit and its own manifest; neither certifies a complete tape.'
           }
           Path('forward_inputs/deployment_status.json').write_text(
               json.dumps(status, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -62,6 +64,10 @@ jobs:
           if not status['listed_files_complete']:
               raise SystemExit('Incomplete acquisition: inspect acquisition_manifest.json; not a green data run.')
           PY
+      - name: Acquire two checksum-verified public raw segments, at most 32 MiB
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -u analysis/acquire_event_evidence.py --manifest forward_inputs/acquisition_manifest.json --output forward_inputs/event_evidence
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -69,8 +75,10 @@ jobs:
           path: |
             forward_inputs/
             analysis/forward_acquire.py
+            analysis/acquire_event_evidence.py
             analysis/canary*.py
             tests/test_canary*.py
+            tests/test_event_evidence.py
             config/canary*.json
           retention-days: 14
           compression-level: 1
