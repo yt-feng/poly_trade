@@ -3,6 +3,12 @@
 Read-only. This module never imports trading code, reads wallet credentials, or
 places orders. It explicitly paginates release assets because long-running
 capture releases can exceed GitHub's embedded asset list.
+
+The acquisition is intentionally bounded by both release count and bytes. Files
+that are otherwise eligible but do not fit the byte budget are recorded as
+explicitly skipped, not as transport/integrity errors. This keeps a bounded
+research sample auditable without pretending the selected releases are fully
+downloaded or that the sample is complete history.
 """
 from __future__ import annotations
 import argparse
@@ -78,6 +84,10 @@ def save_json(path: Path, value) -> None:
 
 
 def acquire(out: Path, max_releases: int = 16, max_bytes: int = DEFAULT_MAX_BYTES) -> dict:
+    if max_releases <= 0:
+        raise ValueError("max_releases must be positive")
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
     out.mkdir(parents=True, exist_ok=True)
     manifest = {
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -87,8 +97,11 @@ def acquire(out: Path, max_releases: int = 16, max_bytes: int = DEFAULT_MAX_BYTE
         "max_releases": max_releases,
         "max_bytes": max_bytes,
         "downloaded_bytes": 0,
+        "eligible_archives_total": 0,
+        "budget_exhausted": False,
         "releases": [],
         "files": [],
+        "skipped": [],
         "errors": [],
     }
     releases = list_capture_releases(max_releases)
@@ -105,13 +118,17 @@ def acquire(out: Path, max_releases: int = 16, max_bytes: int = DEFAULT_MAX_BYTE
             if str(a.get("name", "")).startswith(("snapshots-", "labels-"))
             and str(a.get("name", "")).endswith(".jsonl.gz")
         ]
-        manifest["releases"].append({
+        manifest["eligible_archives_total"] += len(eligible)
+        release_record = {
             "id": rid,
             "tag": tag,
             "published_at": release.get("published_at"),
             "asset_count": len(assets),
             "eligible_snapshot_label_archives": len(eligible),
-        })
+            "downloaded_snapshot_label_archives": 0,
+            "budget_skipped_snapshot_label_archives": 0,
+        }
+        manifest["releases"].append(release_record)
         for asset in sorted(eligible, key=lambda a: str(a.get("name", ""))):
             name = str(asset["name"])
             if Path(name).name != name:
@@ -121,8 +138,18 @@ def acquire(out: Path, max_releases: int = 16, max_bytes: int = DEFAULT_MAX_BYTE
                 manifest["errors"].append({"tag": tag, "name": name, "error": "missing checksum sidecar"})
                 continue
             size = int(asset.get("size") or 0)
+            if size < 0:
+                manifest["errors"].append({"tag": tag, "name": name, "error": "invalid asset size"})
+                continue
             if used + size > max_bytes:
-                manifest["errors"].append({"tag": tag, "name": name, "error": "download byte budget"})
+                manifest["budget_exhausted"] = True
+                release_record["budget_skipped_snapshot_label_archives"] += 1
+                manifest["skipped"].append({
+                    "tag": tag,
+                    "name": name,
+                    "bytes": size,
+                    "reason": "download byte budget",
+                })
                 continue
             try:
                 body = request(str(asset["browser_download_url"]))
@@ -136,6 +163,7 @@ def acquire(out: Path, max_releases: int = 16, max_bytes: int = DEFAULT_MAX_BYTE
                 dest.write_bytes(body)
                 dest.with_name(name + ".sha256").write_bytes(checksum_body)
                 used += len(body)
+                release_record["downloaded_snapshot_label_archives"] += 1
                 manifest["files"].append({
                     "release": tag,
                     "name": name,
@@ -166,6 +194,8 @@ def main() -> None:
         "files": len(result["files"]),
         "releases": len(result["releases"]),
         "bytes": result["downloaded_bytes"],
+        "budget_exhausted": result["budget_exhausted"],
+        "skipped": len(result["skipped"]),
         "errors": result["errors"][:20],
     }, indent=2))
 
