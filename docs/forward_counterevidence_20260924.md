@@ -111,3 +111,36 @@ The current evidence says:
 - `https://arxiv.org/abs/2609.13597`
 - `https://arxiv.org/abs/2504.00846`
 - `https://arxiv.org/abs/1603.06183`
+
+## Later same-day continuation: 192-window checkpoint
+
+A later unchanged shadow refresh, GitHub Actions run `36025038821`, incorporated the completed four-hour production capture `35996038217`. This is a continuation of the **same legacy registered family**, not a new alpha registration and not evidence for the separate 2026-09-24 multi-mechanism protocol.
+
+Coverage at this checkpoint:
+
+- 56,706 production-v3 rows.
+- 192 distinct five-minute windows across 2 UTC dates.
+- 51 matched official resolved labels, no label conflicts.
+- 39,504 decision-ready rows.
+- 0 duplicate or conflicting snapshot timestamps.
+- `LIVE_CANARY_ELIGIBLE=false`.
+
+The frozen `roll_veto / taker / 30s` results continued to deteriorate rather than recover:
+
+| Metric | 1s | 3s |
+|---|---:|---:|
+| Attempts | 192 | 192 |
+| Entry proxy fills | 148 | 130 |
+| Valued exits | 147 | 128 |
+| Unknown exits | 1 | 2 |
+| Entry limit rejects | 44 | 58 |
+| Entry capacity rejects | 0 | 4 |
+| Mean net, cents/share | **-3.8394** | **-4.0064** |
+| One-tick stress, cents/share | **-4.8534** | **-5.0181** |
+| Bootstrap lower percentile, cents/share | **-6.1019** | **-6.5938** |
+| Mean after removing best observation, cents/share | **-4.0661** | **-4.2440** |
+| Valued replay PnL | -$28.21957 | -$25.64072 |
+| Conservative lower-bound ledger | **-$32.03520** | **-$31.66050** |
+
+This checkpoint is retained as additional counterevidence. It is not a reason to refit the threshold, swap in a different cell from the same 40-configuration family, or reinterpret public quote proxies as private fills. New alpha work still requires a new pre-registration and future windows.
+
