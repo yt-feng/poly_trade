@@ -98,6 +98,45 @@ class CanaryAcquireTests(unittest.TestCase):
         self.assertEqual(len(assets), 101)
         self.assertEqual(assets[-1]["name"], "tail")
 
+    def test_mutable_metadata_can_grow_after_asset_listing(self):
+        release = {
+            "id": 1,
+            "tag_name": "capture-v2-1-1",
+            "published_at": "2026-09-24T00:00:00Z",
+        }
+        snap, snap_sha, sm = asset("snapshots-000001.jsonl.gz", b"ssss")
+        manifest_body = b"x" * 100
+        manifest = {
+            "name": "manifest.json",
+            "size": 2,
+            "browser_download_url": "https://example.test/manifest.json",
+        }
+        payloads = {**sm, manifest["browser_download_url"]: manifest_body}
+        ca.list_capture_releases = lambda n=4: [release]
+        ca.list_release_assets = lambda rid: [snap, snap_sha, manifest]
+
+        def fake_request(url, limit=100 * 1024 * 1024):
+            if url.startswith("https://raw.githubusercontent.com/"):
+                return b"# collector source\n"
+            body = payloads[url]
+            if len(body) > limit:
+                raise ValueError("Response exceeds download budget")
+            return body
+
+        ca.request = fake_request
+        with tempfile.TemporaryDirectory() as td:
+            result = ca.acquire(
+                Path(td),
+                max_bytes=ca.MUTABLE_METADATA_LIMIT + 1024,
+                max_raw_bytes=0,
+                max_releases=1,
+                raw_files=0,
+            )
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["research_downloaded_bytes"], 104)
+        meta = [x for x in result["files"] if Path(x["path"]).name == "manifest.json"]
+        self.assertEqual(meta[0]["bytes"], 100)
+
     def test_invalid_limits_fail_closed(self):
         with tempfile.TemporaryDirectory() as td:
             with self.assertRaises(ValueError):
