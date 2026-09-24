@@ -35,6 +35,15 @@ class Causality(unittest.TestCase):
     def test_prefix_replay(self):
         rows=[fixture(i)for i in range(180)];a=CausalSignals();full=[a.update(r)for r in rows]
         b=CausalSignals();prefix=[b.update(r)for r in rows[:91]];self.assertEqual(full[:91],prefix)
+    def test_final_price_never_enters_causal_signal(self):
+        clean=[fixture(i)for i in range(180)]
+        leaked=copy.deepcopy(clean)
+        for i,r in enumerate(leaked):
+            r['final_price']=10**9 if i%2 else -10**9
+            r['target_price']=-10**9 if i%3 else 10**9
+            r['outcome_up']=bool(i%2)
+        a=CausalSignals();b=CausalSignals()
+        self.assertEqual([a.update(r)for r in clean],[b.update(r)for r in leaked])
     def test_future_receipt(self):
         r=fixture(80);r['chainlink']['received_ms']=r['sample_ms']+1
         e=CausalSignals();e.update(r);self.assertIsNone(e.history[-1]['chainlink'])
