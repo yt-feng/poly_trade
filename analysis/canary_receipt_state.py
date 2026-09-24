@@ -65,6 +65,15 @@ def available_sell_shares(state: dict) -> Decimal:
     return max(Decimal("0"), dec(state.get("position_net_shares", "0")) - reserved_sell_shares(state))
 
 
+def _halt_if_stranded_position(state: dict) -> None:
+    position = dec(state["position_net_shares"])
+    if position > 0 and reserved_sell_shares(state) == 0 and position < dec(state["min_sell_size"]):
+        state["halt_new_actions"] = True
+        state["halt_reason"] = "remaining_position_below_current_sell_minimum"
+        state["exit_intent_ready"] = False
+        state["state"] = "position_below_sell_minimum"
+
+
 def _recompute_completion(state: dict) -> None:
     has_entry = bool(state["entry_trade_ids"])
     has_exit_or_settlement = bool(state["exit_trade_ids"] or state["settlement_receipt_id"] or state["redeem_receipt_id"])
@@ -179,6 +188,7 @@ def apply_event(original: dict, event: dict) -> dict:
             state["open_sell_orders"].pop(order_id, None)
         state["cash_reusable"] = False
         state["state"] = "exit_filled_cash_pending" if dec(state["position_net_shares"]) == 0 else "exit_partially_filled"
+        _halt_if_stranded_position(state)
 
     elif kind == "sell_cancel_requested":
         order_id = str(event.get("order_id") or "")
@@ -193,6 +203,7 @@ def apply_event(original: dict, event: dict) -> dict:
             raise ValueError("cancel confirmation requires known open sell order")
         state["open_sell_orders"].pop(order_id)
         state["state"] = "position_open" if dec(state["position_net_shares"]) > 0 else "exit_filled_cash_pending"
+        _halt_if_stranded_position(state)
 
     elif kind == "market_expired":
         state["exit_intent_ready"] = False
