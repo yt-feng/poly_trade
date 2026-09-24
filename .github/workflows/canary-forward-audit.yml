@@ -32,7 +32,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -u analysis/forward_acquire.py --output forward_inputs --max-releases 16 --max-bytes 268435456
-      - name: Verify listed archive coverage and record deployment scope
+      - name: Verify bounded archive coverage and record deployment scope
         run: |
           python - <<'PY'
           import json
@@ -40,29 +40,47 @@ jobs:
           from pathlib import Path
           m = json.loads(Path('forward_inputs/acquisition_manifest.json').read_text(encoding='utf-8'))
           expected = sum(r['eligible_snapshot_label_archives'] for r in m.get('releases', []))
+          downloaded = len(m.get('files', []))
+          skipped = m.get('skipped', [])
+          errors = m.get('errors', [])
+          accounted = downloaded + len(skipped) + len(errors)
+          max_bytes = int(m.get('max_bytes') or 0)
+          downloaded_bytes = int(m.get('downloaded_bytes') or 0)
           status = {
               'scope': 'public archive acquisition and checksum validation only',
               'source_repository': m.get('source_repository'),
               'selected_release_count': len(m.get('releases', [])),
               'listed_archive_count': expected,
-              'downloaded_files': len(m.get('files', [])),
-              'downloaded_bytes': m.get('downloaded_bytes'),
-              'errors': m.get('errors', []),
-              'listed_files_complete': expected > 0 and expected == len(m.get('files', [])) and not m.get('errors'),
+              'downloaded_files': downloaded,
+              'downloaded_bytes': downloaded_bytes,
+              'max_bytes': max_bytes,
+              'budget_exhausted': bool(m.get('budget_exhausted')),
+              'budget_skipped_files': len(skipped),
+              'errors': errors,
+              'listed_assets_accounted_for': expected > 0 and expected == accounted,
+              'listed_files_complete': expected > 0 and expected == downloaded and not skipped and not errors,
+              'bounded_acquisition_complete': (
+                  downloaded > 0
+                  and expected > 0
+                  and expected == accounted
+                  and downloaded_bytes <= max_bytes
+                  and not errors
+              ),
               'full_history_complete': False,
               'new_blocked_strategy_modules_deployed': False,
               'live_trading_enabled': False,
               'note': 'No strategy evaluation or order submission in this workflow. '
-                      'Snapshots and labels are limited to listed assets of up to 16 recent releases and 256 MiB. '
+                      'Snapshots and labels are intentionally bounded to up to 16 recent releases and 256 MiB. '
+                      'Eligible files that do not fit the byte cap are explicit budget skips, not integrity errors. '
                       'A separate raw-message sample has a two-file/32 MiB limit and its own manifest; neither certifies a complete tape.'
           }
           Path('forward_inputs/deployment_status.json').write_text(
               json.dumps(status, ensure_ascii=False, indent=2), encoding='utf-8')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as f:
-              f.write('# Read-only acquisition deployment\n\n```json\n'
+              f.write('# Read-only bounded acquisition deployment\n\n```json\n'
                       + json.dumps(status, ensure_ascii=False, indent=2) + '\n```\n')
-          if not status['listed_files_complete']:
-              raise SystemExit('Incomplete acquisition: inspect acquisition_manifest.json; not a green data run.')
+          if not status['bounded_acquisition_complete']:
+              raise SystemExit('Bounded acquisition integrity failure: inspect acquisition_manifest.json; not a green data run.')
           PY
       - name: Acquire two checksum-verified public raw segments, at most 32 MiB
         env:
