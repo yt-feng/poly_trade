@@ -1,10 +1,10 @@
 name: receipt-source-audit
 on:
   pull_request:
-    paths: ['analysis/receipt_source_audit.py', 'analysis/canary_receipt_state.py', 'tests/test_receipt_source_audit.py', '.github/workflows/receipt-source-audit.yml']
+    paths: ['analysis/receipt_source_audit.py', 'analysis/canary_receipt_state.py', 'analysis/execution_reason_codes.py', 'tests/test_receipt_source_audit.py', 'tests/test_execution_reason_codes.py', '.github/workflows/receipt-source-audit.yml']
   push:
     branches: [main]
-    paths: ['analysis/receipt_source_audit.py', 'analysis/canary_receipt_state.py', 'analysis/live_paper_trader.py', 'analysis/live_execution.py', 'tests/test_receipt_source_audit.py', '.github/workflows/receipt-source-audit.yml']
+    paths: ['analysis/receipt_source_audit.py', 'analysis/canary_receipt_state.py', 'analysis/execution_reason_codes.py', 'analysis/live_paper_trader.py', 'analysis/live_execution.py', 'tests/test_receipt_source_audit.py', 'tests/test_execution_reason_codes.py', '.github/workflows/receipt-source-audit.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,6 +20,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m unittest discover -s tests -p 'test_receipt_source_audit.py' -v
+      - run: python -m unittest discover -s tests -p 'test_execution_reason_codes.py' -v
       - run: python analysis/receipt_source_audit.py --output receipt_audit.json
       - uses: actions/upload-artifact@v4
         with:
