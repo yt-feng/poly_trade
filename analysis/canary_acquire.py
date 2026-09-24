@@ -21,6 +21,7 @@ API = "https://api.github.com/repos/yt-feng/poly"
 RELEASE_RE = re.compile(r"capture-v2-\d+-\d+")
 DEFAULT_RESEARCH_BYTES = 220 * 1024 * 1024
 DEFAULT_RAW_BYTES = 32 * 1024 * 1024
+MUTABLE_METADATA_LIMIT = 8 * 1024 * 1024
 
 
 def request(url: str, limit: int = 100 * 1024 * 1024) -> bytes:
@@ -99,7 +100,14 @@ def _download(
     if size < 0:
         raise ValueError("negative asset size")
     try:
-        data = request(str(item["browser_download_url"]), max(1, size))
+        # Rotated gzip archives are immutable and checksum-verified, so the
+        # asset-list size is a useful hard response bound. health.json and
+        # manifest.json are overwritten while a production release is active;
+        # their listed size may be stale by the time the download starts.
+        limit = max(1, size) if name.endswith(".gz") else MUTABLE_METADATA_LIMIT
+        if not name.endswith(".gz") and size > MUTABLE_METADATA_LIMIT:
+            raise ValueError("mutable metadata exceeds bounded download limit")
+        data = request(str(item["browser_download_url"]), limit)
         digest = hashlib.sha256(data).hexdigest()
         check = None
         if name.endswith(".gz"):
@@ -164,7 +172,10 @@ def acquire(
         for name in [*labels, *snapshots, *metadata]:
             item = assets[name]
             size = int(item.get("size") or 0)
-            if research_used + size > max_bytes:
+            # Mutable metadata can grow between asset enumeration and GET.
+            # Reserve a bounded allowance for it; archives use their listed size.
+            budget_size = size if name.endswith(".gz") else max(size, MUTABLE_METADATA_LIMIT)
+            if research_used + budget_size > max_bytes:
                 skipped.append({
                     "release": release["tag_name"],
                     "name": name,
@@ -173,10 +184,18 @@ def acquire(
                     "reason": "research byte budget",
                 })
                 continue
-            research_used += _download(
+            downloaded = _download(
                 output=output, release=release, assets=assets, name=name,
                 bucket="research", records=records, errors=errors,
             )
+            research_used += downloaded
+            if research_used > max_bytes:
+                errors.append({
+                    "release": release["tag_name"],
+                    "name": name,
+                    "kind": "research",
+                    "error": "actual downloaded bytes exceeded research budget",
+                })
 
     # Raw frames are supplementary. They cannot consume the research budget.
     if release_assets and raw_files and max_raw_bytes:
