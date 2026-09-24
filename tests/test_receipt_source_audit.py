@@ -27,4 +27,8 @@ class Audit(unittest.TestCase):
     def test_no_sell_not_certification(self):
         r=audit(self.fixture('x=0\n','def sell_placeholder(): pass\n'))
         self.assertFalse(r['live_098_implementation_verified'])
+    def test_buy_fee_net_shares_exit_minimum(self):
+        adapter='def build_buy_market_plan(min_order_size):\n estimated_shares=5\n if estimated_shares < min_order_size: return "blocked"\n return estimated_shares\n'
+        r=audit(self.fixture('x=0\n',adapter))
+        self.assertIn('BUY_FEE_NET_SHARES_EXIT_MIN_UNCHECKED',[f['code']for f in r['findings']])
 if __name__=='__main__':unittest.main()

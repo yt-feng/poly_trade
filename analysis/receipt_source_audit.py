@@ -31,6 +31,14 @@ def audit(root:Path)->dict:
     price=adapter.get('price_text')
     if price and ('0.01' in ast.unparse(price) or '.01' in ast.unparse(price)):
         add('HARDCODED_PRICE_GRID',price,'Price rounding contains a fixed cent grid rather than a current market tick argument.')
+    buy_plan=adapter.get('build_buy_market_plan')
+    if buy_plan:
+        plan_text=ast.unparse(buy_plan).lower()
+        net_share_markers=('net_shares_after_fee','net_exitable_shares','buy_fee_shares')
+        if 'min_order_size' in plan_text and 'estimated_shares' in plan_text and not any(x in plan_text for x in net_share_markers):
+            add('BUY_FEE_NET_SHARES_EXIT_MIN_UNCHECKED',buy_plan,
+                'Buy planning compares gross estimated shares with min_order_size but exposes no fee-adjusted net-share exit check. '
+                'For fee-enabled taker buys, execution readiness must verify that post-fee sellable shares still satisfy the current sell minimum.')
     if not any('sell' in name.lower() or 'redeem' in name.lower() for name in adapter):
         findings.append({'code':'NO_SELL_REDEEM_ADAPTER_FOUND','line':None,'evidence':'Inspected adapter function names contain no sell/redeem operation; local uncommitted implementations are outside scope.'})
     parser=runner.get('parse_args');defaults={}
