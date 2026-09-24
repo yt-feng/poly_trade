@@ -87,9 +87,9 @@ class CanaryAcquireTests(unittest.TestCase):
         page2 = [{"name": "tail"}]
 
         def fake_request(url, limit=100 * 1024 * 1024):
-            if "page=1" in url:
+            if url.endswith("&page=1"):
                 return json.dumps(page1).encode()
-            if "page=2" in url:
+            if url.endswith("&page=2"):
                 return json.dumps(page2).encode()
             raise AssertionError(url)
 
