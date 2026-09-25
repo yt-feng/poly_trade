@@ -1,0 +1,43 @@
+name: execution-lifecycle-audit
+on:
+  pull_request:
+    paths: ['analysis/execution_reason_codes.py', 'tests/test_execution_lifecycle_precedence.py', '.github/workflows/execution-lifecycle-audit.yml']
+  push:
+    branches: [main]
+    paths: ['analysis/execution_reason_codes.py', 'tests/test_execution_lifecycle_precedence.py', '.github/workflows/execution-lifecycle-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: lifecycle-evidence-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  readonly-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Existing and new synthetic reason-code regressions
+        run: python -m unittest discover -s tests -p 'test_execution*.py' -v
+      - name: Compile classifier without importing any execution adapter
+        run: python -m py_compile analysis/execution_reason_codes.py
+      - name: Existing bounded public snapshot downloader, no strategy evaluation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -u analysis/forward_acquire.py --output lifecycle_inputs --max-releases 4 --max-bytes 67108864
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lifecycle-public-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            lifecycle_inputs/
+            analysis/execution_reason_codes.py
+            tests/test_execution*.py
+          retention-days: 14
+          compression-level: 1
+          if-no-files-found: error
