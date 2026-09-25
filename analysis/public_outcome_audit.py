@@ -29,7 +29,7 @@ def fetch_public(url):
                     raise ValueError('Unexpected redirect')
                 body=r.read(2*1024*1024+1)
                 if len(body)>2*1024*1024: raise ValueError('Response byte cap')
-            return json.loads(body),hashlib.sha256(body).hexdigest(),int(time.time()*1000)
+            return json.loads(body),hashlib.sha256(body).hexdigest(),int(time.time()*1000),body.decode('utf-8')
         except HTTPError as e:
             if e.code in (401,403,418,451):
                 STOP.set(); raise AccessDenied(str(e))
@@ -73,7 +73,6 @@ def parse_evidence(slug,gamma,clob,received_ms):
     if winner is not None and status=='resolved' and len(prices)==2 and set(map(str,prices))=={'0','1'}:
         other=str(names[list(map(str,prices)).index('1')]).lower()
         if other!=winner: raise ValueError('FINAL_OUTCOME_SOURCE_CONFLICT')
-    # Exact 0/1 without resolved status is not a resolution label.
     if winner is None and status=='resolved' and len(prices)==2:
         ps=[str(x)for x in prices]
         if set(ps)=={'0','1'}:
@@ -87,14 +86,14 @@ def parse_evidence(slug,gamma,clob,received_ms):
 def collect_one(slug):
     row=dict(slug=slug,label=None,error=None)
     try:
-        g,gh,gt=fetch_public(GAMMA+slug)
-        row.update(gamma=g,gamma_sha256=gh,gamma_received_ms=gt,gamma_url=GAMMA+slug)
+        g,gh,gt,gb=fetch_public(GAMMA+slug)
+        row.update(gamma=g,gamma_raw_utf8=gb,gamma_sha256=gh,gamma_received_ms=gt,gamma_url=GAMMA+slug)
         cid=g.get('conditionId','')
         c={}
         if CID.fullmatch(cid):
             try:
-                c,ch,ct=fetch_public(CLOB+cid)
-                row.update(clob=c,clob_sha256=ch,clob_received_ms=ct,clob_url=CLOB+cid)
+                c,ch,ct,cb=fetch_public(CLOB+cid)
+                row.update(clob=c,clob_raw_utf8=cb,clob_sha256=ch,clob_received_ms=ct,clob_url=CLOB+cid)
             except HTTPError as e:
                 if e.code!=404: raise
                 row['clob_unavailable']='HTTP404'
