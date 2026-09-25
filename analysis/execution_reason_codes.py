@@ -102,7 +102,7 @@ def classify(record: dict) -> dict:
     lifecycle = existing_episode(record)
     if lifecycle is not None:
         return lifecycle
-    if record.get("signal_qualified") not in (True, False) or "signal_qualified" not in record:
+    if type(record.get("signal_qualified")) is not bool:
         return result("signal", "SIGNAL_QUALIFICATION_UNKNOWN", final=False)
     if record.get("signal_qualified") is False:
         return result("signal", "NO_QUALIFIED_OPPORTUNITY", final=True)
@@ -163,33 +163,6 @@ def classify(record: dict) -> dict:
             return result("fill", "ORDER_TERMINAL_UNFILLED", final=True)
         return result("fill", "FILL_STATUS_UNKNOWN", final=False)
 
-    if confirmed < requested:
-        return result("fill", "PARTIAL_CONFIRMED_FILL", final=bool(record.get("order_terminal")))
-
-    if not bool(record.get("entry_order_terminal")):
-        return result("fill", "CONFIRMED_FILL_ORDER_NOT_TERMINAL", final=False)
-
-    if bool(record.get("reconciliation_unknown")):
-        return result("reconciliation", "RECONCILIATION_UNKNOWN", final=False)
-
-    if bool(record.get("cash_reconciled")) and bool(record.get("position_flat")):
-        return result("cash", "CASH_RECONCILED_ROUNDTRIP_COMPLETE", final=True)
-
-    if bool(record.get("exit_trade_confirmed")) and not bool(record.get("cash_reconciled")):
-        return result("cash", "EXIT_CONFIRMED_CASH_CHECKPOINT_PENDING", final=False)
-
-    if bool(record.get("market_expired")):
-        if not bool(record.get("official_resolution_observed")):
-            return result("settlement", "EXPIRED_AWAITING_OFFICIAL_RESOLUTION", final=False)
-        if bool(record.get("redeem_confirmed")) and not bool(record.get("cash_reconciled")):
-            return result("cash", "REDEEM_CONFIRMED_CASH_CHECKPOINT_PENDING", final=False)
-        if bool(record.get("redeem_requested")) and not bool(record.get("redeem_confirmed")):
-            return result("settlement", "REDEEM_REQUEST_PENDING_CONFIRMATION", final=False)
-        if bool(record.get("redeemable")) and not bool(record.get("redeem_requested")):
-            return result("settlement", "REDEEMABLE_NOT_REQUESTED", final=False)
-        return result("settlement", "RESOLUTION_OBSERVED_SETTLEMENT_STATUS_UNKNOWN", final=False)
-
-    return result("position", "CONFIRMED_ENTRY_POSITION_OPEN", final=False)
 
 
 def summarize(records: list[dict]) -> dict:
