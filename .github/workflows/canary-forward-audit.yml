@@ -1,10 +1,10 @@
 name: canary-forward-audit
 on:
   pull_request:
-    paths: ['analysis/forward_acquire.py', 'analysis/acquire_event_evidence.py', 'analysis/public_outcome_audit.py', 'tests/test_public_outcome_audit.py', 'tests/test_event_evidence.py', 'tests/test_canary*.py', '.github/workflows/canary-forward-audit.yml']
+    paths: ['analysis/forward_acquire.py', 'analysis/acquire_event_evidence.py', 'analysis/public_outcome_audit.py', 'analysis/reference_availability_audit.py', 'tests/test_public_outcome_audit.py', 'tests/test_event_evidence.py', 'tests/test_canary*.py', '.github/workflows/canary-forward-audit.yml']
   push:
     branches: [main]
-    paths: ['analysis/forward_acquire.py', 'analysis/acquire_event_evidence.py', 'analysis/public_outcome_audit.py', '.github/workflows/canary-forward-audit.yml']
+    paths: ['analysis/forward_acquire.py', 'analysis/acquire_event_evidence.py', 'analysis/public_outcome_audit.py', 'analysis/reference_availability_audit.py', '.github/workflows/canary-forward-audit.yml']
   workflow_dispatch:
   schedule:
     - cron: '43 */6 * * *'
@@ -74,7 +74,7 @@ jobs:
               'note': 'No strategy evaluation or order submission in this workflow. '
                       'Snapshots and labels are intentionally bounded to up to 16 recent releases and 256 MiB. '
                       'Eligible files that do not fit the byte cap are explicit budget skips, not integrity errors. '
-                      'A separate raw-message sample has a two-file/32 MiB limit and its own manifest; neither certifies a complete tape.'
+                      'The raw-message sample and reference-availability probe have separate budgets and do not certify a complete tape.'
           }
           Path('forward_inputs/deployment_status.json').write_text(
               json.dumps(status, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -90,6 +90,10 @@ jobs:
         run: python -u analysis/acquire_event_evidence.py --manifest forward_inputs/acquisition_manifest.json --output forward_inputs/event_evidence
       - name: Backfill public final outcomes with actual retrieval timestamps
         run: python -u analysis/public_outcome_audit.py --output forward_inputs/outcome_evidence --hours 48
+      - name: Observe current-window reference and order constraints across rollover
+        run: python -u analysis/reference_availability_audit.py --output forward_inputs/reference_availability --seconds 330 --interval 10
+      - name: Independently recompute saved public response hashes
+        run: python analysis/reference_availability_audit.py --output forward_inputs/reference_availability --verify
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -99,6 +103,7 @@ jobs:
             analysis/forward_acquire.py
             analysis/acquire_event_evidence.py
             analysis/public_outcome_audit.py
+            analysis/reference_availability_audit.py
             analysis/canary*.py
             tests/test_canary*.py
             tests/test_event_evidence.py
