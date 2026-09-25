@@ -1,10 +1,10 @@
 name: canary-forward-audit
 on:
   pull_request:
-    paths: ['analysis/forward_acquire.py', 'analysis/acquire_event_evidence.py', 'tests/test_event_evidence.py', 'tests/test_canary*.py', '.github/workflows/canary-forward-audit.yml']
+    paths: ['analysis/forward_acquire.py', 'analysis/acquire_event_evidence.py', 'analysis/public_outcome_audit.py', 'tests/test_public_outcome_audit.py', 'tests/test_event_evidence.py', 'tests/test_canary*.py', '.github/workflows/canary-forward-audit.yml']
   push:
     branches: [main]
-    paths: ['analysis/forward_acquire.py', 'analysis/acquire_event_evidence.py', '.github/workflows/canary-forward-audit.yml']
+    paths: ['analysis/forward_acquire.py', 'analysis/acquire_event_evidence.py', 'analysis/public_outcome_audit.py', '.github/workflows/canary-forward-audit.yml']
   workflow_dispatch:
   schedule:
     - cron: '43 */6 * * *'
@@ -28,6 +28,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_canary*.py' -v
       - name: Event evidence safety and integrity tests
         run: python -m unittest discover -s tests -p 'test_event_evidence.py' -v
+      - name: Public final outcome identity and timestamp tests
+        run: python -m unittest discover -s tests -p 'test_public_outcome_audit.py' -v
       - name: Acquire bounded recent public snapshots and labels
         env:
           GH_TOKEN: ${{ github.token }}
@@ -86,6 +88,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -u analysis/acquire_event_evidence.py --manifest forward_inputs/acquisition_manifest.json --output forward_inputs/event_evidence
+      - name: Backfill public final outcomes with actual retrieval timestamps
+        run: python -u analysis/public_outcome_audit.py --output forward_inputs/outcome_evidence --hours 48
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -94,9 +98,11 @@ jobs:
             forward_inputs/
             analysis/forward_acquire.py
             analysis/acquire_event_evidence.py
+            analysis/public_outcome_audit.py
             analysis/canary*.py
             tests/test_canary*.py
             tests/test_event_evidence.py
+            tests/test_public_outcome_audit.py
             config/canary*.json
           retention-days: 14
           compression-level: 1
