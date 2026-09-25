@@ -1,0 +1,26 @@
+name: plan-grid-audit
+on:
+  pull_request:
+    paths: ['analysis/canary_execution_plan.py', 'tests/test_plan_tick_guard.py', '.github/workflows/plan-grid-audit.yml']
+  push:
+    branches: [main]
+    paths: ['analysis/canary_execution_plan.py', 'tests/test_plan_tick_guard.py', '.github/workflows/plan-grid-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Invalid-grid and existing plan regressions
+        run: |
+          python -m unittest discover -s tests -p 'test_plan_tick_guard.py' -v
+          python -m unittest discover -s tests -p 'test_canary_execution_plan.py' -v
+          python -m py_compile analysis/canary_execution_plan.py

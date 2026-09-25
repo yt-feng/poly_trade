@@ -51,7 +51,14 @@ def tick_precision(tick_size: Any) -> tuple[int, int, int]:
 
 
 def on_tick(price: Decimal, tick: Decimal) -> bool:
-    return price > 0 and price < 1 and price % tick == 0
+    # Validate the grid before modulo: tick=0 must block, not crash.
+    try:
+        price, tick = dec(price), dec(tick)
+    except ValueError:
+        return False
+    if tick not in TICK_PRECISION:
+        return False
+    return D("0") < price < D("1") and price % tick == 0
 
 
 def ceil_to_tick(price: Any, tick_size: Any) -> Decimal | None:
