@@ -1,0 +1,28 @@
+name: cash-prefix-audit
+on:
+  pull_request:
+    paths: ['analysis/canary_receipt_amount_state.py', 'tests/test_receipt_checkpoint_prefix.py', '.github/workflows/cash-prefix-audit.yml']
+  push:
+    branches: [main]
+    paths: ['analysis/canary_receipt_amount_state.py', 'tests/test_receipt_checkpoint_prefix.py', '.github/workflows/cash-prefix-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  receipt-prefix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Synthetic amount and cash-prefix regression, no account access
+        run: |
+          python -m unittest discover -s tests -p 'test_cash_amount_audit.py' -v
+          python -m unittest discover -s tests -p 'test_receipt_checkpoint_prefix.py' -v
+          python -m unittest discover -s tests -p 'test_receipt_source_audit.py' -v
+      - name: Compile read-only adapter
+        run: python -m py_compile analysis/canary_receipt_amount_state.py
