@@ -1,0 +1,27 @@
+name: exit-payoff-audit
+on:
+  pull_request:
+    paths: ['analysis/canary_execution_plan.py', 'tests/test_exit_payoff_audit.py', '.github/workflows/exit-payoff-audit.yml']
+  push:
+    branches: [main]
+    paths: ['analysis/canary_execution_plan.py', 'tests/test_exit_payoff_audit.py', '.github/workflows/exit-payoff-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  arithmetic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Pure synthetic math and existing plan tests; no account or orders
+        run: |
+          python -m unittest discover -s tests -p 'test_exit_payoff_audit.py' -v
+          python -m unittest discover -s tests -p 'test_canary_execution_plan.py' -v
+          python -m unittest discover -s tests -p 'test_plan_notional_minimum.py' -v
+          python -m py_compile analysis/canary_execution_plan.py
