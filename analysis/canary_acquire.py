@@ -2,8 +2,9 @@
 
 Snapshot/label research coverage has its own byte budget. Raw event evidence uses
 an independent smaller budget so large raw archives cannot starve the causal
-snapshot sample. Long production releases are enumerated with explicit asset
-pagination rather than trusting the embedded release asset list.
+snapshot sample. Long production releases use explicit asset pagination.
+Mutable health/manifest transport failures are retained as warnings, never used
+to excuse failed archives, checksums, source downloads or access restrictions.
 """
 from __future__ import annotations
 
@@ -22,6 +23,8 @@ RELEASE_RE = re.compile(r"capture-v2-\d+-\d+")
 DEFAULT_RESEARCH_BYTES = 220 * 1024 * 1024
 DEFAULT_RAW_BYTES = 32 * 1024 * 1024
 MUTABLE_METADATA_LIMIT = 8 * 1024 * 1024
+OPTIONAL_STATUS_METADATA = frozenset(("health.json", "manifest.json"))
+OPTIONAL_METADATA_HTTP_FAILURES = frozenset((404, 409, 500, 502, 503, 504))
 
 
 def request(url: str, limit: int = 100 * 1024 * 1024) -> bytes:
@@ -84,15 +87,27 @@ def _safe_name(name: str) -> str:
     return name
 
 
+def _record_download_failure(release, name, bucket, exc, errors, metadata_warnings=None):
+    record = {
+        "release": release.get("tag_name"), "name": name, "kind": bucket,
+        "error": str(exc)[:200], "exception_type": type(exc).__name__,
+        "http_status": exc.code if isinstance(exc, HTTPError) else None,
+    }
+    optional = (name in OPTIONAL_STATUS_METADATA and isinstance(exc, HTTPError)
+                and exc.code in OPTIONAL_METADATA_HTTP_FAILURES)
+    if optional and metadata_warnings is not None:
+        record.update(severity="optional_status_metadata_unavailable",
+                      used_for_signals_or_labels=False,
+                      note="No health or full-manifest completeness claim; immutable archives still require their SHA sidecars.")
+        metadata_warnings.append(record)
+    else:
+        record["severity"] = "fatal_transport_or_integrity_error"
+        errors.append(record)
+
+
 def _download(
-    *,
-    output: Path,
-    release: dict,
-    assets: dict[str, dict],
-    name: str,
-    bucket: str,
-    records: list[dict],
-    errors: list[dict],
+    *, output: Path, release: dict, assets: dict[str, dict], name: str,
+    bucket: str, records: list[dict], errors: list[dict], metadata_warnings=None,
 ) -> int:
     name = _safe_name(name)
     item = assets[name]
@@ -100,10 +115,7 @@ def _download(
     if size < 0:
         raise ValueError("negative asset size")
     try:
-        # Rotated gzip archives are immutable and checksum-verified, so the
-        # asset-list size is a useful hard response bound. health.json and
-        # manifest.json are overwritten while a production release is active;
-        # their listed size may be stale by the time the download starts.
+        # Only closed gzip archives use the listed size as a hard response bound.
         limit = max(1, size) if name.endswith(".gz") else MUTABLE_METADATA_LIMIT
         if not name.endswith(".gz") and size > MUTABLE_METADATA_LIMIT:
             raise ValueError("mutable metadata exceeds bounded download limit")
@@ -123,31 +135,19 @@ def _download(
         if check:
             dest.with_name(name + ".sha256").write_bytes(check)
         records.append({
-            "path": str(dest.relative_to(output)),
-            "release": release["tag_name"],
-            "kind": bucket,
-            "sha256": digest,
-            "bytes": len(data),
+            "path": str(dest.relative_to(output)), "release": release["tag_name"],
+            "kind": bucket, "sha256": digest, "bytes": len(data),
             "url": item["browser_download_url"],
         })
         return len(data)
     except Exception as exc:
-        errors.append({
-            "release": release.get("tag_name"),
-            "name": name,
-            "kind": bucket,
-            "error": str(exc)[:200],
-        })
+        _record_download_failure(release, name, bucket, exc, errors, metadata_warnings)
         return 0
 
 
 def acquire(
-    output: Path,
-    *,
-    max_bytes: int = DEFAULT_RESEARCH_BYTES,
-    max_raw_bytes: int = DEFAULT_RAW_BYTES,
-    max_releases: int = 4,
-    raw_files: int = 2,
+    output: Path, *, max_bytes: int = DEFAULT_RESEARCH_BYTES,
+    max_raw_bytes: int = DEFAULT_RAW_BYTES, max_releases: int = 4, raw_files: int = 2,
 ) -> dict:
     if max_bytes <= 0 or max_raw_bytes < 0 or max_releases <= 0 or raw_files < 0:
         raise ValueError("invalid acquisition limits")
@@ -155,14 +155,12 @@ def acquire(
     records: list[dict] = []
     errors: list[dict] = []
     skipped: list[dict] = []
+    metadata_warnings: list[dict] = []
     research_used = 0
     raw_used = 0
-
     releases = list_capture_releases(max_releases)
     (output / "releases.json").write_text(json.dumps(releases, indent=2), encoding="utf-8")
     release_assets: list[tuple[dict, dict[str, dict]]] = []
-
-    # Primary research evidence first: labels, snapshots, then small metadata.
     for release in releases:
         assets = {str(x["name"]): x for x in list_release_assets(int(release["id"]))}
         release_assets.append((release, assets))
@@ -172,55 +170,28 @@ def acquire(
         for name in [*labels, *snapshots, *metadata]:
             item = assets[name]
             size = int(item.get("size") or 0)
-            # Mutable metadata can grow between asset enumeration and GET.
-            # Reserve a bounded allowance for it; archives use their listed size.
             budget_size = size if name.endswith(".gz") else max(size, MUTABLE_METADATA_LIMIT)
             if research_used + budget_size > max_bytes:
-                skipped.append({
-                    "release": release["tag_name"],
-                    "name": name,
-                    "kind": "research",
-                    "bytes": size,
-                    "reason": "research byte budget",
-                })
+                skipped.append({"release": release["tag_name"], "name": name,
+                                "kind": "research", "bytes": size, "reason": "research byte budget"})
                 continue
-            downloaded = _download(
-                output=output, release=release, assets=assets, name=name,
-                bucket="research", records=records, errors=errors,
-            )
-            research_used += downloaded
+            research_used += _download(output=output, release=release, assets=assets, name=name,
+                bucket="research", records=records, errors=errors, metadata_warnings=metadata_warnings)
             if research_used > max_bytes:
-                errors.append({
-                    "release": release["tag_name"],
-                    "name": name,
-                    "kind": "research",
-                    "error": "actual downloaded bytes exceeded research budget",
-                })
-
-    # Raw frames are supplementary. They cannot consume the research budget.
+                errors.append({"release": release["tag_name"], "name": name, "kind": "research",
+                               "error": "actual downloaded bytes exceeded research budget"})
     if release_assets and raw_files and max_raw_bytes:
         release, assets = release_assets[0]
-        raw_names = sorted(
-            n for n in assets
-            if n.startswith("raw-") and n.endswith(".jsonl.gz") and n + ".sha256" in assets
-        )[-raw_files:]
+        raw_names = sorted(n for n in assets if n.startswith("raw-") and n.endswith(".jsonl.gz")
+                           and n + ".sha256" in assets)[-raw_files:]
         for name in raw_names:
             size = int(assets[name].get("size") or 0)
             if raw_used + size > max_raw_bytes:
-                skipped.append({
-                    "release": release["tag_name"],
-                    "name": name,
-                    "kind": "raw_event_evidence",
-                    "bytes": size,
-                    "reason": "raw byte budget",
-                })
+                skipped.append({"release": release["tag_name"], "name": name, "kind": "raw_event_evidence",
+                                "bytes": size, "reason": "raw byte budget"})
                 continue
-            raw_used += _download(
-                output=output, release=release, assets=assets, name=name,
-                bucket="raw_event_evidence", records=records, errors=errors,
-            )
-
-    # Preserve current collector parsing code for exact reproducibility.
+            raw_used += _download(output=output, release=release, assets=assets, name=name,
+                bucket="raw_event_evidence", records=records, errors=errors, metadata_warnings=metadata_warnings)
     for name in ("capture_v3.py", "microstructure_v3.py", "microstructure_math_v3.py"):
         try:
             data = request("https://raw.githubusercontent.com/yt-feng/poly/main/" + name, 4 * 1024 * 1024)
@@ -229,36 +200,25 @@ def acquire(
             dest.write_bytes(data)
         except Exception as exc:
             errors.append({"name": name, "kind": "collector_source", "error": str(exc)[:200]})
-
     summary = {
         "retrieved_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "source_repository": "yt-feng/poly",
-        "asset_pagination": True,
+        "source_repository": "yt-feng/poly", "asset_pagination": True,
         "selected_releases": [r.get("tag_name") for r in releases],
-        "files": records,
-        "errors": errors,
-        "skipped": skipped,
-        "research_downloaded_bytes": research_used,
-        "max_research_bytes": max_bytes,
-        "raw_downloaded_bytes": raw_used,
-        "max_raw_bytes": max_raw_bytes,
-        "full_history_complete": False,
-        "read_only": True,
-        "orders_enabled": False,
-        "note": (
-            "Budget skips are explicit and are not integrity errors. "
-            "Raw evidence has a separate budget and cannot starve snapshot/label research coverage."
-        ),
+        "files": records, "errors": errors, "skipped": skipped,
+        "optional_metadata_warnings": metadata_warnings,
+        "optional_metadata_transport_complete": not metadata_warnings,
+        "research_downloaded_bytes": research_used, "max_research_bytes": max_bytes,
+        "raw_downloaded_bytes": raw_used, "max_raw_bytes": max_raw_bytes,
+        "full_history_complete": False, "read_only": True, "orders_enabled": False,
+        "note": "Budget skips and optional health/manifest HTTP failures are explicit. "
+                "Every snapshot/label archive still requires its immutable SHA sidecar. "
+                "Missing status metadata prevents a full health/manifest claim, not verified-archive research. "
+                "Authorization/rate restrictions, checksum, archive and source failures remain fatal.",
     }
     (output / "manifest.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    print(json.dumps({
-        "files": len(records),
-        "research_bytes": research_used,
-        "raw_bytes": raw_used,
-        "skipped": len(skipped),
-        "errors": errors,
-        "releases": len(releases),
-    }, indent=2))
+    print(json.dumps({"files": len(records), "research_bytes": research_used,
+                      "raw_bytes": raw_used, "skipped": len(skipped), "errors": errors,
+                      "optional_metadata_warnings": metadata_warnings, "releases": len(releases)}, indent=2))
     if errors:
         raise RuntimeError("Read-only acquisition had transport/integrity errors; inspect manifest.json")
     if not any("/snapshots-" in f["path"] for f in records):
@@ -274,13 +234,8 @@ def main() -> None:
     parser.add_argument("--max-releases", type=int, default=4)
     parser.add_argument("--raw-files", type=int, default=2)
     args = parser.parse_args()
-    acquire(
-        args.output,
-        max_bytes=args.max_bytes,
-        max_raw_bytes=args.max_raw_bytes,
-        max_releases=args.max_releases,
-        raw_files=args.raw_files,
-    )
+    acquire(args.output, max_bytes=args.max_bytes, max_raw_bytes=args.max_raw_bytes,
+            max_releases=args.max_releases, raw_files=args.raw_files)
 
 
 if __name__ == "__main__":
