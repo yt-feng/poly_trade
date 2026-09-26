@@ -1,0 +1,26 @@
+name: plan-notional-audit
+on:
+  pull_request:
+    paths: ['analysis/canary_execution_plan.py', 'tests/test_plan_notional_minimum.py', '.github/workflows/plan-notional-audit.yml']
+  push:
+    branches: [main]
+    paths: ['analysis/canary_execution_plan.py', 'tests/test_plan_notional_minimum.py', '.github/workflows/plan-notional-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  arithmetic-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: New notional constraints and existing sizing tests; no account or exchange access
+        run: |
+          python -m unittest discover -s tests -p 'test_plan_notional_minimum.py' -v
+          python -m unittest discover -s tests -p 'test_canary_execution_plan.py' -v
+          python -m py_compile analysis/canary_execution_plan.py
