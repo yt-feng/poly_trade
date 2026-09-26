@@ -126,6 +126,64 @@ def minimum_gross_buy_shares(
     raise RuntimeError("sizing search bound exceeded")
 
 
+def audit_exit_payoff(
+    *, entry_cash_cost: Any, sellable_shares: Any, exit_bid: Any,
+    tick_size: Any, exit_fee_rate: Any, desired_net_roi: Any = "0.5",
+) -> dict[str, Any]:
+    """Hypothetical cash-fee exit arithmetic, NOT an expected return or order.
+
+    Inputs must describe the same settlement asset. The caller supplies net
+    sellable shares and total entry cash cost. All venue parameters must be
+    refreshed at execution time; this function cannot authenticate them.
+    """
+    values = (entry_cash_cost, sellable_shares, exit_bid, tick_size,
+              exit_fee_rate, desired_net_roi)
+    if any(isinstance(x, bool) for x in values):
+        raise ValueError("boolean is not a financial amount")
+    cost, q, bid, tick, rate, goal = (dec(x) for x in values)
+    tick_precision(tick)
+    if cost <= 0 or q <= 0 or not on_tick(bid, tick):
+        raise ValueError("invalid cost, shares or executable exit grid")
+    if not D("0") <= rate <= D("1") or goal < 0:
+        raise ValueError("invalid exit rate or target return")
+
+    def proceeds(price: Decimal) -> Decimal:
+        return q * price - fee_usdc_conservative(q, price, rate)
+
+    # A bounded grid scan is robust even at fee-rounding discontinuities.
+    # Never assume a gross percentage price move is an equal net cash return.
+    break_even = target = None
+    required = cost * (D("1") + goal)
+    for i in range(1, int(D("1") / tick)):
+        price = tick * i
+        cash = proceeds(price)
+        if break_even is None and cash >= cost:
+            break_even = price
+        if cash >= required:
+            target = price
+            break
+    cash = proceeds(bid)
+    return {
+        "scope": "hypothetical_exit_arithmetic_only_not_expected_return",
+        "entry_cash_cost": str(cost),
+        "net_sellable_shares": str(q),
+        "exit_bid": str(bid),
+        "exit_fee_cash": str(fee_usdc_conservative(q, bid, rate)),
+        "exit_net_cash": str(cash),
+        "net_pnl_if_exit_occurs": str(cash - cost),
+        "net_roi_if_exit_occurs": str(cash / cost - D("1")),
+        "break_even_bid_on_supplied_grid": str(break_even) if break_even is not None else None,
+        "desired_net_roi": str(goal),
+        "minimum_bid_for_desired_roi": str(target) if target is not None else None,
+        "target_reachable_below_one": target is not None,
+        "target_met_at_supplied_bid": cash >= required,
+        "cash_actually_received_verified": False,
+        "input_provenance_verified": False,
+        "changes_exit_policy": False,
+        "orders_submitted": False,
+    }
+
+
 def build_plan(
     *,
     entry_price: Any,
@@ -197,6 +255,12 @@ def build_plan(
 
     return {
         "schema": 3,
+        "hypothetical_exit_payoff": (
+            audit_exit_payoff(
+                entry_cash_cost=cash_spend, sellable_shares=net,
+                exit_bid=exit_min_price, tick_size=tick, exit_fee_rate=rate,
+            ) if not reasons and cash_spend is not None else None
+        ),
         "minimum_buy_notional_usd": str(floor) if floor is not None else None,
         "minimum_buy_notional_source": min_buy_notional_source,
         "minimum_notional_status": (
