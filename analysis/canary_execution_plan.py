@@ -103,6 +103,7 @@ def minimum_gross_buy_shares(
     fee_rate: Any,
     size_decimals: int = 2,
     fee_asset_scenario: str = OFFICIAL_CASH_FEE,
+    min_buy_notional_usd: Any | None = None,
 ) -> Decimal:
     minimum, price, rate = dec(min_exit_shares), dec(price), dec(fee_rate)
     if minimum <= 0 or size_decimals < 0:
@@ -111,6 +112,13 @@ def minimum_gross_buy_shares(
         raise ValueError("unknown fee_asset_scenario")
     step = D(1).scaleb(-size_decimals)
     candidate = (minimum / step).to_integral_value(rounding=ROUND_CEILING) * step
+    if min_buy_notional_usd is not None:
+        if isinstance(min_buy_notional_usd, bool):
+            raise ValueError("invalid buy notional minimum")
+        floor = dec(min_buy_notional_usd)
+        if floor <= 0 or price <= 0:
+            raise ValueError("invalid buy notional minimum")
+        candidate = max(candidate, (floor / price / step).to_integral_value(rounding=ROUND_CEILING) * step)
     for _ in range(100000):
         if net_buy_shares_conservative(candidate, price, rate, fee_asset_scenario) >= minimum:
             return candidate
@@ -127,10 +135,25 @@ def build_plan(
     notional_cap_usd: Any = "5",
     exit_trigger: Any = "0.98",
     fee_asset_scenario: str = OFFICIAL_CASH_FEE,
+    min_buy_notional_usd: Any | None = None,
+    min_buy_notional_source: str | None = None,
 ) -> dict[str, Any]:
     price, tick = dec(entry_price), dec(tick_size)
     minimum, rate, cap = dec(min_order_size), dec(fee_rate), dec(notional_cap_usd)
     reasons: list[str] = []
+    floor = None
+    if min_buy_notional_usd is not None:
+        try:
+            if isinstance(min_buy_notional_usd, bool):
+                raise ValueError("boolean is not a minimum amount")
+            floor = dec(min_buy_notional_usd)
+            if floor <= 0:
+                raise ValueError("minimum must be positive")
+        except ValueError:
+            floor = None
+            reasons.append("blocked_buy_notional_minimum_invalid")
+    if floor is not None and floor > cap:
+        reasons.append("blocked_buy_notional_minimum_over_cap")
     try:
         _, size_decimals, _ = tick_precision(tick)
     except ValueError:
@@ -157,7 +180,7 @@ def build_plan(
     gross = net = fee = gross_notional = all_in = cash_spend = None
     if not reasons:
         gross = minimum_gross_buy_shares(
-            minimum, price, rate, size_decimals, fee_asset_scenario
+            minimum, price, rate, size_decimals, fee_asset_scenario, floor
         )
         fee = fee_usdc_conservative(gross, price, rate)
         net = net_buy_shares_conservative(gross, price, rate, fee_asset_scenario)
@@ -173,7 +196,15 @@ def build_plan(
             reasons.append("blocked_minimum_reversible_size_over_notional_cap")
 
     return {
-        "schema": 2,
+        "schema": 3,
+        "minimum_buy_notional_usd": str(floor) if floor is not None else None,
+        "minimum_buy_notional_source": min_buy_notional_source,
+        "minimum_notional_status": (
+            "not_supplied_not_checked" if min_buy_notional_usd is None
+            else "invalid" if floor is None else "supplied_rule_arithmetic_only"
+        ),
+        "supplied_minima_satisfied": bool(not reasons and floor is not None),
+        "exchange_rule_provenance_verified": False,
         "mode": "plan_only_no_order_capability",
         "eligible_for_execution_validation_plan": not reasons,
         "block_reasons": reasons,
@@ -199,6 +230,8 @@ def build_plan(
         "orders_submitted": False,
         "required_before_any_human_approved_trade": [
             "refresh tick_size and min_order_size immediately before entry",
+            "supply the current BUY notional minimum for the exact order type; None is unknown, not zero",
+            "validate offered/requested asset units and SDK rounding separately; this plan does not sign orders",
             "verify displayed depth at the chosen price for the full gross size",
             "after a match, replace planned shares, fee amount and fee asset with private trade and position receipts",
             "refresh tick_size and min_order_size again before any SELL",
