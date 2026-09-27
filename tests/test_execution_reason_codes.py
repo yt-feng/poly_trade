@@ -82,7 +82,7 @@ class ReasonCodes(unittest.TestCase):
 
     def test_terminal_unfilled(self):
         self.assertEqual(
-            self.code(order_status="", order_terminal=True),
+            self.code(order_status="", order_terminal=True, fill_reconciliation_complete=True),
             "ORDER_TERMINAL_UNFILLED",
         )
 
