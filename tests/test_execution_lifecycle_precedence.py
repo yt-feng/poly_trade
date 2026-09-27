@@ -29,7 +29,7 @@ class LifecyclePrecedence(unittest.TestCase):
     def test_unknown_overrides_complete(self):self.assertEqual(self.code(confirmed_filled_shares='5',entry_order_terminal=True,cash_reconciled=True,position_flat=True,reconciliation_unknown=True),'RECONCILIATION_UNKNOWN')
     def test_cash_without_entry_not_certified(self):self.assertEqual(self.code(cash_reconciled=True,position_flat=True),'POSITION_OR_CASH_EVIDENCE_INCOMPLETE')
     def test_submitted_pending_no_signal(self):self.assertEqual(self.code(signal_qualified=False,order_submitted=True,order_status='MATCHED'),'ORDER_ACCEPTED_NOT_CONFIRMED_FILLED')
-    def test_submitted_terminal(self):self.assertEqual(self.code(signal_qualified=False,order_submitted=True,order_terminal=True),'ORDER_TERMINAL_UNFILLED')
+    def test_submitted_terminal(self):self.assertEqual(self.code(signal_qualified=False,order_submitted=True,order_terminal=True,fill_reconciliation_complete=True),'ORDER_TERMINAL_UNFILLED')
     def test_submitted_rejected(self):self.assertEqual(self.code(order_submitted=True,order_status='REJECTED'),'ORDER_REJECTED')
     def test_negative_confirmed(self):self.assertRaises(ValueError,classify,fixture(confirmed_filled_shares='-1'))
     def test_confirmed_above_request(self):self.assertRaises(ValueError,classify,fixture(confirmed_filled_shares='6'))

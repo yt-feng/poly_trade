@@ -36,6 +36,34 @@ def result(stage: str, code: str, *, final: bool, detail: str = "") -> dict:
     }
 
 
+def terminal_without_confirmed_fill(record: dict) -> dict:
+    """Classify a terminal *order*, never assume that its trades are settled.
+
+    ``fill_reconciliation_complete`` is an explicit caller assertion that all
+    fills for this order are covered, including late events. It is not a receipt
+    authenticator or permission to release cash. Existing amount/source audits
+    remain required. Missing quantity is different from an observed zero.
+    """
+    confirmed = dec(record.get("confirmed_filled_shares"))
+    if confirmed is None:
+        return result("fill", "ORDER_TERMINAL_FILL_QUANTITY_UNKNOWN", final=False)
+    if confirmed != 0:
+        raise ValueError("terminal zero-fill classification requires an explicit zero")
+    statuses = {str(record.get(k) or "").strip().upper()
+                for k in ("order_status", "trade_status")}
+    pending = {"MATCHED", "MINED", "RETRYING", "PENDING", "DELAYED"}
+    matched = dec(record.get("matched_shares"))
+    if matched is not None and matched < 0:
+        raise ValueError("negative matched quantity")
+    if statuses & pending or "CONFIRMED" in statuses or (matched is not None and matched > 0):
+        return result("fill", "ORDER_TERMINAL_TRADE_EVIDENCE_PENDING", final=False,
+                      detail="Order termination cannot resolve pending or contradictory trade evidence")
+    if record.get("fill_reconciliation_complete") is not True:
+        return result("fill", "ORDER_TERMINAL_FILL_RECONCILIATION_PENDING", final=False)
+    return result("fill", "ORDER_TERMINAL_UNFILLED", final=True,
+                  detail="Explicit zero and caller-declared complete fill coverage; no cash/source authentication")
+
+
 def existing_episode(record: dict) -> dict | None:
     """Classify occupied or uncertain capital before rechecking entry signals.
 
@@ -88,11 +116,14 @@ def existing_episode(record: dict) -> dict | None:
         return result("position", "CONFIRMED_ENTRY_POSITION_OPEN", final=False)
     submitted = record.get("order_submitted") is True or bool(record.get("submission_reference"))
     if submitted:
-        status = str(record.get("order_status") or "").upper()
-        if record.get("order_terminal") is True:
-            return result("fill", "ORDER_TERMINAL_UNFILLED", final=True)
+        status = str(record.get("order_status") or "").strip().upper()
+        terminal = record.get("order_terminal") is True or record.get("entry_order_terminal") is True
+        if terminal:
+            return terminal_without_confirmed_fill(record)
         if status in {"REJECTED", "FAILED", "ERROR"}:
-            return result("order", "ORDER_REJECTED", final=True, detail=status)
+            zero_fill = terminal_without_confirmed_fill(record)
+            return result("order", "ORDER_REJECTED", final=zero_fill["final_for_episode"],
+                          detail=status + "; " + zero_fill["reason_code"])
         return result("fill", "ORDER_ACCEPTED_NOT_CONFIRMED_FILLED", final=False, detail=status)
     return None
 
@@ -159,8 +190,8 @@ def classify(record: dict) -> dict:
     if confirmed == 0:
         if order_status in {"ACCEPTED", "LIVE", "DELAYED", "MATCHED", "MINED", "PENDING"}:
             return result("fill", "ORDER_ACCEPTED_NOT_CONFIRMED_FILLED", final=False, detail=order_status)
-        if bool(record.get("order_terminal")):
-            return result("fill", "ORDER_TERMINAL_UNFILLED", final=True)
+        if record.get("order_terminal") is True or record.get("entry_order_terminal") is True:
+            return terminal_without_confirmed_fill(record)
         return result("fill", "FILL_STATUS_UNKNOWN", final=False)
 
 
