@@ -1,14 +1,8 @@
-"""Acquire production snapshot/label archives for registered forward canary research.
+"""Bounded, checksum-verified PUBLIC archive acquisition. No trading methods.
 
-Read-only. This module never imports trading code, reads wallet credentials, or
-places orders. It explicitly paginates release assets because long-running
-capture releases can exceed GitHub's embedded asset list.
-
-The acquisition is intentionally bounded by both release count and bytes. Files
-that are otherwise eligible but do not fit the byte budget are recorded as
-explicitly skipped, not as transport/integrity errors. This keeps a bounded
-research sample auditable without pretending the selected releases are fully
-downloaded or that the sample is complete history.
+A selection plan is persisted before download. Recovery retains that plan and
+rehashes successful files; it never silently substitutes a newer sample. A
+failure remains a failure unless the missing bytes actually arrive and verify.
 """
 from __future__ import annotations
 import argparse
@@ -16,189 +10,354 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 import re
 import time
 import urllib.error
 import urllib.request
+from email.utils import parsedate_to_datetime
+from urllib.parse import urlparse
 
-API = "https://api.github.com/repos/yt-feng/poly"
+API = 'https://api.github.com/repos/yt-feng/poly'
 DEFAULT_MAX_BYTES = 450 * 1024 * 1024
-RELEASE_RE = re.compile(r"capture-v2-\d+-\d+")
+RELEASE_RE = re.compile(r'capture-v2-\d+-\d+')
+NAME_RE = re.compile(r'(?:snapshots|labels)-[0-9-]+\.jsonl\.gz')
+RESPONSE_CAP = 64 * 1024 * 1024
+REFUSALS = frozenset((401, 403, 418, 429, 451))
+
+
+class TransportError(RuntimeError):
+    def __init__(self, code=None, retryable=False, attempts=1):
+        super().__init__('HTTP_TRANSPORT_FAILURE' if code else 'NETWORK_TRANSPORT_FAILURE')
+        self.code, self.retryable, self.attempts = code, retryable, attempts
+
+
+class AccessRefused(TransportError):
+    pass
+
+
+class SafeRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow normal GitHub asset redirects, never forward credentials cross-host."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        host = urlparse(newurl).hostname
+        if urlparse(newurl).scheme != 'https' or host not in {
+            'github.com', 'api.github.com', 'release-assets.githubusercontent.com',
+            'objects.githubusercontent.com', 'raw.githubusercontent.com'
+        }:
+            raise ValueError('UNEXPECTED_REDIRECT_HOST')
+        result = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if result is not None and host != urlparse(req.full_url).hostname:
+            result.remove_header('Authorization')
+        return result
+
+
+def _retry_wait(headers, attempt):
+    raw = headers.get('Retry-After') if headers else None
+    if raw:
+        try:
+            seconds = float(raw)
+        except ValueError:
+            try:
+                seconds = parsedate_to_datetime(raw).timestamp() - time.time()
+            except (TypeError, ValueError, OverflowError):
+                seconds = 0
+        # Do not sleep less than a valid server request or run indefinitely.
+        if seconds > 60:
+            raise TransportError(503, False)
+        if seconds > 0:
+            return seconds
+    return min(8.0, 2.0 ** attempt) + random.uniform(0, 0.25)
 
 
 def request(url: str) -> bytes:
-    headers = {"User-Agent": "poly-trade-forward-readonly", "Accept": "application/vnd.github+json"}
-    token = os.getenv("GH_TOKEN", "")
-    if url.startswith("https://api.github.com/") and token:
-        headers["Authorization"] = "Bearer " + token
-    last = None
+    parsed = urlparse(url)
+    valid = (url.startswith(API + '/') or
+             url.startswith('https://github.com/yt-feng/poly/releases/download/'))
+    if not valid or parsed.username or parsed.password or parsed.fragment:
+        raise ValueError('UNEXPECTED_PUBLIC_SOURCE')
+    headers = {'User-Agent': 'poly-forward-readonly', 'Accept': 'application/vnd.github+json'}
+    if parsed.hostname == 'api.github.com' and os.environ.get('GH_TOKEN'):
+        headers['Authorization'] = 'Bearer ' + os.environ['GH_TOKEN']
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), SafeRedirect())
     for attempt in range(4):
         try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                return resp.read()
+            with opener.open(urllib.request.Request(url, headers=headers), timeout=30) as resp:
+                length = resp.headers.get('Content-Length')
+                if length and int(length) > RESPONSE_CAP:
+                    raise ValueError('RESPONSE_BYTE_CAP')
+                body = resp.read(RESPONSE_CAP + 1)
+                if len(body) > RESPONSE_CAP:
+                    raise ValueError('RESPONSE_BYTE_CAP')
+                return body
         except urllib.error.HTTPError as exc:
-            last = exc
-            if exc.code in (401, 403, 418, 451):
-                raise
-            if exc.code < 500 and exc.code != 429:
-                raise
+            if exc.code in REFUSALS:
+                raise AccessRefused(exc.code, False, attempt + 1) from None
+            retryable = 500 <= exc.code <= 599
+            if not retryable or attempt == 3:
+                raise TransportError(exc.code, retryable, attempt + 1) from None
+            delay = _retry_wait(exc.headers, attempt)
         except (TimeoutError, OSError) as exc:
-            last = exc
-        time.sleep(2 ** attempt)
-    raise RuntimeError(f"request failed after retries: {last}")
+            if attempt == 3:
+                raise TransportError(None, True, attempt + 1) from None
+            delay = _retry_wait(None, attempt)
+        time.sleep(delay)
+    raise AssertionError('unreachable')
 
 
-def get_json(url: str):
+def get_json(url):
     return json.loads(request(url))
 
 
-def list_capture_releases(max_releases: int) -> list[dict]:
-    releases: list[dict] = []
+def list_capture_releases(max_releases):
+    releases = []
     for page in range(1, 6):
-        batch = get_json(f"{API}/releases?per_page=100&page={page}")
+        batch = get_json(f'{API}/releases?per_page=100&page={page}')
         if not isinstance(batch, list):
-            raise ValueError("release API did not return a list")
-        releases.extend(r for r in batch if RELEASE_RE.fullmatch(str(r.get("tag_name", ""))))
+            raise ValueError('RELEASE_SCHEMA')
+        releases.extend(r for r in batch if RELEASE_RE.fullmatch(str(r.get('tag_name', ''))))
         if len(batch) < 100 or len(releases) >= max_releases:
             break
-    releases.sort(key=lambda r: str(r.get("published_at", "")), reverse=True)
+    releases.sort(key=lambda r: str(r.get('published_at', '')), reverse=True)
     return releases[:max_releases]
 
 
-def list_release_assets(release_id: int) -> list[dict]:
-    assets: list[dict] = []
-    for page in range(1, 20):
-        batch = get_json(f"{API}/releases/{release_id}/assets?per_page=100&page={page}")
+def list_release_assets(release_id):
+    assets = []
+    for page in range(1, 31):
+        batch = get_json(f'{API}/releases/{release_id}/assets?per_page=100&page={page}')
         if not isinstance(batch, list):
-            raise ValueError("asset API did not return a list")
+            raise ValueError('ASSET_SCHEMA')
         assets.extend(batch)
         if len(batch) < 100:
-            break
-    return assets
+            return assets
+    raise ValueError('ASSET_PAGINATION_LIMIT')
 
 
-def save_json(path: Path, value) -> None:
+def canonical(value):
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()
+
+
+def digest(value):
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def save_json(path, value):
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_name(path.name + '.tmp')
+    with temporary.open('wb') as handle:
+        handle.write(canonical(value)); handle.flush(); os.fsync(handle.fileno())
+    os.replace(temporary, path)
 
 
-def acquire(out: Path, max_releases: int = 16, max_bytes: int = DEFAULT_MAX_BYTES) -> dict:
-    if max_releases <= 0:
-        raise ValueError("max_releases must be positive")
-    if max_bytes <= 0:
-        raise ValueError("max_bytes must be positive")
-    out.mkdir(parents=True, exist_ok=True)
-    manifest = {
-        "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "source_repository": "yt-feng/poly",
-        "read_only": True,
-        "asset_pagination": True,
-        "max_releases": max_releases,
-        "max_bytes": max_bytes,
-        "downloaded_bytes": 0,
-        "eligible_archives_total": 0,
-        "budget_exhausted": False,
-        "releases": [],
-        "files": [],
-        "skipped": [],
-        "errors": [],
-    }
+def _write_bytes(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise ValueError('SYMLINK_OUTPUT')
+    temp = path.with_name(path.name + '.part')
+    with temp.open('wb') as handle:
+        handle.write(value); handle.flush(); os.fsync(handle.fileno())
+    os.replace(temp, path)
+
+
+def _target(root, tag, name):
+    if not RELEASE_RE.fullmatch(tag) or not NAME_RE.fullmatch(name):
+        raise ValueError('UNSAFE_ARCHIVE_IDENTITY')
+    p = root / 'captured' / tag / name
+    if root.resolve() not in p.resolve().parents or p.is_symlink():
+        raise ValueError('UNSAFE_ARCHIVE_PATH')
+    return p
+
+
+def _checksum(body, name):
+    parts = body.decode('utf-8').strip().split()
+    if not parts or not re.fullmatch(r'[0-9a-fA-F]{64}', parts[0]):
+        raise ValueError('INVALID_CHECKSUM_SIDECAR')
+    if len(parts) > 2 or (len(parts) == 2 and parts[1].lstrip('*') != name):
+        raise ValueError('CHECKSUM_FILENAME_MISMATCH')
+    return parts[0].lower()
+
+
+def _plan(max_releases, max_bytes):
     releases = list_capture_releases(max_releases)
     if not releases:
-        raise RuntimeError("no capture releases found")
-    used = 0
+        raise ValueError('NO_CAPTURE_RELEASES')
+    plan = {'version': 1, 'source_repository': 'yt-feng/poly', 'max_releases': max_releases,
+            'max_bytes': max_bytes, 'releases': [], 'items': []}
+    reserved = 0
     for release in releases:
-        rid = int(release["id"])
-        tag = str(release["tag_name"])
+        tag = str(release['tag_name']); rid = int(release['id'])
+        if not RELEASE_RE.fullmatch(tag):
+            raise ValueError('UNSAFE_RELEASE')
         assets = list_release_assets(rid)
-        by_name = {str(a.get("name")): a for a in assets}
-        eligible = [
-            a for a in assets
-            if str(a.get("name", "")).startswith(("snapshots-", "labels-"))
-            and str(a.get("name", "")).endswith(".jsonl.gz")
-        ]
-        manifest["eligible_archives_total"] += len(eligible)
-        release_record = {
-            "id": rid,
-            "tag": tag,
-            "published_at": release.get("published_at"),
-            "asset_count": len(assets),
-            "eligible_snapshot_label_archives": len(eligible),
-            "downloaded_snapshot_label_archives": 0,
-            "budget_skipped_snapshot_label_archives": 0,
-        }
-        manifest["releases"].append(release_record)
-        for asset in sorted(eligible, key=lambda a: str(a.get("name", ""))):
-            name = str(asset["name"])
-            if Path(name).name != name:
-                raise ValueError("unsafe asset name")
-            side = by_name.get(name + ".sha256")
+        names = [str(a.get('name', '')) for a in assets]
+        if len(names) != len(set(names)):
+            raise ValueError('DUPLICATE_ASSET_NAMES')
+        by_name = dict(zip(names, assets))
+        eligible = [a for a in assets if str(a.get('name', '')).startswith(('snapshots-', 'labels-'))
+                    and str(a.get('name', '')).endswith('.jsonl.gz')]
+        plan['releases'].append({'id': rid, 'tag': tag, 'published_at': release.get('published_at'),
+            'asset_count': len(assets), 'eligible_snapshot_label_archives': len(eligible)})
+        for a in sorted(eligible, key=lambda x: x['name']):
+            name = str(a['name']); side = by_name.get(name + '.sha256')
+            if not NAME_RE.fullmatch(name):
+                raise ValueError('UNSAFE_ARCHIVE_NAME')
+            size = a.get('size')
+            item = {'tag': tag, 'name': name, 'bytes': size, 'asset_id': a.get('id'),
+                    'created_at': a.get('created_at'), 'url': a.get('browser_download_url'),
+                    'side_url': side.get('browser_download_url') if side else None,
+                    'api_digest': a.get('digest'), 'selected': False, 'pre_error': None}
             if side is None:
-                manifest["errors"].append({"tag": tag, "name": name, "error": "missing checksum sidecar"})
-                continue
-            size = int(asset.get("size") or 0)
-            if size < 0:
-                manifest["errors"].append({"tag": tag, "name": name, "error": "invalid asset size"})
-                continue
-            if used + size > max_bytes:
-                manifest["budget_exhausted"] = True
-                release_record["budget_skipped_snapshot_label_archives"] += 1
-                manifest["skipped"].append({
-                    "tag": tag,
-                    "name": name,
-                    "bytes": size,
-                    "reason": "download byte budget",
-                })
-                continue
+                item['pre_error'] = 'missing checksum sidecar'
+            elif type(size) is not int or size < 0:
+                item['pre_error'] = 'invalid asset size'
+            elif reserved + size <= max_bytes:
+                item['selected'] = True; reserved += size
+            plan['items'].append(item)
+    plan['reserved_bytes'] = reserved
+    return plan
+
+
+def _error(item, exc):
+    code = getattr(exc, 'code', None)
+    return {'tag': item['tag'], 'name': item['name'], 'error': str(exc)[:150],
+            'error_type': type(exc).__name__, 'http_status': code,
+            'retryable': bool(getattr(exc, 'retryable', False)),
+            'access_refused': isinstance(exc, AccessRefused)}
+
+
+def _manifest(plan, state, generation):
+    m = {'created_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'source_repository': 'yt-feng/poly', 'read_only': True, 'asset_pagination': True,
+        'max_releases': plan['max_releases'], 'max_bytes': plan['max_bytes'],
+        'downloaded_bytes': 0, 'eligible_archives_total': len(plan['items']),
+        'budget_exhausted': False, 'releases': [], 'files': [], 'skipped': [], 'errors': [],
+        'plan_sha256': digest(plan), 'recovery_generation': generation, 'failure_history': [],
+        'acquisition_halted': False, 'full_history_complete': False,
+        'resume_reuses_only_locally_rehashed_files': True}
+    for r in plan['releases']:
+        rec = dict(r, downloaded_snapshot_label_archives=0, budget_skipped_snapshot_label_archives=0)
+        m['releases'].append(rec)
+    for item in plan['items']:
+        key = item['tag'] + '/' + item['name']; s = state.get(key, {})
+        rr = next(r for r in m['releases'] if r['tag'] == item['tag'])
+        m['failure_history'].extend(s.get('history', []))
+        if item['pre_error']:
+            m['errors'].append(_error(item, ValueError(item['pre_error'])))
+        elif not item['selected']:
+            m['budget_exhausted'] = True; rr['budget_skipped_snapshot_label_archives'] += 1
+            m['skipped'].append({'tag': item['tag'], 'name': item['name'], 'bytes': item['bytes'], 'reason': 'download byte budget'})
+        elif s.get('status') == 'verified':
+            f = s['file']; m['files'].append(f); m['downloaded_bytes'] += f['bytes']
+            rr['downloaded_snapshot_label_archives'] += 1
+        else:
+            m['errors'].append(s.get('error', _error(item, RuntimeError('NOT_YET_ACQUIRED'))))
+    m['acquisition_halted'] = any(e.get('access_refused') for e in m['errors'])
+    return m
+
+
+def acquire(out: Path, max_releases=16, max_bytes=DEFAULT_MAX_BYTES, *, resume=False):
+    if type(max_releases) is not int or max_releases <= 0 or type(max_bytes) is not int or max_bytes <= 0:
+        raise ValueError('POSITIVE_INTEGER_LIMITS_REQUIRED')
+    out = Path(out); out.mkdir(parents=True, exist_ok=True)
+    planfile = out / 'acquisition_plan.json'; statefile = out / 'acquisition_state.json'
+    if resume:
+        envelope = json.loads(planfile.read_text()); plan = envelope['plan']
+        if digest(plan) != envelope['sha256'] or plan['source_repository'] != 'yt-feng/poly':
+            raise ValueError('PLAN_INTEGRITY_FAILURE')
+        if plan['max_bytes'] != max_bytes or plan['max_releases'] != max_releases:
+            raise ValueError('RESUME_LIMITS_CHANGED')
+        saved = json.loads(statefile.read_text())
+        if saved.get('plan_sha256') != digest(plan):
+            raise ValueError('STATE_PLAN_MISMATCH')
+        state, generation = saved['states'], saved['generation'] + 1
+        if generation > 1:
+            raise ValueError('RECOVERY_PASS_LIMIT')
+    else:
+        if planfile.exists() or statefile.exists():
+            raise ValueError('EXISTING_PLAN_REQUIRES_EXPLICIT_RESUME')
+        plan = _plan(max_releases, max_bytes); state = {}; generation = 0
+        save_json(planfile, {'plan': plan, 'sha256': digest(plan)})
+    def checkpoint():
+        save_json(statefile, {'plan_sha256': digest(plan), 'generation': generation, 'states': state})
+        result = _manifest(plan, state, generation)
+        save_json(out / 'acquisition_manifest.json', result)
+        return result
+    checkpoint()
+    halt = False
+    for item in plan['items']:
+        if item['pre_error'] or not item['selected']:
+            continue
+        key = item['tag'] + '/' + item['name']; s = state.setdefault(key, {'history': []})
+        dest = _target(out, item['tag'], item['name'])
+        sidefile = dest.with_name(dest.name + '.sha256')
+        if s.get('status') == 'verified':
             try:
-                body = request(str(asset["browser_download_url"]))
-                checksum_body = request(str(side["browser_download_url"]))
-                expected = checksum_body.decode("utf-8").strip().split()[0]
-                actual = hashlib.sha256(body).hexdigest()
-                if actual != expected:
-                    raise ValueError("checksum mismatch")
-                dest = out / "captured" / tag / name
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(body)
-                dest.with_name(name + ".sha256").write_bytes(checksum_body)
-                used += len(body)
-                release_record["downloaded_snapshot_label_archives"] += 1
-                manifest["files"].append({
-                    "release": tag,
-                    "name": name,
-                    "path": str(dest.relative_to(out)),
-                    "bytes": len(body),
-                    "sha256": actual,
-                    "created_at": asset.get("created_at"),
-                    "url": asset.get("browser_download_url"),
-                })
-            except Exception as exc:  # retain a complete acquisition audit instead of silently skipping
-                manifest["errors"].append({"tag": tag, "name": name, "error": str(exc)[:500]})
-            manifest["downloaded_bytes"] = used
-            save_json(out / "acquisition_manifest.json", manifest)
-    save_json(out / "acquisition_manifest.json", manifest)
-    if not any(f["name"].startswith("snapshots-") for f in manifest["files"]):
-        raise RuntimeError("no checksum-verified snapshot archive acquired")
-    return manifest
+                if sidefile.is_symlink() or not dest.is_file() or not sidefile.is_file():
+                    raise ValueError('LOCAL_CHECKPOINT_MISSING')
+                body = dest.read_bytes(); expect = _checksum(sidefile.read_bytes(), item['name'])
+                if len(body) != item['bytes'] or hashlib.sha256(body).hexdigest() != expect or expect != s['file']['sha256']:
+                    raise ValueError('LOCAL_CHECKPOINT_CORRUPT')
+            except Exception as exc:
+                s.update(status='failed', error=_error(item, exc)); s['history'].append(dict(s['error'], generation=generation))
+            continue
+        if s.get('error', {}).get('access_refused'):
+            halt = True
+        if halt or (resume and s.get('status') == 'failed' and not s['error'].get('retryable')):
+            continue
+        try:
+            side = request(item['side_url']); expected = _checksum(side, item['name'])
+            ad = item.get('api_digest')
+            if ad and ad != 'sha256:' + expected:
+                raise ValueError('API_SIDECAR_DIGEST_CONFLICT')
+            body = request(item['url'])
+            if len(body) != item['bytes']:
+                raise ValueError('DECLARED_SIZE_MISMATCH')
+            if hashlib.sha256(body).hexdigest() != expected:
+                raise ValueError('checksum mismatch')
+            _write_bytes(dest, body); _write_bytes(sidefile, side)
+            s.update(status='verified', error=None, file={
+                'release': item['tag'], 'name': item['name'], 'path': str(dest.relative_to(out)),
+                'bytes': len(body), 'sha256': expected, 'created_at': item['created_at'],
+                'url': item['url'], 'asset_id': item['asset_id']})
+        except Exception as exc:
+            s.update(status='failed', error=_error(item, exc)); s['history'].append(dict(s['error'], generation=generation))
+            halt = isinstance(exc, AccessRefused)
+        checkpoint()
+        if halt:
+            break
+    result = checkpoint()
+    if not any(f['name'].startswith('snapshots-') for f in result['files']):
+        result['no_verified_snapshots'] = True
+        save_json(out / 'acquisition_manifest.json', result)
+    return result
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default="forward_inputs")
-    parser.add_argument("--max-releases", type=int, default=16)
-    parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
-    args = parser.parse_args()
-    result = acquire(Path(args.output), args.max_releases, args.max_bytes)
-    print(json.dumps({
-        "files": len(result["files"]),
-        "releases": len(result["releases"]),
-        "bytes": result["downloaded_bytes"],
-        "budget_exhausted": result["budget_exhausted"],
-        "skipped": len(result["skipped"]),
-        "errors": result["errors"][:20],
-    }, indent=2))
+def validate_manifest(m):
+    expected = sum(r['eligible_snapshot_label_archives'] for r in m.get('releases', []))
+    return bool(expected > 0 and expected == len(m.get('files', [])) + len(m.get('skipped', [])) + len(m.get('errors', []))
+                and not m.get('errors') and m.get('files')
+                and any(f['name'].startswith('snapshots-') for f in m['files'])
+                and m['downloaded_bytes'] == sum(f['bytes'] for f in m['files'])
+                and m['downloaded_bytes'] <= m['max_bytes'])
 
 
-if __name__ == "__main__":
+def main():
+    p = argparse.ArgumentParser(); p.add_argument('--output', default='forward_inputs')
+    p.add_argument('--max-releases', type=int, default=16); p.add_argument('--max-bytes', type=int, default=DEFAULT_MAX_BYTES)
+    p.add_argument('--resume', action='store_true'); p.add_argument('--recover-once', action='store_true')
+    args = p.parse_args()
+    r = acquire(Path(args.output), args.max_releases, args.max_bytes, resume=args.resume)
+    if args.recover_once and not args.resume and r['errors'] and not r['acquisition_halted'] and any(e['retryable'] for e in r['errors']):
+        time.sleep(15)
+        r = acquire(Path(args.output), args.max_releases, args.max_bytes, resume=True)
+    print(json.dumps({'files': len(r['files']), 'bytes': r['downloaded_bytes'],
+        'skipped': len(r['skipped']), 'unresolved_errors': len(r['errors']),
+        'failure_history_count': len(r['failure_history']), 'recovery_generation': r['recovery_generation'],
+        'bounded_integrity_verified': validate_manifest(r), 'full_history_complete': False}, indent=2))
+    if not validate_manifest(r):
+        raise SystemExit(2)
+
+
+if __name__ == '__main__':
     main()
