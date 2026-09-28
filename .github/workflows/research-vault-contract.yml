@@ -1,0 +1,55 @@
+name: research-vault-contract
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-vault.txt
+      - name: Synthetic envelope and public-observation tests only
+        run: |
+          python -m unittest discover -s tests -p 'test_research_vault.py' -v
+          python -m unittest discover -s tests -p 'test_public_observation_contract.py' -v
+          python -m py_compile tools/research_vault.py tools/research_journal_guard.py tools/public_observation_contract.py
+      - name: Publication-path guard
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ "$EVENT_NAME" != 'workflow_dispatch' ] && [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != '0000000000000000000000000000000000000000' ]; then
+            python tools/research_journal_guard.py "$BASE_SHA" "$HEAD_SHA"
+          else
+            echo 'Diff guard not applicable; no manual publication performed.'
+          fi
+      - name: Package tooling only; no identities, plaintext journals or empirical results
+        run: |
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+          paths = ['tools/research_vault.py','tools/research_journal_guard.py','tools/public_observation_contract.py','tests/test_research_vault.py','tests/test_public_observation_contract.py','requirements-vault.txt','docs/research_vault.md','research_vault/POLICY.md','research_vault/journal_template.json','.github/workflows/research-vault-contract.yml']
+          Path('vault_delivery').mkdir()
+          with zipfile.ZipFile('vault_delivery/research_vault_tools.zip','w',compression=zipfile.ZIP_DEFLATED) as z:
+              for p in paths:
+                  z.write(p,arcname=p)
+          print('Tooling-only package created. No personal identity has been initialized.')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-vault-tools-${{ github.run_id }}
+          path: vault_delivery/research_vault_tools.zip
+          retention-days: 14
+          if-no-files-found: error

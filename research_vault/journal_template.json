@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "record_type": "LOCAL_TEMPLATE_NOT_A_RESULT",
+  "run_id": null,
+  "previous_ciphertext_sha256": null,
+  "repository_commit": null,
+  "input_watermark": null,
+  "sources": [],
+  "work_summary": [],
+  "data_quality_findings": [],
+  "hypothesis_registry": [],
+  "discovery_results": [],
+  "confirmatory_results": [],
+  "cost_and_capital_assumptions": [],
+  "root_cause_claims": [],
+  "counterevidence": [],
+  "missing_evidence": [],
+  "decision": "NOT_EVALUATED",
+  "next_check": null,
+  "private_reasoning_or_credentials": "DO_NOT_INCLUDE",
+  "live_orders_enabled": false
+}
