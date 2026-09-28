@@ -1,0 +1,45 @@
+name: sealed-feed-contract
+on:
+  pull_request:
+    paths: ['tools/sealed_public_feed.py', 'tests/test_sealed_public_feed.py', '.github/workflows/sealed-feed-contract.yml', '.github/workflows/canary-research.yml', '.github/workflows/canary-forward.yml', '.github/workflows/polymarket-eda.yml', '.github/workflows/import-run-24869603988-and-analyze.yml', '.github/workflows/run-24869603988-analysis.yml']
+  push:
+    branches: [main]
+    paths: ['tools/sealed_public_feed.py', 'tests/test_sealed_public_feed.py', '.github/workflows/sealed-feed-contract.yml', '.github/workflows/canary-research.yml', '.github/workflows/canary-forward.yml', '.github/workflows/polymarket-eda.yml', '.github/workflows/import-run-24869603988-and-analyze.yml', '.github/workflows/run-24869603988-analysis.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-vault.txt
+      - name: Synthetic contracts only; no live data, recipient, or personal keys
+        run: |
+          python -m unittest discover -s tests -p 'test_sealed_public_feed.py' -v
+          python -m unittest discover -s tests -p 'test_research_vault.py' -v
+          python -m unittest discover -s tests -p 'test_public_observation_contract.py' -v
+          python -m py_compile tools/sealed_public_feed.py
+      - name: Package public tools and synthetic tests only
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+          paths=['tools/sealed_public_feed.py','tools/research_vault.py','tools/public_observation_contract.py','tools/research_journal_guard.py','tests/test_sealed_public_feed.py','tests/test_research_vault.py','tests/test_public_observation_contract.py','docs/sealed_public_feed.md','requirements-vault.txt']
+          with zipfile.ZipFile('sealed_public_tools.zip','w',zipfile.ZIP_DEFLATED) as z:
+              for name in paths:
+                  p=Path(name)
+                  if p.is_file():z.write(p,name)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sealed-public-tools-${{ github.run_id }}
+          path: sealed_public_tools.zip
+          retention-days: 14
+          if-no-files-found: error
