@@ -26,16 +26,29 @@ jobs:
           python -m unittest discover -s tests -p 'test_research_vault.py' -v
           python -m unittest discover -s tests -p 'test_public_observation_contract.py' -v
           python -m py_compile tools/sealed_public_feed.py
-      - name: Package public tools and synthetic tests only
+      - name: Package tools and validate the portable archive with synthetic data
         run: |
           python - <<'PY'
           from pathlib import Path
-          import zipfile
+          import hashlib, json, subprocess, sys, tempfile, zipfile
           paths=['tools/sealed_public_feed.py','tools/research_vault.py','tools/public_observation_contract.py','tools/research_journal_guard.py','tests/test_sealed_public_feed.py','tests/test_research_vault.py','tests/test_public_observation_contract.py','docs/sealed_public_feed.md','requirements-vault.txt']
+          paths += ['.github/workflows/'+n for n in ['canary-research.yml','canary-forward.yml','polymarket-eda.yml','import-run-24869603988-and-analyze.yml','run-24869603988-analysis.yml']]
+          manifest={}
           with zipfile.ZipFile('sealed_public_tools.zip','w',zipfile.ZIP_DEFLATED) as z:
               for name in paths:
                   p=Path(name)
-                  if p.is_file():z.write(p,name)
+                  if not p.is_file(): raise SystemExit('Required public tooling file missing')
+                  raw=p.read_bytes()
+                  manifest[name]=hashlib.sha256(raw).hexdigest()
+                  z.writestr(name,raw)
+              z.writestr('MANIFEST_SHA256.json',json.dumps(manifest,sort_keys=True,indent=2))
+          with tempfile.TemporaryDirectory() as td:
+              with zipfile.ZipFile('sealed_public_tools.zip') as z: z.extractall(td)
+              for name,expected in manifest.items():
+                  assert hashlib.sha256((Path(td)/name).read_bytes()).hexdigest()==expected
+              for pattern in ['test_sealed_public_feed.py','test_research_vault.py','test_public_observation_contract.py']:
+                  subprocess.run([sys.executable,'-m','unittest','discover','-s','tests','-p',pattern],cwd=td,check=True)
+          print('Portable public tools verified; tests used synthetic data only.')
           PY
       - uses: actions/upload-artifact@v4
         with:
