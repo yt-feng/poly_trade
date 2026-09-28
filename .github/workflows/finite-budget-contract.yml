@@ -1,10 +1,10 @@
 name: finite-budget-contract
 on:
   pull_request:
-    paths: ['tools/finite_budget_math.py', 'tests/test_finite_budget_math.py', 'docs/finite_budget_math.md', '.github/workflows/finite-budget-contract.yml']
+    paths: ['tools/finite_budget_math.py', 'tests/test_finite_budget*.py', 'docs/finite_budget_math.md', '.github/workflows/finite-budget-contract.yml']
   push:
     branches: [main]
-    paths: ['tools/finite_budget_math.py', 'tests/test_finite_budget_math.py', 'docs/finite_budget_math.md', '.github/workflows/finite-budget-contract.yml']
+    paths: ['tools/finite_budget_math.py', 'tests/test_finite_budget*.py', 'docs/finite_budget_math.md', '.github/workflows/finite-budget-contract.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,9 +20,9 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install -r requirements-vault.txt
-      - name: Synthetic mathematics and inherited envelope contracts only
+      - name: Synthetic mathematics and sealed CLI only
         run: |
-          python -m unittest discover -s tests -p 'test_finite_budget_math.py' -v
+          python -m unittest discover -s tests -p 'test_finite_budget*.py' -v
           python -m unittest discover -s tests -p 'test_research_vault.py' -v
           python -m py_compile tools/finite_budget_math.py
       - name: Build public synthetic demonstration and verified portable package
@@ -34,7 +34,7 @@ jobs:
           from finite_budget_math import binary_states,evaluate_stake,binary_thresholds,minimum_bankroll_boundary
           demo={'scope':'SYNTHETIC_MATH_NOT_EMPIRICAL_OR_A_FORECAST','p':.26,'win_net_return':3,'loss_fraction':1,'stake':1,'rows':[dict(equity=w,**evaluate_stake(w,1,binary_states(.26,3,1,30))) for w in (10,20,50,100)],'thresholds':binary_thresholds(.26,3,1,.1),'bankroll_boundary':minimum_bankroll_boundary(1,.26,3,1)}
           Path('SYNTHETIC_MATH.json').write_text(json.dumps(demo,indent=2,allow_nan=False)+'\n')
-          paths=['tools/finite_budget_math.py','tools/research_vault.py','tools/research_journal_guard.py','tests/test_finite_budget_math.py','tests/test_research_vault.py','docs/finite_budget_math.md','requirements-vault.txt','SYNTHETIC_MATH.json']
+          paths=['tools/finite_budget_math.py','tools/research_vault.py','tools/research_journal_guard.py','tests/test_finite_budget_math.py','tests/test_finite_budget_io.py','tests/test_research_vault.py','docs/finite_budget_math.md','requirements-vault.txt','SYNTHETIC_MATH.json']
           manifest={name:hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in paths}
           Path('TOOL_SHA256.json').write_text(json.dumps(manifest,sort_keys=True,indent=2)+'\n')
           with zipfile.ZipFile('finite_budget_tools.zip','w',zipfile.ZIP_DEFLATED) as z:
@@ -42,7 +42,7 @@ jobs:
           with tempfile.TemporaryDirectory() as d:
               with zipfile.ZipFile('finite_budget_tools.zip') as z:z.extractall(d)
               for name,h in manifest.items():assert hashlib.sha256((Path(d)/name).read_bytes()).hexdigest()==h
-              subprocess.run([sys.executable,'-m','unittest','discover','-s','tests','-p','test_finite_budget_math.py'],cwd=d,check=True)
+              subprocess.run([sys.executable,'-m','unittest','discover','-s','tests','-p','test_finite_budget*.py'],cwd=d,check=True)
           print(json.dumps(demo,indent=2,allow_nan=False))
           PY
       - uses: actions/upload-artifact@v4
