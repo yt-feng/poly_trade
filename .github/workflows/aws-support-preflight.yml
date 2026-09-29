@@ -1,0 +1,36 @@
+name: AWS support preflight
+
+on:
+  push:
+    branches:
+      - codex/aws-support-environment-20260929
+    paths:
+      - .github/workflows/aws-support-preflight.yml
+      - tools/aws_support_preflight.py
+      - tests/test_aws_support_preflight.py
+      - docs/aws_support_environment.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  support-preflight:
+    if: github.ref == 'refs/heads/codex/aws-support-environment-20260929'
+    environment: aws-support
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out support preflight
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate preflight response checks
+        run: python3 -I -B -m unittest discover -s tests -p test_aws_support_preflight.py
+      - name: Check isolated AWS support workspace
+        env:
+          AWS_SUPPORT_HOST: ${{ secrets.AWS_SUPPORT_HOST }}
+          AWS_SUPPORT_USER: ${{ secrets.AWS_SUPPORT_USER }}
+          AWS_SUPPORT_SSH_KEY: ${{ secrets.AWS_SUPPORT_SSH_KEY }}
+          AWS_SUPPORT_KNOWN_HOSTS: ${{ secrets.AWS_SUPPORT_KNOWN_HOSTS }}
+        run: python3 -I -B tools/aws_support_preflight.py
