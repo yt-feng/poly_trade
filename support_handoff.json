@@ -1,0 +1,241 @@
+{
+  "schema_version": "1.0",
+  "document_type": "public_support_handoff",
+  "run_id": "20260929T113749Z",
+  "created_at_utc": "2026-09-29T11:54:00Z",
+  "support_collection_as_of_utc": "2026-09-29T11:48:53Z",
+  "mode": "support_only",
+  "trading_enabled": false,
+  "status": "partial",
+  "public_content_scope": "execution_support_status_and_previously_public_run_metadata_only",
+  "source_bundle": {
+    "plaintext_sha256": "28d51032c1cd39c8da0f12f65bee07e8f90dba2c4726159cf2cd05e70cdc006b",
+    "plaintext_size_bytes": 67356,
+    "publication_form": "encrypted_only",
+    "encrypted_url": "research_vault/records/28d51032c1cd.vault",
+    "encryption_and_upload_status": "sealed_file_published_in_same_tree_as_this_manifest",
+    "encrypted_path": "research_vault/records/28d51032c1cd.vault",
+    "ciphertext_sha256": "9af34f0afc7d912d6f29fb39d2c4f7c92776d686fcbc2a4ad7c299c1096f4d1b",
+    "ciphertext_size_bytes": 90113,
+    "recipient_id": "fbd48fbb052f0f4d47187fe6f5b4cab93215517fcfb37ea456441ddf13e9141d",
+    "scheme": "X25519-HKDF-SHA256-AES256GCM-v1",
+    "recipient_fingerprint_verified": true,
+    "envelope_syntax_verified": true,
+    "decryption_performed": false,
+    "tool_source_sha256": "ad5b42a94a850bc744b1e45d0f10497f4648783006ef8db9ee995773cc4f1676"
+  },
+  "environment": {
+    "isolated_local_support_environment_ready": true,
+    "actual_versions_in_sealed_bundle": true,
+    "chatgpt_platform_repair_claim": false
+  },
+  "completed_observations": [
+    {
+      "step": "isolated_support_environment",
+      "status": "completed"
+    },
+    {
+      "step": "historical_run_metadata",
+      "status": "completed",
+      "exit_code": 0,
+      "source": "https://github.com/yt-feng/poly/actions/runs/36547009200"
+    },
+    {
+      "step": "historical_job_metadata",
+      "status": "completed",
+      "exit_code": 0,
+      "source": "https://github.com/yt-feng/poly/actions/runs/36547009200/job/109336100547"
+    },
+    {
+      "step": "historical_artifact_metadata",
+      "status": "completed",
+      "exit_code": 0,
+      "source": "https://api.github.com/repos/yt-feng/poly/actions/artifacts/11022698629"
+    },
+    {
+      "step": "support_tooling_checks",
+      "evidence_class": "synthetic_local_tooling_tests",
+      "refresh_tests_passed": 9,
+      "collector_tests_passed": 7,
+      "fixed_experiment_tests_executed": 0
+    }
+  ],
+  "current_remote_state": {
+    "status": "not_obtained_in_this_support_collection",
+    "repositories": {
+      "yt-feng/poly": {
+        "main_sha": null,
+        "current_open_prs": null,
+        "pr_10_current_state": null,
+        "workflow_states": null
+      },
+      "yt-feng/poly_trade": {
+        "main_sha": null,
+        "current_open_prs": null,
+        "workflow_states": null
+      }
+    },
+    "watermark_comparison": "comparison_incomplete",
+    "local_head_is_not_current_remote_main": true
+  },
+  "historical_public_case": {
+    "repository": "yt-feng/poly",
+    "run_id": 36547009200,
+    "run_url": "https://github.com/yt-feng/poly/actions/runs/36547009200",
+    "job_id": 109336100547,
+    "job_url": "https://github.com/yt-feng/poly/actions/runs/36547009200/job/109336100547",
+    "artifact_id": 11022698629,
+    "artifact_metadata_url": "https://api.github.com/repos/yt-feng/poly/actions/artifacts/11022698629",
+    "artifact_download_url": "https://api.github.com/repos/yt-feng/poly/actions/artifacts/11022698629/zip",
+    "source_sha": "ce443fae62d1e4e2aa7041b4a6b35e114978ac01",
+    "source_sha_role": "historical_run_commit_not_current_main",
+    "observed_failure_step": {
+      "name": "Public feeds smoke test, no trading credentials",
+      "status": "completed",
+      "conclusion": "failure",
+      "number": 5,
+      "started_at": "2026-09-29T09:08:32Z",
+      "completed_at": "2026-09-29T09:10:32Z"
+    },
+    "download": {
+      "status": "timeout",
+      "exit_code": 124,
+      "timeout_seconds": 60,
+      "received_bytes": 490464,
+      "expected_size_bytes": 16494247,
+      "expected_sha256": "5bca079377bb213a51801ac3006690aede7d6070d69d559d18f9620a9b8b97ab",
+      "digest_verified": false,
+      "complete_zip_available": false,
+      "partial_bytes_retained": false,
+      "parser_reached": false
+    },
+    "reported_error": {
+      "text": "resolution_reference缺失",
+      "provenance": "user_supplied_historical_lead",
+      "verified_from_original_log_this_collection": false
+    },
+    "replay_stages": [
+      {
+        "stage": "page_identity",
+        "label": "页面身份",
+        "status": "not_evaluable",
+        "satisfies_original_condition": null
+      },
+      {
+        "stage": "rsc_parse",
+        "label": "RSC解析",
+        "status": "not_evaluable",
+        "satisfies_original_condition": null
+      },
+      {
+        "stage": "query_key",
+        "label": "queryKey",
+        "status": "not_evaluable",
+        "satisfies_original_condition": null
+      },
+      {
+        "stage": "status",
+        "label": "状态",
+        "status": "not_evaluable",
+        "satisfies_original_condition": null
+      },
+      {
+        "stage": "updated_at",
+        "label": "更新时间",
+        "status": "not_evaluable",
+        "satisfies_original_condition": null
+      },
+      {
+        "stage": "lookback",
+        "label": "lookback",
+        "status": "not_evaluable",
+        "satisfies_original_condition": null
+      },
+      {
+        "stage": "open_price",
+        "label": "openPrice",
+        "status": "not_evaluable",
+        "satisfies_original_condition": null
+      }
+    ],
+    "replay_exit_code": 2,
+    "replay_exit_code_meaning": "required_original_inputs_and_frozen_source_unavailable; not a parser failure"
+  },
+  "fixed_reproduction": {
+    "status": "not_run",
+    "input_status": "required_frozen_input_unavailable_in_the_initial_support_collection",
+    "input_sha256": null,
+    "commands": [
+      {
+        "command": "python run_audit.py verify",
+        "status": "not_run",
+        "exit_code": null
+      },
+      {
+        "command": "python run_audit.py test",
+        "status": "not_run",
+        "exit_code": null
+      },
+      {
+        "command": "python run_audit.py study --rebuild",
+        "status": "not_run",
+        "exit_code": null
+      }
+    ],
+    "test_counts": null,
+    "rebuild_consistency": "not_evaluated"
+  },
+  "missing_inputs": [
+    {
+      "id": "fixed_bundle",
+      "required": "The named frozen ZIP, supplied by the user through its actual local location or direct transfer; outer SHA256 and archive review are still required."
+    },
+    {
+      "id": "current_remote_state",
+      "required": "Current main SHA, open PR states and requested workflow observations for the two named repositories; the previous collection stopped before obtaining them."
+    },
+    {
+      "id": "original_artifact",
+      "required": "Complete artifact 11022698629 with SHA256 matching the published metadata."
+    },
+    {
+      "id": "historical_page",
+      "required": "Original micro_event_page HTML, original slug/URL, original received timestamp with units and timezone, and record identity."
+    },
+    {
+      "id": "historical_market",
+      "required": "Original metadata for the same slug, including condition ID, source and received timestamp."
+    },
+    {
+      "id": "frozen_parser",
+      "required": "Parser and its direct dependencies/configuration at historical commit ce443fae62d1e4e2aa7041b4a6b35e114978ac01."
+    },
+    {
+      "id": "historical_error",
+      "required": "Original health state and shortest relevant failure-log excerpt for job 109336100547."
+    }
+  ],
+  "interpretation_limits": [
+    "Run/job times are not the original page received time.",
+    "All seven replay stages are not_evaluable, not failed.",
+    "Workflow conclusions do not establish data completeness or strategy validity.",
+    "No frozen experiment was run and no new out-of-sample evidence was produced.",
+    "The current page or later prices cannot replace the historical inputs."
+  ],
+  "public_privacy_review": {
+    "contains_strategy_parameters": false,
+    "contains_private_research_results": false,
+    "contains_local_filesystem_paths": false,
+    "contains_credentials": false,
+    "contains_unrelated_account_metadata": false
+  },
+  "publication": {
+    "purpose": "user_requested_private_support_handoff_on_github",
+    "branch": "codex/chatgpt-support-20260929-113749",
+    "repository": "yt-feng/poly_trade",
+    "storage_branch_only": true,
+    "contains_workflow_definitions": false,
+    "publication_does_not_change_initial_collection_results": true,
+    "vault_tool_source_commit": "28e42100b397e5e5fe588a2061b9e7f37aed4cea"
+  }
+}
