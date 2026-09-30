@@ -7,6 +7,7 @@ failure remains a failure unless the missing bytes actually arrive and verify.
 from __future__ import annotations
 import argparse
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -34,6 +35,13 @@ class TransportError(RuntimeError):
 
 class AccessRefused(TransportError):
     pass
+
+
+class ResponseError(TransportError):
+    """A successful HTTP status did not produce a complete usable response."""
+    def __init__(self, reason, attempts=1):
+        super().__init__(None, True, attempts)
+        self.args = (reason,)
 
 
 class SafeRedirect(urllib.request.HTTPRedirectHandler):
@@ -69,7 +77,7 @@ def _retry_wait(headers, attempt):
     return min(8.0, 2.0 ** attempt) + random.uniform(0, 0.25)
 
 
-def request(url: str) -> bytes:
+def request(url: str, *, json_response=False):
     parsed = urlparse(url)
     valid = (url.startswith(API + '/') or
              url.startswith('https://github.com/yt-feng/poly/releases/download/'))
@@ -88,6 +96,15 @@ def request(url: str) -> bytes:
                 body = resp.read(RESPONSE_CAP + 1)
                 if len(body) > RESPONSE_CAP:
                     raise ValueError('RESPONSE_BYTE_CAP')
+                # read(amount) can return short bytes at EOF without raising
+                # IncompleteRead. Never accept even parseable truncated JSON.
+                if length is not None and len(body) != int(length):
+                    raise ResponseError('RESPONSE_LENGTH_MISMATCH')
+                if json_response:
+                    try:
+                        return json.loads(body)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        raise ResponseError('INVALID_JSON_RESPONSE') from None
                 return body
         except urllib.error.HTTPError as exc:
             if exc.code in REFUSALS:
@@ -96,6 +113,13 @@ def request(url: str) -> bytes:
             if not retryable or attempt == 3:
                 raise TransportError(exc.code, retryable, attempt + 1) from None
             delay = _retry_wait(exc.headers, attempt)
+        except (ResponseError, http.client.IncompleteRead, http.client.RemoteDisconnected) as exc:
+            # JSON parsing and body completeness share the HTTP retry budget;
+            # a separate decode retry loop would multiply network attempts.
+            reason = str(exc) if isinstance(exc, ResponseError) else 'INCOMPLETE_HTTP_RESPONSE'
+            if attempt == 3:
+                raise ResponseError(reason, attempt + 1) from None
+            delay = _retry_wait(None, attempt)
         except (TimeoutError, OSError) as exc:
             if attempt == 3:
                 raise TransportError(None, True, attempt + 1) from None
@@ -105,7 +129,7 @@ def request(url: str) -> bytes:
 
 
 def get_json(url):
-    return json.loads(request(url))
+    return request(url, json_response=True)
 
 
 def list_capture_releases(max_releases):
@@ -226,6 +250,23 @@ def _error(item, exc):
             'access_refused': isinstance(exc, AccessRefused)}
 
 
+def _planning_failure(out, max_releases, max_bytes, exc):
+    """Leave evidence even when discovery fails before a plan can be frozen."""
+    error = _error({'tag': None, 'name': None}, exc)
+    error.update(stage='selection_plan', attempts=getattr(exc, 'attempts', 1))
+    manifest = {
+        'created_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'source_repository': 'yt-feng/poly', 'read_only': True,
+        'max_releases': max_releases, 'max_bytes': max_bytes,
+        'selection_complete': False, 'plan_sha256': None,
+        'releases': [], 'files': [], 'skipped': [], 'errors': [error],
+        'downloaded_bytes': 0, 'eligible_archives_total': 0,
+        'failure_history': [], 'recovery_generation': 0,
+        'acquisition_halted': True, 'full_history_complete': False,
+    }
+    save_json(out / 'acquisition_manifest.json', manifest)
+
+
 def _manifest(plan, state, generation):
     m = {'created_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'source_repository': 'yt-feng/poly', 'read_only': True, 'asset_pagination': True,
@@ -233,7 +274,7 @@ def _manifest(plan, state, generation):
         'downloaded_bytes': 0, 'eligible_archives_total': len(plan['items']),
         'budget_exhausted': False, 'releases': [], 'files': [], 'skipped': [], 'errors': [],
         'plan_sha256': digest(plan), 'recovery_generation': generation, 'failure_history': [],
-        'acquisition_halted': False, 'full_history_complete': False,
+        'selection_complete': True, 'acquisition_halted': False, 'full_history_complete': False,
         'resume_reuses_only_locally_rehashed_files': True}
     for r in plan['releases']:
         rec = dict(r, downloaded_snapshot_label_archives=0, budget_skipped_snapshot_label_archives=0)
@@ -276,7 +317,12 @@ def acquire(out: Path, max_releases=16, max_bytes=DEFAULT_MAX_BYTES, *, resume=F
     else:
         if planfile.exists() or statefile.exists():
             raise ValueError('EXISTING_PLAN_REQUIRES_EXPLICIT_RESUME')
-        plan = _plan(max_releases, max_bytes); state = {}; generation = 0
+        try:
+            plan = _plan(max_releases, max_bytes)
+        except Exception as exc:
+            _planning_failure(out, max_releases, max_bytes, exc)
+            raise
+        state = {}; generation = 0
         save_json(planfile, {'plan': plan, 'sha256': digest(plan)})
     def checkpoint():
         save_json(statefile, {'plan_sha256': digest(plan), 'generation': generation, 'states': state})
@@ -335,7 +381,8 @@ def acquire(out: Path, max_releases=16, max_bytes=DEFAULT_MAX_BYTES, *, resume=F
 
 def validate_manifest(m):
     expected = sum(r['eligible_snapshot_label_archives'] for r in m.get('releases', []))
-    return bool(expected > 0 and expected == len(m.get('files', [])) + len(m.get('skipped', [])) + len(m.get('errors', []))
+    return bool(m.get('selection_complete', True) and not m.get('acquisition_halted', False)
+                and expected > 0 and expected == len(m.get('files', [])) + len(m.get('skipped', [])) + len(m.get('errors', []))
                 and not m.get('errors') and m.get('files')
                 and any(f['name'].startswith('snapshots-') for f in m['files'])
                 and m['downloaded_bytes'] == sum(f['bytes'] for f in m['files'])
