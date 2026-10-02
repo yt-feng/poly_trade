@@ -44,6 +44,21 @@ class ResponseError(TransportError):
         self.args = (reason,)
 
 
+class DiscoveryBudget:
+    """Shared cap: the previous five catalog pages allowed four attempts each."""
+    def __init__(self):
+        self.remaining = 20
+        self.used = 0
+
+    def consume(self):
+        if self.remaining <= 0:
+            error = TransportError(None, False, self.used)
+            error.args = ('RELEASE_DISCOVERY_ATTEMPT_BUDGET',)
+            raise error
+        self.remaining -= 1
+        self.used += 1
+
+
 class SafeRedirect(urllib.request.HTTPRedirectHandler):
     """Follow normal GitHub asset redirects, never forward credentials cross-host."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -77,17 +92,21 @@ def _retry_wait(headers, attempt):
     return min(8.0, 2.0 ** attempt) + random.uniform(0, 0.25)
 
 
-def request(url: str, *, json_response=False):
+def request(url: str, *, json_response=False, request_budget=None):
     parsed = urlparse(url)
     valid = (url.startswith(API + '/') or
              url.startswith('https://github.com/yt-feng/poly/releases/download/'))
     if not valid or parsed.username or parsed.password or parsed.fragment:
         raise ValueError('UNEXPECTED_PUBLIC_SOURCE')
+    if request_budget is not None and not isinstance(request_budget, DiscoveryBudget):
+        raise ValueError('INVALID_DISCOVERY_BUDGET')
     headers = {'User-Agent': 'poly-forward-readonly', 'Accept': 'application/vnd.github+json'}
     if parsed.hostname == 'api.github.com' and os.environ.get('GH_TOKEN'):
         headers['Authorization'] = 'Bearer ' + os.environ['GH_TOKEN']
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), SafeRedirect())
     for attempt in range(4):
+        if request_budget is not None:
+            request_budget.consume()
         try:
             with opener.open(urllib.request.Request(url, headers=headers), timeout=30) as resp:
                 length = resp.headers.get('Content-Length')
@@ -128,18 +147,41 @@ def request(url: str, *, json_response=False):
     raise AssertionError('unreachable')
 
 
-def get_json(url):
-    return request(url, json_response=True)
+def get_json(url, *, request_budget=None):
+    if request_budget is None:
+        return request(url, json_response=True)
+    return request(url, json_response=True, request_budget=request_budget)
 
 
 def list_capture_releases(max_releases):
-    releases = []
-    for page in range(1, 6):
-        batch = get_json(f'{API}/releases?per_page=100&page={page}')
-        if not isinstance(batch, list):
+    """Fetch small pages but select only at the old 100-record boundaries.
+
+    For a stable catalog this preserves the old candidate set and publication
+    sort, rather than selecting from whichever smaller page happened to arrive.
+    Twenty shared HTTP attempts cap discovery; response/denial rules still apply.
+    A repeated release identity is rejected because shifting pagination cannot
+    certify a complete logical batch. No failed logical page is silently skipped.
+    """
+    if type(max_releases) is not int or max_releases <= 0:
+        raise ValueError('POSITIVE_INTEGER_LIMITS_REQUIRED')
+    releases, seen = [], set()
+    budget = DiscoveryBudget()
+    per_page = 25
+    for page in range(1, 21):
+        batch = get_json(f'{API}/releases?per_page={per_page}&page={page}', request_budget=budget)
+        if not isinstance(batch, list) or len(batch) > per_page:
             raise ValueError('RELEASE_SCHEMA')
-        releases.extend(r for r in batch if RELEASE_RE.fullmatch(str(r.get('tag_name', ''))))
-        if len(batch) < 100 or len(releases) >= max_releases:
+        for release in batch:
+            if (not isinstance(release, dict) or type(release.get('id')) is not int
+                    or release['id'] <= 0):
+                raise ValueError('RELEASE_IDENTITY_SCHEMA')
+            if release['id'] in seen:
+                raise ValueError('RELEASE_PAGINATION_IDENTITY_REPEATED')
+            seen.add(release['id'])
+            if RELEASE_RE.fullmatch(str(release.get('tag_name', ''))):
+                releases.append(release)
+        exhausted = len(batch) < per_page
+        if exhausted or (page % 4 == 0 and len(releases) >= max_releases):
             break
     releases.sort(key=lambda r: str(r.get('published_at', '')), reverse=True)
     return releases[:max_releases]
@@ -207,7 +249,10 @@ def _plan(max_releases, max_bytes):
     if not releases:
         raise ValueError('NO_CAPTURE_RELEASES')
     plan = {'version': 1, 'source_repository': 'yt-feng/poly', 'max_releases': max_releases,
-            'max_bytes': max_bytes, 'releases': [], 'items': []}
+            'max_bytes': max_bytes, 'releases': [], 'items': [],
+            'release_discovery': {'physical_page_size': 25, 'logical_selection_batch': 100,
+                'max_catalog_records': 500, 'max_http_attempts': 20,
+                'method': 'bounded_small_pages_before_selection'}}
     reserved = 0
     for release in releases:
         tag = str(release['tag_name']); rid = int(release['id'])

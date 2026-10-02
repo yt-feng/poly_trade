@@ -48,14 +48,36 @@ jobs:
           p=Path('forward_inputs/acquisition_manifest.json')
           m=json.loads(p.read_text()) if p.exists() else {}
           ok=validate_manifest(m)
+          # Expose only typed transport metadata, never exception text, URLs,
+          # headers, bodies, filenames or credentials. Do not alter recovery.
+          def bounded_int(value, low, high):
+              return value if type(value) is int and low <= value <= high else None
+          def known_bool(value):
+              return value if type(value) is bool else None
+          errors=m.get('errors', [])
+          phase=('selection_plan' if m.get('selection_complete') is False
+                 else 'archive_transfer' if m.get('selection_complete') is True
+                 else 'unknown')
+          public_failures=[]
+          for error in errors[:20]:
+              error=error if isinstance(error, dict) else {}
+              public_failures.append({'phase':phase,
+                  'http_status':bounded_int(error.get('http_status'),100,599),
+                  'attempts':bounded_int(error.get('attempts'),1,100),
+                  'retryable':known_bool(error.get('retryable')),
+                  'access_refused':known_bool(error.get('access_refused'))})
           state={'scope':'bounded_public_archive_integrity_only',
             'bounded_acquisition_complete':ok,
             'downloaded_files':len(m.get('files',[])),
-            'unresolved_error_count':len(m.get('errors',[])),
+            'unresolved_error_count':len(errors),
             'recovered_failure_count':len(m.get('failure_history',[])),
             'budget_skips':len(m.get('skipped',[])),
             'acquisition_halted':m.get('acquisition_halted',True),
-            'full_history_complete':False, 'strategy_evaluated':False, 'live_trading_enabled':False}
+            'full_history_complete':False, 'strategy_evaluated':False, 'live_trading_enabled':False,
+            'status_contract_version':2, 'source_manifest_present':p.is_file(),
+            'selection_complete':known_bool(m.get('selection_complete')),
+            'public_failures':public_failures,
+            'failure_details_omitted':max(0,len(errors)-len(public_failures))}
           save_json(Path('forward_inputs/deployment_status.json'),state)
           print(json.dumps(state,indent=2))
           if not ok:raise SystemExit('Public archive integrity not satisfied; retained evidence is partial.')
