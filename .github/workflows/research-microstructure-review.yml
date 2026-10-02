@@ -1,0 +1,32 @@
+name: microstructure-review-research
+on:
+  pull_request:
+    paths:
+      - 'analysis/acquire_microstructure_review.py'
+      - '.github/workflows/research-microstructure-review.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  research-data:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'research/microstructure-review-20260923'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fetch checksummed public capture archives and offline research
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -u analysis/acquire_microstructure_review.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: microstructure-review-${{ github.run_id }}
+          path: research_bundle/
+          retention-days: 7
+          compression-level: 1
