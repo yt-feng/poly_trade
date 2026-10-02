@@ -196,6 +196,97 @@ def classify(record: dict) -> dict:
         return result("fill", "FILL_STATUS_UNKNOWN", final=False)
 
 
+# These validators serve the supplied-state audit boundary only. The legacy
+# single-row classifier retains its historical API and never authorizes cash.
+_STATE_FLAGS = frozenset((
+    'reconciliation_unknown', 'entry_order_terminal', 'order_terminal',
+    'position_flat', 'cash_reconciled', 'market_expired',
+    'official_resolution_observed', 'redeem_confirmed', 'redeem_requested',
+    'redeemable', 'exit_trade_confirmed', 'order_submitted',
+    'fill_reconciliation_complete',
+))
+_QUANTITY_FIELDS = (
+    'confirmed_filled_shares', 'remaining_position_shares', 'requested_shares',
+    'matched_shares',
+)
+_PENDING_TRADE_STATES = frozenset(('MATCHED', 'MINED', 'RETRYING', 'PENDING', 'DELAYED'))
+_ANNOTATIONS = frozenset(('strategy_id', 'strategy_ids', 'model_id', 'model_score'))
+
+
+def _supplied_state_issue(record: Any) -> str | None:
+    """Validate shape/quantities without serializing evidence into error output.
+
+    Missing optional fields remain missing. An explicit non-boolean state flag
+    is not a false assertion. Validate historical rows too: a later clean row
+    must not conceal invalid supplied evidence.
+    """
+    if not isinstance(record, dict):
+        return 'SNAPSHOT_OBJECT_REQUIRED'
+    if any(not isinstance(k, str) for k in record):
+        return 'SNAPSHOT_STRING_KEYS_REQUIRED'
+    for key in _STATE_FLAGS:
+        if key in record and type(record[key]) is not bool:
+            return 'STATE_FLAG_MUST_BE_BOOLEAN'
+    for key in ('order_status', 'trade_status'):
+        if key in record and not isinstance(record[key], str):
+            return 'TRADE_STATE_MUST_BE_STRING'
+    try:
+        json.dumps({k: v for k, v in record.items() if k not in _ANNOTATIONS},
+                   sort_keys=True, separators=(',', ':'), allow_nan=False)
+    except (ValueError, TypeError, RecursionError):
+        return 'SNAPSHOT_NOT_FINITE_JSON'
+    try:
+        quantities = {key: dec(record.get(key)) for key in _QUANTITY_FIELDS}
+    except (ValueError, TypeError, InvalidOperation):
+        return 'INVALID_SUPPLIED_QUANTITY'
+    if any(v is not None and v < 0 for v in quantities.values()):
+        return 'NEGATIVE_SUPPLIED_QUANTITY'
+    requested, confirmed = quantities['requested_shares'], quantities['confirmed_filled_shares']
+    if requested is not None and (requested <= 0 or (confirmed is not None and confirmed > requested)):
+        return 'INCONSISTENT_SUPPLIED_QUANTITY'
+    return None
+
+
+def _classified_supplied_state(record: Any) -> tuple[dict, str | None]:
+    """A bad supplied row stays nonfinal instead of aborting the whole report.
+
+    Catch validation failures, not arbitrary implementation or runtime errors.
+    The separate strict episode audit still refuses *all* certified counts for
+    an invalid batch; valid rows are never promoted into a complete-batch count.
+    """
+    issue = _supplied_state_issue(record)
+    if issue is None and record.get('reconciliation_unknown') is not True:
+        issue = _cash_closure_issue(record)
+    if issue is None:
+        try:
+            return classify(record), None
+        except (ValueError, TypeError, InvalidOperation):
+            issue = 'INVALID_SUPPLIED_EVIDENCE'
+    return result('validation', 'INVALID_SUPPLIED_EVIDENCE', final=False,
+                  detail=issue), issue
+
+
+def _cash_closure_issue(record: dict) -> str | None:
+    """Require explicit inventory and no contradictory pending-trade evidence.
+
+    This checks only internal consistency of the caller's cumulative snapshot.
+    It cannot authenticate an account, confirm settlement, or release funds.
+    """
+    if record.get('cash_reconciled') is not True:
+        return None
+    remaining = dec(record.get('remaining_position_shares'))
+    if remaining is None:
+        return 'CASH_CLOSURE_POSITION_QUANTITY_UNKNOWN'
+    if remaining != 0 or record.get('position_flat') is not True:
+        return 'CASH_CLOSURE_POSITION_CONFLICT'
+    if not (record.get('entry_order_terminal') is True or record.get('order_terminal') is True):
+        return 'CASH_CLOSURE_ORDER_NOT_TERMINAL'
+    statuses = {str(record.get(k) or '').strip().upper() for k in ('order_status', 'trade_status')}
+    matched, confirmed = dec(record.get('matched_shares')), dec(record.get('confirmed_filled_shares'))
+    if statuses & _PENDING_TRADE_STATES or (matched is not None and confirmed is not None and matched > confirmed):
+        return 'CASH_CLOSURE_TRADE_STATE_CONFLICT'
+    return None
+
 
 def audit_episode_identity(records: list[dict], *, as_of_ms: int | None = None) -> dict:
     """Count supplied cumulative snapshots without counting model views as fills.
@@ -213,13 +304,16 @@ def audit_episode_identity(records: list[dict], *, as_of_ms: int | None = None) 
     """
     out = {
         'schema_version': 1, 'status': 'NOT_EVALUABLE', 'issues': [],
-        'record_count': len(records), 'unique_episode_count': None,
+        'record_count': len(records) if isinstance(records, list) else None, 'unique_episode_count': None,
         'supplied_confirmed_entry_episodes': None,
         'supplied_cash_closed_episodes': None, 'nonfinal_episode_count': None,
         'redundant_or_historical_records': None, 'by_latest_reason_code': {},
         'cash_or_pnl_aggregated': False, 'private_receipts_authenticated': False,
         'canary_eligibility_evaluated': False, 'live_action_taken': False,
     }
+    if not isinstance(records, list):
+        out['issues'] = ['RECORD_LIST_REQUIRED']
+        return out
     if type(as_of_ms) is not int or as_of_ms < 0:
         out['issues'] = ['EXPLICIT_AS_OF_REQUIRED']
         return out
@@ -228,6 +322,10 @@ def audit_episode_identity(records: list[dict], *, as_of_ms: int | None = None) 
         return isinstance(value, str) and 0 < len(value) <= 512 and value.strip() == value
     groups, order_owners = {}, {}
     for row in records:
+        _, issue = _classified_supplied_state(row)
+        if issue is not None:
+            out['issues'] = [issue]
+            return out
         ident = row.get('execution_identity')
         if not isinstance(ident, dict) or not all(identity_text(ident.get(k)) for k in fields + ('token_id',)):
             out['issues'] = ['COMPLETE_EXECUTION_IDENTITY_REQUIRED']
@@ -251,7 +349,7 @@ def audit_episode_identity(records: list[dict], *, as_of_ms: int | None = None) 
                 out['issues'] = ['SUBMISSION_ALIASED_ACROSS_EPISODES']
                 return out
             order_owners[order_key] = key
-    annotations = frozenset(('strategy_id', 'strategy_ids', 'model_id', 'model_score'))
+    annotations = _ANNOTATIONS
     latest_records, latest_classes = [], []
     for history in groups.values():
         if len({r['execution_identity']['token_id'] for r in history}) != 1:
@@ -264,7 +362,7 @@ def audit_episode_identity(records: list[dict], *, as_of_ms: int | None = None) 
             # cannot be discarded merely because they are not used by classify.
             states = {json.dumps({k: v for k, v in r.items() if k not in annotations},
                        sort_keys=True, separators=(',', ':'), allow_nan=False) for r in latest}
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             out['issues'] = ['SNAPSHOT_NOT_FINITE_JSON']
             return out
         if len(states) != 1:
@@ -302,8 +400,20 @@ def summarize(records: list[dict], *, as_of_ms: int | None = None) -> dict:
     model views or state history must use episode_audit and check its status.
     Missing identity never silently becomes a strict count or a cash release.
     """
-    classified = [classify(r) for r in records]
+    if not isinstance(records, list):
+        return {
+            'record_count': None, 'legacy_counts_are_row_based': True,
+            'episodes': None, 'by_reason_code': {}, 'by_stage': {},
+            'final_episodes': None, 'nonfinal_episodes': None,
+            'invalid_record_count': None, 'row_validation_issues': [],
+            'episode_audit': audit_episode_identity(records, as_of_ms=as_of_ms),
+            'scope': 'read-only supplied-evidence classification; no account or order API',
+        }
+    checked = [_classified_supplied_state(r) for r in records]
+    classified = [r for r, _ in checked]
+    invalid = [{'row_index': i, 'issue': issue} for i, (_, issue) in enumerate(checked) if issue]
     return {
+        'invalid_record_count': len(invalid), 'row_validation_issues': invalid,
         'record_count': len(classified), 'legacy_counts_are_row_based': True,
         "episodes": len(classified),
         "by_reason_code": dict(Counter(x["reason_code"] for x in classified)),
