@@ -124,8 +124,11 @@ class ReleaseCatalogTests(unittest.TestCase):
         rows=[item(i) for i in range(1,101)]
         op=self.make_opener(rows)
         normal=op.open.side_effect
+        failed_pages=[]
         def opened(req,timeout):
-            if 'page=2' in req.full_url:
+            page=parse_qs(urlparse(req.full_url).query).get('page')
+            if page==['2']:
+                failed_pages.append(page)
                 raise urllib.error.HTTPError(req.full_url,504,'synthetic',{},None)
             return normal(req,timeout)
         op.open.side_effect=opened
@@ -135,6 +138,9 @@ class ReleaseCatalogTests(unittest.TestCase):
             manifest=json.loads((Path(directory)/'acquisition_manifest.json').read_text())
             self.assertFalse(manifest['selection_complete']);self.assertEqual(manifest['files'],[])
             self.assertFalse((Path(directory)/'acquisition_plan.json').exists())
+        self.assertEqual(len(self.urls),1)  # First page actually completed.
+        self.assertEqual(len(failed_pages),4)
+        self.assertEqual(op.open.call_count,5)
 
     def test_invalid_limit_rejected_before_network(self):
         with patch.object(f.urllib.request,'build_opener') as opened:
