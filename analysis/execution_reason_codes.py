@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 from decimal import Decimal, InvalidOperation
+import json
 from typing import Any
 
 
@@ -196,13 +197,119 @@ def classify(record: dict) -> dict:
 
 
 
-def summarize(records: list[dict]) -> dict:
+def audit_episode_identity(records: list[dict], *, as_of_ms: int | None = None) -> dict:
+    """Count supplied cumulative snapshots without counting model views as fills.
+
+    Optional strict contract: every row has execution_identity containing stable
+    account_scope (network/account), collateral_asset, condition_id, episode_id,
+    token_id; observation_ms is when this *whole state* was recorded. These are
+    cumulative snapshots, not trade deltas. A caller must construct/verify that
+    state before calling. A future row is rejected, not silently filtered.
+
+    Strategy/model labels are annotations, never execution identity. Latest
+    equal-time states must agree after removing only the documented annotations.
+    No private receipt is authenticated, no cash is summed/released, and no
+    strategy is selected. Even a consistent supplied count is not live proof.
+    """
+    out = {
+        'schema_version': 1, 'status': 'NOT_EVALUABLE', 'issues': [],
+        'record_count': len(records), 'unique_episode_count': None,
+        'supplied_confirmed_entry_episodes': None,
+        'supplied_cash_closed_episodes': None, 'nonfinal_episode_count': None,
+        'redundant_or_historical_records': None, 'by_latest_reason_code': {},
+        'cash_or_pnl_aggregated': False, 'private_receipts_authenticated': False,
+        'canary_eligibility_evaluated': False, 'live_action_taken': False,
+    }
+    if type(as_of_ms) is not int or as_of_ms < 0:
+        out['issues'] = ['EXPLICIT_AS_OF_REQUIRED']
+        return out
+    fields = ('account_scope', 'collateral_asset', 'condition_id', 'episode_id')
+    def identity_text(value):
+        return isinstance(value, str) and 0 < len(value) <= 512 and value.strip() == value
+    groups, order_owners = {}, {}
+    for row in records:
+        ident = row.get('execution_identity')
+        if not isinstance(ident, dict) or not all(identity_text(ident.get(k)) for k in fields + ('token_id',)):
+            out['issues'] = ['COMPLETE_EXECUTION_IDENTITY_REQUIRED']
+            return out
+        at = row.get('observation_ms')
+        if type(at) is not int or at < 0:
+            out['issues'] = ['EXPLICIT_OBSERVATION_TIME_REQUIRED']
+            return out
+        if at > as_of_ms:
+            out['issues'] = ['FUTURE_OBSERVATION_NOT_USABLE']
+            return out
+        key = tuple(ident[k] for k in fields)
+        groups.setdefault(key, []).append(row)
+        ref = row.get('submission_reference')
+        if ref is not None:
+            if not identity_text(ref):
+                out['issues'] = ['INVALID_SUBMISSION_IDENTITY']
+                return out
+            order_key = (key[0], key[1], ref)
+            if order_key in order_owners and order_owners[order_key] != key:
+                out['issues'] = ['SUBMISSION_ALIASED_ACROSS_EPISODES']
+                return out
+            order_owners[order_key] = key
+    annotations = frozenset(('strategy_id', 'strategy_ids', 'model_id', 'model_score'))
+    latest_records, latest_classes = [], []
+    for history in groups.values():
+        if len({r['execution_identity']['token_id'] for r in history}) != 1:
+            out['issues'] = ['TOKEN_IDENTITY_CONFLICT_WITHIN_EPISODE']
+            return out
+        last_time = max(r['observation_ms'] for r in history)
+        latest = [r for r in history if r['observation_ms'] == last_time]
+        try:
+            # Unknown extra fields are retained, so differing economic facts
+            # cannot be discarded merely because they are not used by classify.
+            states = {json.dumps({k: v for k, v in r.items() if k not in annotations},
+                       sort_keys=True, separators=(',', ':'), allow_nan=False) for r in latest}
+        except (ValueError, TypeError):
+            out['issues'] = ['SNAPSHOT_NOT_FINITE_JSON']
+            return out
+        if len(states) != 1:
+            out['issues'] = ['LATEST_SNAPSHOT_CONFLICT']
+            return out
+        current = latest[0]
+        amount = dec(current.get('confirmed_filled_shares'))
+        if amount is None:
+            out['issues'] = ['LATEST_CONFIRMED_QUANTITY_UNKNOWN']
+            return out
+        prior = [dec(r.get('confirmed_filled_shares')) for r in history]
+        if any(v is not None and v > amount for v in prior):
+            out['issues'] = ['CUMULATIVE_CONFIRMED_QUANTITY_REGRESSED']
+            return out
+        if amount > 0 and not identity_text(current.get('submission_reference')):
+            out['issues'] = ['CONFIRMED_ENTRY_ORDER_IDENTITY_MISSING']
+            return out
+        latest_records.append(current)
+        latest_classes.append(classify(current))
+    out.update(status='CONSISTENT_SUPPLIED_SNAPSHOTS_NOT_AUTHENTICATED',
+        unique_episode_count=len(groups),
+        supplied_confirmed_entry_episodes=sum(dec(r['confirmed_filled_shares']) > 0 for r in latest_records),
+        supplied_cash_closed_episodes=sum(r['reason_code'] == 'CASH_RECONCILED_ROUNDTRIP_COMPLETE' for r in latest_classes),
+        nonfinal_episode_count=sum(not r['final_for_episode'] for r in latest_classes),
+        redundant_or_historical_records=len(records)-len(groups),
+        by_latest_reason_code=dict(Counter(r['reason_code'] for r in latest_classes)))
+    return out
+
+
+def summarize(records: list[dict], *, as_of_ms: int | None = None) -> dict:
+    """Preserve legacy row counters; expose separately identity-audited counts.
+
+    The historic `episodes` field assumes one row per episode and is retained for
+    compatibility ONLY. It is not a confirmed-trade count. Consumers combining
+    model views or state history must use episode_audit and check its status.
+    Missing identity never silently becomes a strict count or a cash release.
+    """
     classified = [classify(r) for r in records]
     return {
+        'record_count': len(classified), 'legacy_counts_are_row_based': True,
         "episodes": len(classified),
         "by_reason_code": dict(Counter(x["reason_code"] for x in classified)),
         "by_stage": dict(Counter(x["stage"] for x in classified)),
         "final_episodes": sum(bool(x["final_for_episode"]) for x in classified),
         "nonfinal_episodes": sum(not bool(x["final_for_episode"]) for x in classified),
+        'episode_audit': audit_episode_identity(records, as_of_ms=as_of_ms),
         "scope": "read-only supplied-evidence classification; no account or order API",
     }
