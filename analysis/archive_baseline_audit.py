@@ -18,6 +18,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 
@@ -444,9 +445,14 @@ def main():
         protocol_bytes = args.protocol.read_bytes()
         p = validate_protocol(json.loads(protocol_bytes))
         result = run(args.poly_root, args.trade_root, p, v3_input=args.v3_input)
+        command = ['python', 'analysis/archive_baseline_audit.py',
+                   '--poly-root', str(args.poly_root), '--trade-root', str(args.trade_root),
+                   '--protocol', str(args.protocol), '--output', str(args.output)]
+        if args.v3_input:
+            command.extend(['--v3-input', str(args.v3_input)])
         result['reproducibility'] = {'protocol_sha256': hashlib.sha256(protocol_bytes).hexdigest(),
             'code_sha256': sha256(Path(__file__)), 'python_version': sys.version,
-            'command': 'python analysis/archive_baseline_audit.py --poly-root ../poly --trade-root . --protocol /PRIVATE/protocol.json --output /PRIVATE/result.json',
+            'command': shlex.join(command),
             'network_used': False, 'stdout_contains_results': False}
         write_private(args.output, result)
         print('LOCAL_AUDIT_COMPLETE. Seal the private output before publishing.')
