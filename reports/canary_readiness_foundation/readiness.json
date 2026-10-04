@@ -8,10 +8,10 @@
     "independent_windows_min": 300,
     "independent_utc_dates_min": 7,
     "execution_evidence_min": 100,
-    "cost_adjusted_lower_bound_positive": true,
-    "three_second_delay_stress_positive": true,
-    "extra_exit_tick_stress_positive": true,
-    "exit_reconciliation_rate_min": 0.99,
+    "cost_adjusted_lower_bound_must_be_positive": true,
+    "three_second_delay_stress_must_be_positive": true,
+    "extra_exit_tick_stress_must_be_positive": true,
+    "exit_reconciliation_rate_minimum": 0.99,
     "private_order_fill_cancel_fee_reconciliation_required": true
   },
   "current_evidence": {
