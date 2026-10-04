@@ -9,7 +9,10 @@ on:
       - 'analysis/canary_evidence_ledger.py'
       - 'analysis/archive_baseline_audit.py'
       - 'analysis/v3_data_contract.py'
+      - 'analysis/walk_forward_execution.py'
       - 'research/strategy/schema/**'
+      - 'docs/walk_forward_execution.md'
+      - 'reports/walk_forward_execution/**'
       - 'docs/archive_baseline_audit.md'
       - 'research/strategy/runs/archive_baseline_20261004_manifest.json'
       - 'research/strategy/private/archive_baseline_20261004.compact.json.enc'
@@ -18,6 +21,7 @@ on:
       - 'tests/test_canary_evidence_ledger.py'
       - 'tests/test_archive_baseline_audit.py'
       - 'tests/test_v3_data_contract.py'
+      - 'tests/test_walk_forward_execution.py'
       - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/evidence_*.json'
       - 'requirements-research.txt'
@@ -31,7 +35,10 @@ on:
       - 'analysis/canary_evidence_ledger.py'
       - 'analysis/archive_baseline_audit.py'
       - 'analysis/v3_data_contract.py'
+      - 'analysis/walk_forward_execution.py'
       - 'research/strategy/schema/**'
+      - 'docs/walk_forward_execution.md'
+      - 'reports/walk_forward_execution/**'
       - 'docs/archive_baseline_audit.md'
       - 'research/strategy/runs/archive_baseline_20261004_manifest.json'
       - 'research/strategy/private/archive_baseline_20261004.compact.json.enc'
@@ -40,6 +47,7 @@ on:
       - 'tests/test_canary_evidence_ledger.py'
       - 'tests/test_archive_baseline_audit.py'
       - 'tests/test_v3_data_contract.py'
+      - 'tests/test_walk_forward_execution.py'
       - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/evidence_*.json'
       - 'requirements-research.txt'
@@ -100,7 +108,7 @@ jobs:
           PY
       - name: Compile tooling
         run: |
-          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py
+          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_execution.py
       - name: Check public-safe private archive paths
         run: |
           python - <<'PY'
@@ -121,6 +129,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_canary_evidence_ledger.py' -v
           python -m unittest discover -s tests -p 'test_v3_data_contract.py' -v
           python -m unittest discover -s tests -p 'test_archive_baseline_audit.py' -v
+          python -m unittest discover -s tests -p 'test_walk_forward_execution.py' -v
           python analysis/canary_evidence_ledger.py \
             --input tests/fixtures/evidence_zero.json \
             --output /tmp/evidence-ledger.json

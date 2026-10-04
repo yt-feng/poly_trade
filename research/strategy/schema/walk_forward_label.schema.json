@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yt-feng/poly_trade/schema/walk-forward-label.json",
+  "title": "Separate walk-forward resolution label",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["label_version", "market_id", "condition_id", "outcome", "resolved_time_ms", "label_available_time_ms", "source", "source_sha256"],
+  "properties": {
+    "label_version": {"const": 1},
+    "market_id": {"type": "string", "minLength": 1},
+    "condition_id": {"type": "string", "minLength": 1},
+    "outcome": {"enum": ["up", "down"]},
+    "resolved_time_ms": {"type": "integer", "minimum": 1},
+    "label_available_time_ms": {"type": "integer", "minimum": 1},
+    "source": {"type": "string", "minLength": 1},
+    "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

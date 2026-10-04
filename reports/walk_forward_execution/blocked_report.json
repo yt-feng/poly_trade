@@ -1,0 +1,40 @@
+{
+  "blocked_reasons": [
+    "missing_observation_file"
+  ],
+  "canary_allowed": false,
+  "canary_blocked": true,
+  "evaluator": "event_clustered_walk_forward_v1",
+  "folds": [],
+  "input": {
+    "accepted_book_records": 0,
+    "label_records": 0,
+    "observation_records": 0
+  },
+  "metrics": {
+    "attempts": 0,
+    "brier": null,
+    "ece": null,
+    "expired_orders": 0,
+    "fees_usdc": null,
+    "filled_attempts": 0,
+    "gross_pnl_usdc": null,
+    "net_pnl_usdc": null,
+    "net_return_on_filled_cost": null,
+    "partial_fills": 0,
+    "predictions": 0
+  },
+  "official_semantics": {
+    "fees": "https://docs.polymarket.com/trading/fees",
+    "mid_price_fills": "rejected",
+    "orders": "https://docs.polymarket.com/trading/place-orders",
+    "private_execution_evidence": false
+  },
+  "schema_version": 1,
+  "split_policy": {
+    "cluster_key": "market_id",
+    "embargo_ms": 1000,
+    "fit_cutoff_rule": "received_time_ms < train_end and label_available_time_ms <= train_end",
+    "purge_ms": 300000
+  }
+}

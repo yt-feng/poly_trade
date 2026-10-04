@@ -14,3 +14,11 @@ latency, duplicate/conflicting IDs, and future-label fields such as
 `final_price`, `outcome`, or `target_price`. Quarantined records are never
 passed to a strategy replay. The historical CSV archives do not satisfy this
 contract and remain untouched.
+
+## Walk-forward labels
+
+`walk_forward_label.schema.json` is deliberately separate from the v3 feature
+records. A label identifies one market's resolved outcome and records both its
+resolution time and the time it became available to the researcher. The
+walk-forward evaluator joins a label only after its `label_available_time_ms`
+and never allows outcome, settlement, or target fields inside feature rows.
