@@ -24,6 +24,17 @@ REQUIREMENTS = {
     "execution_evidence": 100,
     "exit_reconciliation_rate": Decimal("0.99"),
 }
+PRE_CANARY_GATES = (
+    "independent_windows",
+    "independent_utc_dates",
+    "execution_evidence",
+    "cost_adjusted_pnl_lower_bound_positive",
+    "three_second_stress_lower_bound_positive",
+    "extra_exit_tick_stress_lower_bound_positive",
+    "exit_reconciliation_rate_to_99pct",
+)
+POST_CANARY_GATES = ("ten_canary_roundtrips",) + PRE_CANARY_GATES
+PHASES = {"pre_canary_research", "post_canary_completion"}
 REAL_PROVENANCE = "private_execution_receipt"
 NONQUALIFYING_PROVENANCE = {"public_quote", "paper_simulation", "synthetic_receipt"}
 
@@ -120,7 +131,9 @@ def _exit_reconciled(record: dict[str, Any]) -> bool:
     return bool(record.get("exit_trade_id")) and bool(record.get("exit_transaction_ref"))
 
 
-def evaluate(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def evaluate(records: Iterable[dict[str, Any]], phase: str = "pre_canary_research") -> dict[str, Any]:
+    if phase not in PHASES:
+        raise ValueError(f"phase must be one of: {', '.join(sorted(PHASES))}")
     records = list(records)
     duplicate_ids = [key for key, count in Counter(str(r.get("evidence_id") or "") for r in records).items()
                      if key and count > 1]
@@ -181,13 +194,33 @@ def evaluate(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "extra_exit_tick_stress_lower_bound_positive": 0 if stress_tick_missing == 0 and stress_tick > 0 else 1,
         "exit_reconciliation_rate_to_99pct": 0 if qualifying and exit_rate >= REQUIREMENTS["exit_reconciliation_rate"] else 1,
     }
-    blockers = [key for key, value in missing.items() if value]
-    blockers.extend(["public_or_synthetic_evidence_only"] if not qualifying and records else [])
-    blockers.extend(["duplicate_evidence_ids"] if duplicate_ids else [])
+    pre_missing = {key: missing[key] for key in PRE_CANARY_GATES if missing[key]}
+    completion_missing = {key: missing[key] for key in POST_CANARY_GATES if missing[key]}
+    phase_gate_names = PRE_CANARY_GATES if phase == "pre_canary_research" else POST_CANARY_GATES
+    blockers = [key for key in phase_gate_names if missing[key]]
+    common_blockers = []
+    common_blockers.extend(["public_or_synthetic_evidence_only"] if not qualifying and records else [])
+    common_blockers.extend(["duplicate_evidence_ids"] if duplicate_ids else [])
+    blockers.extend(common_blockers)
+    pre_blockers = list(pre_missing) + common_blockers
+    completion_blockers = list(completion_missing) + common_blockers
     return {
         "schema_version": 1,
+        "phase": phase,
         "status": "blocked" if blockers else "eligible_for_human_review",
         "eligible_for_human_review": not blockers,
+        "pre_canary_research": {
+            "eligible": not pre_blockers,
+            "missing_counts": pre_missing,
+            "blockers": pre_blockers,
+            "note": "This phase does not require ten completed canary round-trips; it is a prerequisite review gate for a first canary.",
+        },
+        "post_canary_completion": {
+            "complete": not completion_blockers,
+            "missing_counts": completion_missing,
+            "blockers": completion_blockers,
+            "note": "Ten completed canary round-trips are measured after a canary run and are never used as a prerequisite for starting the first canary.",
+        },
         "promotion_allowed": False,
         "evidence_boundary": "Only private_execution_receipt records can qualify; public quotes, paper simulations, and synthetic fixtures never count.",
         "requirements": {
@@ -207,8 +240,8 @@ def evaluate(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def write_report(input_path: Path, output_path: Path) -> dict[str, Any]:
-    report = evaluate(load_records(input_path))
+def write_report(input_path: Path, output_path: Path, phase: str = "pre_canary_research") -> dict[str, Any]:
+    report = evaluate(load_records(input_path), phase=phase)
     report["input"] = str(input_path)
     report["output_is_diagnostic_only"] = True
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -220,9 +253,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--phase", choices=sorted(PHASES), default="pre_canary_research")
     args = parser.parse_args()
-    report = write_report(args.input, args.output)
-    print(json.dumps({"status": report["status"], "promotion_allowed": report["promotion_allowed"],
+    report = write_report(args.input, args.output, phase=args.phase)
+    print(json.dumps({"phase": report["phase"], "status": report["status"], "promotion_allowed": report["promotion_allowed"],
                       "observed": report["observed"], "missing_counts": report["missing_counts"],
                       "blockers": report["blockers"]}, indent=2, sort_keys=True))
     return 0

@@ -16,8 +16,14 @@ Run the current snapshot locally:
 ```bash
 python analysis/canary_evidence_ledger.py \
   --input evidence/ledger/current.json \
-  --output reports/canary_readiness_foundation/evidence_ledger.json
+  --output reports/canary_readiness_foundation/evidence_ledger.json \
+  --phase pre_canary_research
 ```
+
+Use `--phase post_canary_completion` only when evaluating completion after a
+canary run. The pre-canary phase deliberately does not require ten existing
+round-trips; the post-canary phase adds that completion gate. Neither phase
+authorizes trading.
 
 For private work, set `ARCHIVE_KEY` only in the process environment and use the
 repository's authenticated archive utility. Never commit the passphrase, raw

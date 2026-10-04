@@ -72,11 +72,32 @@ jobs:
           report = json.loads(Path('reports/canary_readiness_foundation/readiness.json').read_text())
           assert report['promotion_allowed'] is False
           assert report['current_evidence']['public_quote_only'] is True
+          assert report['phase_semantics']['pre_canary_research']['ten_canary_roundtrips_required'] is False
+          assert report['phase_semantics']['post_canary_completion']['ten_canary_roundtrips_required'] is True
+          ledger = json.loads(Path('reports/canary_readiness_foundation/evidence_ledger.json').read_text())
+          assert ledger['phase'] == 'pre_canary_research'
+          assert 'ten_canary_roundtrips' not in ledger['blockers']
+          assert 'ten_canary_roundtrips' in ledger['post_canary_completion']['blockers']
           print('Research and canary contracts validated.')
           PY
       - name: Compile tooling
         run: |
           python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py
+      - name: Check public-safe private archive paths
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          tracked = subprocess.check_output(['git', 'ls-files', 'research/strategy/private'], text=True).splitlines()
+          for name in tracked:
+              assert name.endswith(('.gitignore', '.enc')), name
+              if name.endswith('.enc'):
+                  envelope = json.loads(Path(name).read_text(encoding='utf-8'))
+                  assert envelope['format'] == 'poly-research-archive/v1'
+                  assert envelope['cipher'] == 'AES-256-GCM'
+          print('Private research paths contain only policy files or authenticated ciphertext envelopes.')
+          PY
       - name: Evidence ledger offline contracts
         run: |
           python -m unittest discover -s tests -p 'test_canary_evidence_ledger.py' -v

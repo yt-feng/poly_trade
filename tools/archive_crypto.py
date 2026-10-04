@@ -3,7 +3,10 @@
 The repository is public, so only ciphertext envelopes may be committed.  The
 passphrase is read from ``ARCHIVE_KEY`` at runtime and is never written to the
 envelope or printed by this module.  This utility is deliberately offline and
-has no trading, network, or GitHub mutation capability.
+has no trading, network, or GitHub mutation capability. Short passphrases such
+as four-digit PINs are weak against offline guessing; this utility is a
+plaintext-publication guard, not a claim of strong confidentiality for weak
+keys.
 """
 from __future__ import annotations
 

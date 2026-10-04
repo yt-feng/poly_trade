@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from tools.archive_crypto import decrypt_bytes, encrypt_bytes
 
@@ -22,6 +23,15 @@ class ArchiveCryptoTests(unittest.TestCase):
     def test_runtime_key_is_required(self):
         with self.assertRaises(ValueError):
             encrypt_bytes(b"offline-only", "")
+
+    def test_public_docs_disclaim_weak_short_passphrases(self):
+        root = Path(__file__).resolve().parents[1]
+        text = "\n".join((root / path).read_text(encoding="utf-8") for path in (
+            "README.md", "research/README.md", "docs/research_vault.md", "tools/archive_crypto.py"
+        ))
+        self.assertIn("four-digit", text)
+        self.assertIn("weak", text)
+        self.assertIn("not strong confidentiality", text)
 
 
 if __name__ == "__main__":

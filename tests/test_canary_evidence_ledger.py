@@ -60,13 +60,29 @@ class CanaryEvidenceLedgerTests(unittest.TestCase):
 
     def test_private_receipt_is_counted_but_one_record_cannot_pass_gates(self):
         report = evaluate([private_record()])
+        self.assertEqual(report["phase"], "pre_canary_research")
         self.assertEqual(report["observed"]["real_confirmed_fill_count"], 1)
         self.assertEqual(report["observed"]["complete_roundtrips"], 1)
         self.assertEqual(report["observed"]["cost_adjusted_pnl_lower_bound_usd"], "0.09")
         self.assertEqual(report["observed"]["exit_reconciliation_rate"], "1")
         self.assertGreater(report["missing_counts"]["execution_evidence"], 0)
+        self.assertNotIn("ten_canary_roundtrips", report["blockers"])
+        self.assertIn("ten_canary_roundtrips", report["post_canary_completion"]["blockers"])
         self.assertEqual(report["status"], "blocked")
         self.assertFalse(report["promotion_allowed"])
+
+    def test_ten_roundtrips_are_post_canary_completion_gate(self):
+        record = private_record()
+        pre = evaluate([record], phase="pre_canary_research")
+        post = evaluate([record], phase="post_canary_completion")
+        self.assertNotIn("ten_canary_roundtrips", pre["blockers"])
+        self.assertIn("ten_canary_roundtrips", pre["post_canary_completion"]["blockers"])
+        self.assertIn("ten_canary_roundtrips", post["blockers"])
+        self.assertFalse(post["post_canary_completion"]["complete"])
+
+    def test_unknown_phase_is_rejected(self):
+        with self.assertRaises(ValueError):
+            evaluate([], phase="before_or_after_canary")
 
     def test_missing_stress_fields_are_a_blocker_even_with_private_receipt(self):
         record = private_record()

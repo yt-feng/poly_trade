@@ -1,6 +1,5 @@
 {
   "blockers": [
-    "ten_canary_roundtrips",
     "independent_windows",
     "independent_utc_dates",
     "execution_evidence",
@@ -44,6 +43,53 @@
     "three_second_stress_missing_records": 0
   },
   "output_is_diagnostic_only": true,
+  "phase": "pre_canary_research",
+  "post_canary_completion": {
+    "blockers": [
+      "ten_canary_roundtrips",
+      "independent_windows",
+      "independent_utc_dates",
+      "execution_evidence",
+      "cost_adjusted_pnl_lower_bound_positive",
+      "three_second_stress_lower_bound_positive",
+      "extra_exit_tick_stress_lower_bound_positive",
+      "exit_reconciliation_rate_to_99pct"
+    ],
+    "complete": false,
+    "missing_counts": {
+      "cost_adjusted_pnl_lower_bound_positive": 1,
+      "execution_evidence": 100,
+      "exit_reconciliation_rate_to_99pct": 1,
+      "extra_exit_tick_stress_lower_bound_positive": 1,
+      "independent_utc_dates": 7,
+      "independent_windows": 300,
+      "ten_canary_roundtrips": 10,
+      "three_second_stress_lower_bound_positive": 1
+    },
+    "note": "Ten completed canary round-trips are measured after a canary run and are never used as a prerequisite for starting the first canary."
+  },
+  "pre_canary_research": {
+    "blockers": [
+      "independent_windows",
+      "independent_utc_dates",
+      "execution_evidence",
+      "cost_adjusted_pnl_lower_bound_positive",
+      "three_second_stress_lower_bound_positive",
+      "extra_exit_tick_stress_lower_bound_positive",
+      "exit_reconciliation_rate_to_99pct"
+    ],
+    "eligible": false,
+    "missing_counts": {
+      "cost_adjusted_pnl_lower_bound_positive": 1,
+      "execution_evidence": 100,
+      "exit_reconciliation_rate_to_99pct": 1,
+      "extra_exit_tick_stress_lower_bound_positive": 1,
+      "independent_utc_dates": 7,
+      "independent_windows": 300,
+      "three_second_stress_lower_bound_positive": 1
+    },
+    "note": "This phase does not require ten completed canary round-trips; it is a prerequisite review gate for a first canary."
+  },
   "promotion_allowed": false,
   "requirements": {
     "cost_adjusted_lower_bound_positive": true,

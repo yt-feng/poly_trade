@@ -21,7 +21,9 @@
     "public_quote_only": true,
     "evaluated_scenarios": "negative_or_not_promotable",
     "live_api_behavior": "unverified",
-    "websocket_freshness": "open_issue"
+    "websocket_freshness": "open_issue",
+    "pre_canary_research_eligible": false,
+    "post_canary_completion_complete": false
   },
   "sources": [
     "docs/CANARY_READINESS.md",
@@ -29,5 +31,17 @@
     "reports/canary_forward_20260923/REPORT.md",
     "docs/r10_recovery_exit_payoff_20260926.md",
     "docs/architecture.md"
-  ]
+  ],
+  "phase_semantics": {
+    "pre_canary_research": {
+      "purpose": "Pre-first-canary research review gate.",
+      "ten_canary_roundtrips_required": false,
+      "note": "Ten completed canary round-trips cannot be a prerequisite for the first canary; all statistical and data-quality gates remain required."
+    },
+    "post_canary_completion": {
+      "purpose": "Post-run completion gate for the ten-canary target.",
+      "ten_canary_roundtrips_required": true,
+      "note": "Requires ten fully reconciled canary round-trips in addition to the research gates."
+    }
+  }
 }

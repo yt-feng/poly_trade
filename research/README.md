@@ -20,5 +20,9 @@ unset ARCHIVE_KEY
 ```
 
 The utility uses scrypt and AES-256-GCM authenticated encryption and performs no
-network or trading action. Public quotes and paper fills remain observations or
-simulations; they cannot satisfy real-fill canary gates.
+network or trading action. A four-digit PIN is weak against offline guessing
+and must not be described as strong confidentiality; use a long random
+`ARCHIVE_KEY` for meaningful protection. Encryption prevents accidental
+plaintext publication but does not erase public Git history. Public quotes and
+paper fills remain observations or simulations; they cannot satisfy real-fill
+canary gates.

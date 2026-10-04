@@ -35,7 +35,8 @@ python analysis/canary_readiness.py --input canary_inputs/captured --output cana
 python analysis/canary_shadow.py --input snapshots.jsonl --output shadow_decisions.jsonl
 python analysis/canary_evidence_ledger.py \
   --input evidence/ledger/current.json \
-  --output reports/canary_readiness_foundation/evidence_ledger.json
+  --output reports/canary_readiness_foundation/evidence_ledger.json \
+  --phase pre_canary_research
 ```
 
 影子流可用 --input - 从标准输入读取，只有诊断输出，不会连接下单服务。GitHub Actions 的 canary-readiness-research 提供有下载预算的获取、测试与回放流程。没有定时任务或下单步骤。CI绿色表示代码、校验和与回放成功，不表示策略通过实盘门槛；readiness.json 是准入结果。
@@ -64,6 +65,14 @@ Do not put raw private receipts, account data, wallet keys, or decrypted
 reasoning in this public repository. Keep private evidence outside Git or in an
 authenticated encrypted archive and publish only safe metadata and immutable
 references.
+
+The readiness vocabulary has two phases. `pre_canary_research` is the review
+gate before the first canary and checks the registered data-quality and
+statistical requirements; it does not ask for ten canary fills that do not yet
+exist. `post_canary_completion` applies the same research gates plus ten fully
+reconciled canary round-trips after the canary run. This is a semantic split,
+not a relaxation: a report can be eligible for human review while
+`promotion_allowed` remains false, and no report activates live execution.
 
 ## 固定实验
 

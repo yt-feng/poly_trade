@@ -57,12 +57,22 @@ report. It accepts JSON/JSONL records but counts only
 ```bash
 python analysis/canary_evidence_ledger.py \
   --input evidence/ledger/current.json \
-  --output reports/canary_readiness_foundation/evidence_ledger.json
+  --output reports/canary_readiness_foundation/evidence_ledger.json \
+  --phase pre_canary_research
 ```
 
 The current checked-in snapshot contains no private receipts, so the report is
 blocked with explicit missing counts. See `evidence/ledger/README.md` for the
 public-safe record boundary and private receipt handling.
+
+The validator separates two decisions. `pre_canary_research` checks the
+statistical and data-quality gates needed before a first canary review and does
+not require ten already-completed canary round-trips. `post_canary_completion`
+adds the ten-round-trip completion gate after the canary run. This removes the
+circular prerequisite without weakening the 300-window, 7-date, 100-evidence,
+cost-adjusted, stress, or exit-reconciliation gates. Both phases keep
+`promotion_allowed: false`; a passing offline report is not authorization to
+trade.
 
 ## Safe private archive handling
 
@@ -79,7 +89,11 @@ unset ARCHIVE_KEY
 ```
 
 Never commit decrypted files, account credentials, wallet keys, or `.env`
-files. The utility is offline-only and uses scrypt with AES-256-GCM.
+files. The utility is offline-only and uses scrypt with AES-256-GCM. A short
+value such as a four-digit PIN is weak against offline guessing and is not
+strong confidentiality; use a long random `ARCHIVE_KEY` for meaningful
+protection. Encryption prevents accidental plaintext publication but does not
+erase public Git history or make weak passphrases strong.
 
 ## Verification boundary
 

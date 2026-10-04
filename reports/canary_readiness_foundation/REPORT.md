@@ -17,6 +17,17 @@ for research, but their negative or non-promotable results cannot be relabelled
 as live performance. Public quotes alone are explicitly insufficient: a quote is
 not an order acknowledgement, a fill, a fee receipt, or a settlement record.
 
+The ten-round-trip requirement is a **post-canary completion gate**, not a
+prerequisite for starting the first canary. The pre-canary research phase keeps
+the 300-window, 7-date, 100-evidence, cost-adjusted, stress, and 99% exit
+reconciliation requirements; the completion phase adds ten fully reconciled
+round-trips. The machine-readable ledger records both phase decisions and keeps
+`promotion_allowed` false in either phase.
+
+The concise hypothesis/method/result record is
+`reports/canary_readiness_foundation/phase_semantics_audit.md`; it contains no
+private reasoning or receipt contents.
+
 The machine-readable evidence-ledger snapshot at
 `reports/canary_readiness_foundation/evidence_ledger.json` was generated from
 `evidence/ledger/current.json`. It observes 0 input records, 0 qualifying
@@ -24,8 +35,10 @@ private receipts, 0 confirmed fills, 0 complete round-trips, 0 independent
 windows, and 0 independent UTC dates. The missing counts are 10 canary
 round-trips, 300 independent windows, 7 UTC dates, 100 execution-evidence
 records, positive cost-adjusted PnL, both positive stress bounds, and a 99%
-exit-reconciliation rate. This is a diagnostic report only; it cannot authorize
-promotion.
+exit-reconciliation rate. In the pre-canary phase the active blockers are the
+research/data-quality gates; the ten-round-trip count is reported as a deferred
+post-canary completion blocker. This is a diagnostic report only; it cannot
+authorize promotion.
 
 The current engineering boundary also remains visible: poly PR #17 is still
 documented as draft/open with offline tests passing while live API behavior is
