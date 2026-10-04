@@ -1,0 +1,17 @@
+{
+  "manifest_version": 1,
+  "experiment_id": "EXP-0001-canary-foundation",
+  "run_id": "replace-with-utc-run-id",
+  "repo": "yt-feng/poly_trade",
+  "commit": "replace-with-commit-sha",
+  "started_at_utc": "2026-10-04T00:00:00Z",
+  "ended_at_utc": "2026-10-04T00:00:00Z",
+  "source": {"repo": "yt-feng/poly", "commit_or_release": "replace", "retrieved_at_utc": "replace"},
+  "windows": {"count": 0, "utc_dates": [], "window_ids": []},
+  "command": "replace-with-exact-command",
+  "environment": {"python": "replace", "dependencies_lock": "replace"},
+  "outputs": [],
+  "metrics": {"gross_pnl": null, "fees": null, "net_pnl": null, "exit_reconciliation_rate": null},
+  "execution_evidence": {"real_confirmed_fills": 0, "private_receipts": 0, "public_quote_only": true},
+  "promotion": {"eligible": false, "reason": "template; no real-fill evidence"}
+}

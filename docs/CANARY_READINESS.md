@@ -1,5 +1,27 @@
 # BTC 五分钟：研究到 canary 的准入流程
 
+## Current status (2026-10-04 UTC)
+
+**BLOCKED — promotion is not allowed.** The repository records zero confirmed
+real fills and zero private execution receipts; existing public quote replays
+and evaluated scenarios are negative or otherwise not promotable. This document
+must never treat a public quote as a fill, order acknowledgement, fee receipt,
+settlement record, or account reconciliation.
+
+The fixed research gates remain: at least 300 independent windows spanning 7
+UTC dates, at least 100 attempts with execution evidence, positive
+cost-adjusted performance with a positive lower bound, positive 3-second-delay
+and extra-exit-tick stress results, and at least 99% exit reconciliation. A
+promotion also requires private order/fill/cancel/fee/settlement/account
+reconciliation. CI green means code and offline contracts passed; it never means
+these gates passed. See
+`reports/canary_readiness_foundation/readiness.json` for the machine-readable
+decision and `REPORT.md` for the evidence boundary.
+
+The engineering boundary is unchanged: poly PR #17 is documented as draft/open
+with offline tests passing while live API behavior is unverified, and the WS
+freshness issue remains open. No real order is part of this foundation change.
+
 本模块是无交易权限的影子研究链路，不导入 live_execution、不读取钱包密钥、不发送订单。旧模型和实盘配置保持原样，不视为已修复或重新训练。新模块弃用完整前两分钟的前视特征，由当时已接收的前缀重算信号。旧 final_price > target_price 代理标签不得导入。
 
 ## 运行

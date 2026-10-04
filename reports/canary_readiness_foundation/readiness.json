@@ -1,0 +1,32 @@
+{
+  "report_version": 1,
+  "as_of_utc": "2026-10-04T00:00:00Z",
+  "status": "blocked",
+  "promotion_allowed": false,
+  "evidence_boundary": "Public quote observations and paper replays cannot establish real fills or canary eligibility.",
+  "gates": {
+    "independent_windows_min": 300,
+    "independent_utc_dates_min": 7,
+    "execution_evidence_min": 100,
+    "cost_adjusted_lower_bound_positive": true,
+    "three_second_delay_stress_positive": true,
+    "extra_exit_tick_stress_positive": true,
+    "exit_reconciliation_rate_min": 0.99,
+    "private_order_fill_cancel_fee_reconciliation_required": true
+  },
+  "current_evidence": {
+    "real_confirmed_fills": 0,
+    "private_receipts": 0,
+    "public_quote_only": true,
+    "evaluated_scenarios": "negative_or_not_promotable",
+    "live_api_behavior": "unverified",
+    "websocket_freshness": "open_issue"
+  },
+  "sources": [
+    "docs/CANARY_READINESS.md",
+    "reports/canary_20260923/REPORT.md",
+    "reports/canary_forward_20260923/REPORT.md",
+    "docs/r10_recovery_exit_payoff_20260926.md",
+    "docs/architecture.md"
+  ]
+}

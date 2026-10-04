@@ -27,6 +27,52 @@ The research workflow pulls that source repo directly inside GitHub Actions, so 
 - `reports/robust_trading_system/` — selected system report, diagnostics, walk-forward output, stress tests, paper replay
 - `reports/live_paper_trading/` — local live runner state, snapshots, events, and dashboard
 
+## Reproducible strategy ledger and canary boundary
+
+Pre-register strategy hypotheses in `research/strategy/experiments/` and write
+one machine-readable manifest per run under `research/strategy/runs/`. A
+manifest pins the source `poly` commit or immutable release, UTC windows and
+dates, exact command, environment, output checksums, cost model, execution
+evidence, and promotion decision. Copy
+`research/strategy/runs/run-manifest.example.json` before recording a run.
+
+The current readiness decision is checked in at
+`reports/canary_readiness_foundation/readiness.json` and explained in its
+`REPORT.md`. It remains blocked: the documented evidence is zero confirmed real
+fills and zero private receipts, while evaluated scenarios are negative or not
+promotable. Public quote observations, paper fills, and green CI cannot satisfy
+the canary gates.
+
+The gates are at least 300 independent windows over 7 UTC dates, 100 attempts
+with execution evidence, positive cost-adjusted lower-bound performance,
+positive 3-second-delay and extra-exit-tick stress tests, at least 99% exit
+reconciliation, and private order/fill/cancel/fee/settlement/account
+reconciliation. These are research controls, not a profit guarantee.
+
+## Safe private archive handling
+
+Install the maintained PyCA dependency and supply the user's passphrase only at
+runtime as `ARCHIVE_KEY`; the user-supplied value is never stored in Git, an
+envelope, workflow, or log:
+
+```bash
+python -m pip install -r requirements-research.txt
+export ARCHIVE_KEY='<user-supplied-runtime-value>'
+python tools/archive_crypto.py encrypt private-notes.json research/strategy/private/private-notes.json.enc
+python tools/archive_crypto.py decrypt research/strategy/private/private-notes.json.enc /tmp/private-notes.json
+unset ARCHIVE_KEY
+```
+
+Never commit decrypted files, account credentials, wallet keys, or `.env`
+files. The utility is offline-only and uses scrypt with AES-256-GCM.
+
+## Verification boundary
+
+The existing workflows validate offline/unit/research contracts and may run
+public read-only feeds. They do not prove live API behavior, private order
+acknowledgements, fills, fees, settlement, or WebSocket freshness. Do not place
+real trades or enable live credentials based on CI success or quote-only data.
+
 ## Research logic
 
 The current report is designed to answer questions like:

@@ -1,0 +1,70 @@
+name: research-foundation
+
+on:
+  pull_request:
+    paths:
+      - 'research/**'
+      - 'reports/canary_readiness_foundation/**'
+      - 'tools/archive_crypto.py'
+      - 'tests/test_archive_crypto.py'
+      - 'requirements-research.txt'
+      - '.github/workflows/research-foundation.yml'
+  push:
+    branches: [main, work]
+    paths:
+      - 'research/**'
+      - 'reports/canary_readiness_foundation/**'
+      - 'tools/archive_crypto.py'
+      - 'tests/test_archive_crypto.py'
+      - 'requirements-research.txt'
+      - '.github/workflows/research-foundation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-and-reproducibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-research.txt
+      - name: Encryption contract tests without secrets
+        run: python -m unittest discover -s tests -p 'test_archive_crypto.py' -v
+      - name: Validate CLI archive round trip without exposing plaintext
+        run: |
+          set -eu
+          printf '%s' 'synthetic-private-note' > /tmp/archive-plain
+          export ARCHIVE_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+          python tools/archive_crypto.py encrypt /tmp/archive-plain /tmp/archive.enc
+          rm /tmp/archive-plain
+          python tools/archive_crypto.py decrypt /tmp/archive.enc /tmp/archive-restored
+          test "$(cat /tmp/archive-restored)" = 'synthetic-private-note'
+          rm -f /tmp/archive.enc /tmp/archive-restored
+      - name: Validate experiment and run manifests
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for path in Path('research/strategy').glob('experiments/*.json'):
+              obj = json.loads(path.read_text())
+              assert obj['experiment_id'] and obj['scope'] == 'strategy_research'
+              assert obj['protocol']['public_quotes_are_not_fills'] is True
+          obj = json.loads(Path('research/strategy/runs/run-manifest.example.json').read_text())
+          for key in ('manifest_version','experiment_id','run_id','commit','source','windows','command','outputs','execution_evidence','promotion'):
+              assert key in obj, key
+          assert obj['execution_evidence']['real_confirmed_fills'] == 0
+          assert obj['promotion']['eligible'] is False
+          report = json.loads(Path('reports/canary_readiness_foundation/readiness.json').read_text())
+          assert report['promotion_allowed'] is False
+          assert report['current_evidence']['public_quote_only'] is True
+          print('Research and canary contracts validated.')
+          PY
+      - name: Compile tooling
+        run: python -m py_compile tools/archive_crypto.py

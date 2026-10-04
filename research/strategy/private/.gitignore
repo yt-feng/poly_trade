@@ -1,0 +1,4 @@
+# Plaintext/private material must never enter the public repository.
+*
+!.gitignore
+!*.enc
