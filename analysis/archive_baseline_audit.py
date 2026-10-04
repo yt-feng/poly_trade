@@ -21,6 +21,10 @@ import re
 import subprocess
 import sys
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from v3_data_contract import load_jsonl, validate_record, validate_records
+
 PRICE_FIELDS = tuple(f'{action}_{side}_cents' for side in ('up', 'down') for action in ('buy', 'sell'))
 SIZE_FIELDS = tuple(f'{action}_{side}_size' for side in ('up', 'down') for action in ('buy', 'sell'))
 AUDIT_FIELDS = PRICE_FIELDS + SIZE_FIELDS + ('target_price', 'final_price', 'trade_count_1s', 'trade_volume_1s')
@@ -167,6 +171,10 @@ def load_selected(root, file_manifest, selected_dates):
             continue
         with (root / info['path']).open(encoding='utf-8-sig', newline='') as f:
             for row in csv.DictReader(f):
+                contract_ok, _ = validate_record(row)
+                if not contract_ok:
+                    counts['contract_quarantined_rows'] += 1
+                    continue
                 slug, start = market_start(row)
                 ts = timestamp(row.get('ts_iso'))
                 if start is None or ts is None or day(start) not in selected_dates:
@@ -198,6 +206,59 @@ def load_selected(root, file_manifest, selected_dates):
     counts['conflicting_windows_excluded'] = len(conflicts)
     counts['selected_distinct_timestamps'] = len(records)
     return dict(windows), {'counts': dict(counts), 'deduplicated_gap_seconds_histogram': dict(gaps)}
+
+
+def _canonical_snapshot(record):
+    """Flatten one validated v3 snapshot; no defaults are invented."""
+    market = record['market_id']
+    slug, start = market_start({'slug': market})
+    if slug is None:
+        return None
+    books = record['books']
+    values = {'ts': record['received_time_ms'] / 1000, 'slug': slug}
+    for role in ('up', 'down'):
+        book = books[role]
+        by_level = {side: {item['level']: item for item in book[side]} for side in ('bids', 'asks')}
+        if 0 not in by_level['bids'] or 0 not in by_level['asks']:
+            return None
+        values[f'buy_{role}_cents'] = by_level['asks'][0]['price'] * 100
+        values[f'sell_{role}_cents'] = by_level['bids'][0]['price'] * 100
+        values[f'buy_{role}_size'] = by_level['asks'][0]['size']
+        values[f'sell_{role}_size'] = by_level['bids'][0]['size']
+    return values
+
+
+def load_validated_jsonl(path, selected_dates):
+    """Load only contract-valid snapshots and return quote windows for replay."""
+    raw = load_jsonl(Path(path))
+    validation = validate_records(raw)
+    windows = defaultdict(list)
+    counts = Counter({'input_records': len(raw), 'accepted_records': validation['accepted_records'],
+                      'quarantined_records': validation['quarantined_records']})
+    for record in validation['accepted']:
+        flattened = _canonical_snapshot(record)
+        if flattened is None:
+            counts['canonical_snapshot_rows_quarantined'] += 1
+            continue
+        start = int(flattened['slug'].rsplit('-', 1)[1])
+        if day(start) in selected_dates:
+            windows[flattened['slug']].append(flattened)
+    for rows in windows.values():
+        rows.sort(key=lambda r: r['ts'])
+    counts['selected_windows'] = len(windows)
+    return dict(windows), {'counts': dict(counts), 'contract_alignment': validation['accepted_alignment'],
+                          'contract_leakage_check': validation['leakage_check']}
+
+
+def validated_window_dates(path):
+    """Return dates represented by contract-valid canonical market IDs only."""
+    dates = set()
+    for record in validate_records(load_jsonl(Path(path)))['accepted']:
+        market = record.get('market_id', '')
+        _, start = market_start({'slug': market})
+        if start is not None:
+            dates.add(day(start))
+    return sorted(dates)
 
 
 def choose_at(rows, when, tolerance, *, before=False):
@@ -313,7 +374,7 @@ def prior_coverage(trade_root, source_run_names):
             'warning': 'An absent reference is not proof of unseen data. Older source and docs already include extensive model/threshold selection. No pristine OOS claim.'}
 
 
-def run(poly_root, trade_root, p):
+def run(poly_root, trade_root, p, v3_input=None):
     sources = {}
     for name, root, paths in (
         ('poly_raw_monthly', poly_root, sorted((poly_root / 'data/monthly_runs').rglob('*.csv'))),
@@ -321,10 +382,13 @@ def run(poly_root, trade_root, p):
         ('poly_trade_derived', trade_root, sorted((trade_root / 'data').rglob('*.csv'))),
     ):
         sources[name] = inventory(root, paths)
-    dates = sources['poly_raw_monthly']['utc_window_dates']
+    dates = validated_window_dates(v3_input) if v3_input else sources['poly_raw_monthly']['utc_window_dates']
     evaluation = dates[-p['evaluation_days']:]
     reference = dates[max(0, len(dates) - p['evaluation_days'] - p['reference_days']):-p['evaluation_days']]
-    windows, dedup = load_selected(poly_root, sources['poly_raw_monthly']['files'], set(reference + evaluation))
+    if v3_input:
+        windows, dedup = load_validated_jsonl(v3_input, set(reference + evaluation))
+    else:
+        windows, dedup = load_selected(poly_root, sources['poly_raw_monthly']['files'], set(reference + evaluation))
     results = {}
     for split, split_dates in (('reference', reference), ('evaluation', evaluation)):
         selected = {slug: rows for slug, rows in windows.items() if day(int(slug.rsplit('-', 1)[1])) in split_dates}
@@ -338,7 +402,8 @@ def run(poly_root, trade_root, p):
                   'config/canary_forward_v1.json', 'docs/CANARY_READINESS.md']
     return {'schema_version': 1, 'protocol': p, 'source_commits': {'poly': revision(poly_root), 'poly_trade': revision(trade_root)},
             'source_inventory': sources, 'prior_exposure': prior_coverage(trade_root, runs),
-            'selected_observation_audit': dedup, 'results': results,
+            'selected_observation_audit': dedup, 'validated_v3_input': str(v3_input) if v3_input else None,
+            'results': results,
             'source_references': [{'repo': 'poly_trade', 'path': f, 'sha256': sha256(trade_root / f)} for f in references]
                 + [{'repo': 'poly', 'path': 'polymarket_quotes.py', 'sha256': sha256(poly_root / 'polymarket_quotes.py')}],
             'strict_verified_execution': {'status': 'blocked', 'qualifying_fills': 0,
@@ -373,11 +438,12 @@ def main():
     parser.add_argument('--trade-root', type=Path, required=True)
     parser.add_argument('--protocol', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--v3-input', type=Path, help='Optional canonical v3 JSONL; only contract-valid snapshots are replayed')
     args = parser.parse_args()
     try:
         protocol_bytes = args.protocol.read_bytes()
         p = validate_protocol(json.loads(protocol_bytes))
-        result = run(args.poly_root, args.trade_root, p)
+        result = run(args.poly_root, args.trade_root, p, v3_input=args.v3_input)
         result['reproducibility'] = {'protocol_sha256': hashlib.sha256(protocol_bytes).hexdigest(),
             'code_sha256': sha256(Path(__file__)), 'python_version': sys.version,
             'command': 'python analysis/archive_baseline_audit.py --poly-root ../poly --trade-root . --protocol /PRIVATE/protocol.json --output /PRIVATE/result.json',

@@ -8,6 +8,8 @@ on:
       - 'evidence/ledger/**'
       - 'analysis/canary_evidence_ledger.py'
       - 'analysis/archive_baseline_audit.py'
+      - 'analysis/v3_data_contract.py'
+      - 'research/strategy/schema/**'
       - 'docs/archive_baseline_audit.md'
       - 'research/strategy/runs/archive_baseline_20261004_manifest.json'
       - 'research/strategy/private/archive_baseline_20261004.compact.json.enc'
@@ -15,6 +17,8 @@ on:
       - 'tests/test_archive_crypto.py'
       - 'tests/test_canary_evidence_ledger.py'
       - 'tests/test_archive_baseline_audit.py'
+      - 'tests/test_v3_data_contract.py'
+      - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/evidence_*.json'
       - 'requirements-research.txt'
       - '.github/workflows/research-foundation.yml'
@@ -26,6 +30,8 @@ on:
       - 'evidence/ledger/**'
       - 'analysis/canary_evidence_ledger.py'
       - 'analysis/archive_baseline_audit.py'
+      - 'analysis/v3_data_contract.py'
+      - 'research/strategy/schema/**'
       - 'docs/archive_baseline_audit.md'
       - 'research/strategy/runs/archive_baseline_20261004_manifest.json'
       - 'research/strategy/private/archive_baseline_20261004.compact.json.enc'
@@ -33,6 +39,8 @@ on:
       - 'tests/test_archive_crypto.py'
       - 'tests/test_canary_evidence_ledger.py'
       - 'tests/test_archive_baseline_audit.py'
+      - 'tests/test_v3_data_contract.py'
+      - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/evidence_*.json'
       - 'requirements-research.txt'
       - '.github/workflows/research-foundation.yml'
@@ -92,7 +100,7 @@ jobs:
           PY
       - name: Compile tooling
         run: |
-          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py
+          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py
       - name: Check public-safe private archive paths
         run: |
           python - <<'PY'
@@ -111,6 +119,8 @@ jobs:
       - name: Evidence ledger offline contracts
         run: |
           python -m unittest discover -s tests -p 'test_canary_evidence_ledger.py' -v
+          python -m unittest discover -s tests -p 'test_v3_data_contract.py' -v
+          python -m unittest discover -s tests -p 'test_archive_baseline_audit.py' -v
           python analysis/canary_evidence_ledger.py \
             --input tests/fixtures/evidence_zero.json \
             --output /tmp/evidence-ledger.json

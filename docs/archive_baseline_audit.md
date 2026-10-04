@@ -36,3 +36,16 @@ The exact empirical values are in the encrypted artifact. The next honest
 experiment is a pre-registered forward block from previously unseen v3 capture
 with source/receive timestamps, contemporaneous fee and market-rule metadata,
 explicit minimum-size checks, and a fixed strategy selected before that block.
+
+To run a future baseline, provide canonical JSONL explicitly:
+
+```bash
+python analysis/archive_baseline_audit.py \
+  --poly-root ../poly --trade-root . \
+  --protocol /private/protocol.json \
+  --v3-input /private/observations-v3.jsonl \
+  --output /private/result.json
+```
+
+The runner passes only records accepted by `analysis/v3_data_contract.py` into
+the quote adapter. Legacy CSV rows are quarantined instead of silently replayed.
