@@ -7,9 +7,14 @@ on:
       - 'reports/canary_readiness_foundation/**'
       - 'evidence/ledger/**'
       - 'analysis/canary_evidence_ledger.py'
+      - 'analysis/archive_baseline_audit.py'
+      - 'docs/archive_baseline_audit.md'
+      - 'research/strategy/runs/archive_baseline_20261004_manifest.json'
+      - 'research/strategy/private/archive_baseline_20261004.compact.json.enc'
       - 'tools/archive_crypto.py'
       - 'tests/test_archive_crypto.py'
       - 'tests/test_canary_evidence_ledger.py'
+      - 'tests/test_archive_baseline_audit.py'
       - 'tests/fixtures/evidence_*.json'
       - 'requirements-research.txt'
       - '.github/workflows/research-foundation.yml'
@@ -20,9 +25,14 @@ on:
       - 'reports/canary_readiness_foundation/**'
       - 'evidence/ledger/**'
       - 'analysis/canary_evidence_ledger.py'
+      - 'analysis/archive_baseline_audit.py'
+      - 'docs/archive_baseline_audit.md'
+      - 'research/strategy/runs/archive_baseline_20261004_manifest.json'
+      - 'research/strategy/private/archive_baseline_20261004.compact.json.enc'
       - 'tools/archive_crypto.py'
       - 'tests/test_archive_crypto.py'
       - 'tests/test_canary_evidence_ledger.py'
+      - 'tests/test_archive_baseline_audit.py'
       - 'tests/fixtures/evidence_*.json'
       - 'requirements-research.txt'
       - '.github/workflows/research-foundation.yml'
@@ -111,4 +121,18 @@ jobs:
           assert report['observed']['real_confirmed_fill_count'] == 0
           assert report['missing_counts']['execution_evidence'] > 0
           print('Evidence ledger remains blocked without private receipts.')
+          PY
+      - name: Validate sealed baseline artifact without decrypting it
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          manifest = json.loads(Path('research/strategy/runs/archive_baseline_20261004_manifest.json').read_text())
+          artifact = Path(manifest['artifact']['path'])
+          assert artifact.is_file()
+          assert hashlib.sha256(artifact.read_bytes()).hexdigest() == manifest['artifact']['sha256']
+          assert manifest['artifact']['format'] == 'poly-research-archive/v1'
+          assert manifest['artifact']['cipher'] == 'AES-256-GCM'
+          assert manifest['artifact']['plaintext_committed'] is False
+          print('Encrypted baseline artifact checksum and envelope metadata validated; plaintext not opened.')
           PY

@@ -13,3 +13,9 @@ The registered experiment separates `pre_canary_research` from
 `post_canary_completion`: ten completed canary round-trips are measured only
 after a canary run, while the statistical and data-quality gates remain
 required before the first-canary review. Neither phase authorizes live orders.
+
+`archive_baseline_20261004_manifest.json` points to the encrypted result of the
+first fixed archive inventory and quote-only baseline. The sealed result records
+source commits, date/window coverage, sampling gaps, missing execution metadata,
+cost sensitivities, $10/5-or-10-share constraints, leakage limits, and the next
+forward-data contract. It contains no execution evidence or trading approval.

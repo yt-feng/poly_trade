@@ -1,0 +1,31 @@
+{
+  "manifest_version": 1,
+  "experiment_id": "EXP-0001-canary-foundation",
+  "run_id": "archive-baseline-20261004",
+  "repo": "yt-feng/poly_trade",
+  "source": {
+    "poly_repo": "yt-feng/poly",
+    "poly_commit": "b89cc73bffab2c9e7b8b61507c5057542c7e9a16",
+    "poly_trade_commit_before_run": "e75d7fc0c01461e045bc6614d1b3e49bfa0fdd09",
+    "network_used": false
+  },
+  "command": "python analysis/archive_baseline_audit.py --poly-root /workspace/poly --trade-root /workspace/poly_trade --protocol /PRIVATE/protocol.json --output /PRIVATE/result.json",
+  "protocol_sha256": "REDACTED_IN_PUBLIC_MANIFEST_SEALED_WITH_RESULT",
+  "artifact": {
+    "path": "research/strategy/private/archive_baseline_20261004.compact.json.enc",
+    "sha256": "87093b640e469eb347460c2bfe9da7b9514b0b91001342abe038ad3bc692ad51",
+    "format": "poly-research-archive/v1",
+    "cipher": "AES-256-GCM",
+    "plaintext_committed": false
+  },
+  "scope": "retrospective delayed quote sensitivity replay; no execution evidence; no confirmatory out-of-sample claim",
+  "promotion": {
+    "eligible": false,
+    "real_confirmed_fills": 0,
+    "live_trading": false
+  },
+  "notes": [
+    "The sealed artifact contains the concise protocol, source inventory summaries, baseline results, missingness, leakage limitations, and next experiment.",
+    "A four-digit runtime passphrase is weak against offline guessing; no passphrase is stored here."
+  ]
+}
