@@ -33,9 +33,37 @@ python -m unittest discover -s tests -p 'test_canary*.py' -v
 python analysis/canary_acquire.py
 python analysis/canary_readiness.py --input canary_inputs/captured --output canary_results
 python analysis/canary_shadow.py --input snapshots.jsonl --output shadow_decisions.jsonl
+python analysis/canary_evidence_ledger.py \
+  --input evidence/ledger/current.json \
+  --output reports/canary_readiness_foundation/evidence_ledger.json
 ```
 
 影子流可用 --input - 从标准输入读取，只有诊断输出，不会连接下单服务。GitHub Actions 的 canary-readiness-research 提供有下载预算的获取、测试与回放流程。没有定时任务或下单步骤。CI绿色表示代码、校验和与回放成功，不表示策略通过实盘门槛；readiness.json 是准入结果。
+
+## Evidence ledger and qualification boundary
+
+`analysis/canary_evidence_ledger.py` is the fail-closed, offline gate checker.
+It emits explicit `observed`, `missing_counts`, and `blockers` fields without
+printing receipt contents. Only a record whose provenance is exactly
+`private_execution_receipt` can qualify. It must contain a confirmed entry,
+stable evidence and private entry identifiers, an ISO-8601 timestamp with
+timezone, a cost-adjusted lower-bound PnL, and the exit
+order/fill/cancel/fee/settlement/account reconciliation fields. The checker
+counts independent `window_id` values and UTC entry dates from those private
+receipts only.
+
+`public_quote`, `paper_simulation`, and `synthetic_receipt` records are useful
+for diagnostics and fixture tests, but are always excluded from real-fill,
+round-trip, window, date, PnL, and exit-reconciliation gates. A complete
+synthetic fixture therefore remains blocked. The checked-in snapshot at
+`evidence/ledger/current.json` has no private receipts; its diagnostic output
+is `reports/canary_readiness_foundation/evidence_ledger.json` and currently
+reports zero fills, zero round-trips, and the full missing-count list.
+
+Do not put raw private receipts, account data, wallet keys, or decrypted
+reasoning in this public repository. Keep private evidence outside Git or in an
+authenticated encrypted archive and publish only safe metadata and immutable
+references.
 
 ## 固定实验
 

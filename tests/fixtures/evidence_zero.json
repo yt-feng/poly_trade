@@ -1,0 +1,16 @@
+{
+  "records": [
+    {
+      "evidence_id": "public-quote-001",
+      "provenance": "public_quote",
+      "window_id": "quote-window-001",
+      "entry_utc": "2026-10-01T00:00:00Z"
+    },
+    {
+      "evidence_id": "paper-001",
+      "provenance": "paper_simulation",
+      "window_id": "paper-window-001",
+      "entry_utc": "2026-10-02T00:00:00Z"
+    }
+  ]
+}

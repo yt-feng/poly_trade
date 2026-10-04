@@ -5,8 +5,12 @@ on:
     paths:
       - 'research/**'
       - 'reports/canary_readiness_foundation/**'
+      - 'evidence/ledger/**'
+      - 'analysis/canary_evidence_ledger.py'
       - 'tools/archive_crypto.py'
       - 'tests/test_archive_crypto.py'
+      - 'tests/test_canary_evidence_ledger.py'
+      - 'tests/fixtures/evidence_*.json'
       - 'requirements-research.txt'
       - '.github/workflows/research-foundation.yml'
   push:
@@ -14,8 +18,12 @@ on:
     paths:
       - 'research/**'
       - 'reports/canary_readiness_foundation/**'
+      - 'evidence/ledger/**'
+      - 'analysis/canary_evidence_ledger.py'
       - 'tools/archive_crypto.py'
       - 'tests/test_archive_crypto.py'
+      - 'tests/test_canary_evidence_ledger.py'
+      - 'tests/fixtures/evidence_*.json'
       - 'requirements-research.txt'
       - '.github/workflows/research-foundation.yml'
   workflow_dispatch:
@@ -67,4 +75,19 @@ jobs:
           print('Research and canary contracts validated.')
           PY
       - name: Compile tooling
-        run: python -m py_compile tools/archive_crypto.py
+        run: |
+          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py
+      - name: Evidence ledger offline contracts
+        run: |
+          python -m unittest discover -s tests -p 'test_canary_evidence_ledger.py' -v
+          python analysis/canary_evidence_ledger.py \
+            --input tests/fixtures/evidence_zero.json \
+            --output /tmp/evidence-ledger.json
+          python - <<'PY'
+          import json
+          report = json.load(open('/tmp/evidence-ledger.json', encoding='utf-8'))
+          assert report['promotion_allowed'] is False
+          assert report['observed']['real_confirmed_fill_count'] == 0
+          assert report['missing_counts']['execution_evidence'] > 0
+          print('Evidence ledger remains blocked without private receipts.')
+          PY

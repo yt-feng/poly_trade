@@ -4,6 +4,7 @@
   "status": "blocked",
   "promotion_allowed": false,
   "evidence_boundary": "Public quote observations and paper replays cannot establish real fills or canary eligibility.",
+  "evidence_ledger": "reports/canary_readiness_foundation/evidence_ledger.json",
   "gates": {
     "independent_windows_min": 300,
     "independent_utc_dates_min": 7,

@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "records": [],
+  "source": "repository_snapshot_no_private_receipts",
+  "note": "Only public-safe ledger metadata is tracked. Private execution receipts remain outside this repository."
+}

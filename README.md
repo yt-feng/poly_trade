@@ -49,6 +49,21 @@ positive 3-second-delay and extra-exit-tick stress tests, at least 99% exit
 reconciliation, and private order/fill/cancel/fee/settlement/account
 reconciliation. These are research controls, not a profit guarantee.
 
+The fail-closed evidence ledger turns those gates into a reproducible offline
+report. It accepts JSON/JSONL records but counts only
+`private_execution_receipt` provenance; `public_quote`, `paper_simulation`, and
+`synthetic_receipt` data can never satisfy a real-fill gate:
+
+```bash
+python analysis/canary_evidence_ledger.py \
+  --input evidence/ledger/current.json \
+  --output reports/canary_readiness_foundation/evidence_ledger.json
+```
+
+The current checked-in snapshot contains no private receipts, so the report is
+blocked with explicit missing counts. See `evidence/ledger/README.md` for the
+public-safe record boundary and private receipt handling.
+
 ## Safe private archive handling
 
 Install the maintained PyCA dependency and supply the user's passphrase only at

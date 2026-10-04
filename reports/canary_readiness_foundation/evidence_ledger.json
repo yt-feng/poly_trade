@@ -1,0 +1,60 @@
+{
+  "blockers": [
+    "ten_canary_roundtrips",
+    "independent_windows",
+    "independent_utc_dates",
+    "execution_evidence",
+    "cost_adjusted_pnl_lower_bound_positive",
+    "three_second_stress_lower_bound_positive",
+    "extra_exit_tick_stress_lower_bound_positive",
+    "exit_reconciliation_rate_to_99pct"
+  ],
+  "eligible_for_human_review": false,
+  "evidence_boundary": "Only private_execution_receipt records can qualify; public quotes, paper simulations, and synthetic fixtures never count.",
+  "excluded_record_reasons": {},
+  "input": "evidence/ledger/current.json",
+  "missing_counts": {
+    "cost_adjusted_pnl_lower_bound_positive": 1,
+    "execution_evidence": 100,
+    "exit_reconciliation_rate_to_99pct": 1,
+    "extra_exit_tick_stress_lower_bound_positive": 1,
+    "independent_utc_dates": 7,
+    "independent_windows": 300,
+    "ten_canary_roundtrips": 10,
+    "three_second_stress_lower_bound_positive": 1
+  },
+  "observed": {
+    "complete_roundtrips": 0,
+    "cost_adjusted_pnl_lower_bound_usd": "0",
+    "duplicate_evidence_ids": 0,
+    "exit_reconciled_records": 0,
+    "exit_reconciliation_rate": "0",
+    "extra_exit_tick_stress_lower_bound_usd": "0",
+    "extra_exit_tick_stress_missing_records": 0,
+    "independent_utc_dates": 0,
+    "independent_windows": 0,
+    "input_records": 0,
+    "invalid_private_receipts": 0,
+    "paper_simulation_records": 0,
+    "public_quote_records": 0,
+    "qualifying_private_receipt_records": 0,
+    "real_confirmed_fill_count": 0,
+    "synthetic_receipt_records": 0,
+    "three_second_stress_lower_bound_usd": "0",
+    "three_second_stress_missing_records": 0
+  },
+  "output_is_diagnostic_only": true,
+  "promotion_allowed": false,
+  "requirements": {
+    "cost_adjusted_lower_bound_positive": true,
+    "execution_evidence": 100,
+    "exit_reconciliation_rate": "0.99",
+    "extra_exit_tick_stress_lower_bound_positive": true,
+    "independent_utc_dates": 7,
+    "independent_windows": 300,
+    "ten_canary_roundtrips": 10,
+    "three_second_stress_lower_bound_positive": true
+  },
+  "schema_version": 1,
+  "status": "blocked"
+}
