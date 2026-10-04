@@ -19,8 +19,10 @@ not an order acknowledgement, a fill, a fee receipt, or a settlement record.
 
 The current engineering boundary also remains visible: poly PR #17 is still
 documented as draft/open with offline tests passing while live API behavior is
-unverified; poly_trade's WS freshness issue remains open. CI success means the
-code and offline contracts ran successfully, never that canary gates passed.
+unverified; logging PRs #7 and #9 are merged, while poly PR #6 (preserve live
+health before capture shutdown) and issue #3 (REST books changing while WS is
+inactive) remain open around WS freshness. CI success means the code and offline
+contracts ran successfully, never that canary gates passed.
 
 Re-evaluate this report only from a new manifest that pins the source commit,
 UTC windows and dates, exact command, raw-input checksums, cost model, and

@@ -72,6 +72,9 @@ The existing workflows validate offline/unit/research contracts and may run
 public read-only feeds. They do not prove live API behavior, private order
 acknowledgements, fills, fees, settlement, or WebSocket freshness. Do not place
 real trades or enable live credentials based on CI success or quote-only data.
+The currently documented logging state is that PRs #7 and #9 are merged, while
+poly PR #6 and issue #3 remain open around capture shutdown health and WS
+freshness.
 
 ## Research logic
 

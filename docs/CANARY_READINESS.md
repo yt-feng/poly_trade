@@ -19,8 +19,10 @@ these gates passed. See
 decision and `REPORT.md` for the evidence boundary.
 
 The engineering boundary is unchanged: poly PR #17 is documented as draft/open
-with offline tests passing while live API behavior is unverified, and the WS
-freshness issue remains open. No real order is part of this foundation change.
+with offline tests passing while live API behavior is unverified. Logging PRs
+#7 and #9 are merged, while poly PR #6 (preserve live health before capture
+shutdown) and issue #3 (REST books changing while WS is inactive) remain open
+around WS freshness. No real order is part of this foundation change.
 
 本模块是无交易权限的影子研究链路，不导入 live_execution、不读取钱包密钥、不发送订单。旧模型和实盘配置保持原样，不视为已修复或重新训练。新模块弃用完整前两分钟的前视特征，由当时已接收的前缀重算信号。旧 final_price > target_price 代理标签不得导入。
 
