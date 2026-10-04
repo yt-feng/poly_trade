@@ -5,7 +5,7 @@ A trusted recipient is mandatory BEFORE the first network request. Filters,
 raw replies, timing and errors stay inside the encrypted envelope. A CLI run
 prints only a constant status; it never falls back to plaintext or another API.
 This is a client contract, not validation of the remote service's completeness.
-Reference: https://data-api.polymarket.com/v2/docs
+Reference: https://docs.polymarket.com/api-reference/data-api/overview
 """
 from __future__ import annotations
 import argparse
@@ -25,7 +25,11 @@ ENDPOINTS = {'/v2/trades', '/v2/activity'}
 MAX_BODY = 1024 * 1024
 MAX_TOTAL = 6 * 1024 * 1024
 MAX_PAGES = 5
-FIELDS = {'user', 'condition', 'event_id', 'start', 'end', 'side', 'filter_type', 'filter_amount', 'taker_only', 'limit', 'sort_direction'}
+COMMON_FIELDS = {'user', 'condition', 'event_id', 'start', 'end', 'side', 'limit'}
+FIELDS = {
+    '/v2/trades': COMMON_FIELDS | {'filter_type', 'filter_amount', 'taker_only'},
+    '/v2/activity': COMMON_FIELDS | {'type', 'sort_by', 'sort_direction', 'exclude_deposits_withdrawals'},
+}
 
 
 def require(value, code):
@@ -37,7 +41,7 @@ def validate_request(request):
     require(isinstance(request, dict) and set(request) == {'endpoint', 'filters', 'max_pages'}, 'INVALID_REQUEST')
     endpoint, filters, pages = request['endpoint'], request['filters'], request['max_pages']
     require(endpoint in ENDPOINTS, 'ENDPOINT_NOT_ALLOWED')
-    require(isinstance(filters, dict) and set(filters) <= FIELDS, 'UNKNOWN_FILTER')
+    require(isinstance(filters, dict) and set(filters) <= FIELDS[endpoint], 'UNKNOWN_FILTER')
     require(type(pages) is int and 1 <= pages <= MAX_PAGES, 'INVALID_PAGE_BUDGET')
     for k, v in filters.items():
         require(type(v) in (str, int, float, bool) and len(str(v)) <= 4096, 'INVALID_FILTER_VALUE')
@@ -45,6 +49,16 @@ def validate_request(request):
             require(Decimal(str(v)).is_finite(), 'INVALID_FILTER_VALUE')
     if endpoint == '/v2/activity':
         require(bool(filters.get('user')), 'ACTIVITY_REQUIRES_USER')
+        require(not ('condition' in filters and 'event_id' in filters), 'CONFLICTING_ACTIVITY_FILTERS')
+        if 'sort_by' in filters:
+            require(filters['sort_by'] == 'TIMESTAMP', 'INVALID_ACTIVITY_SORT')
+        if 'sort_direction' in filters:
+            require(filters['sort_direction'] in ('ASC', 'DESC'), 'INVALID_ACTIVITY_DIRECTION')
+    for k in ('condition', 'event_id'):
+        if k in filters:
+            identifiers = [x.strip() for x in str(filters[k]).split(',')]
+            require(all(identifiers), 'INVALID_IDENTIFIER_LIST')
+            require(len(set(identifiers)) <= 20, 'TOO_MANY_IDENTIFIERS')
     if endpoint == '/v2/trades' and not filters.get('user'):
         require('start' not in filters and 'end' not in filters, 'TIME_FILTER_IGNORED_FOR_NONUSER_SHAPE')
     for k in ('start', 'end'):
@@ -76,7 +90,8 @@ def parse_page(body):
     require(type(paging.get('has_more')) is bool and 'next_cursor' in paging, 'INVALID_PAGINATION')
     more, cursor = paging['has_more'], paging['next_cursor']
     if more:
-        require(isinstance(cursor, str) and 0 < len(cursor) <= 8192 and len(doc['data']) > 0, 'INCONSISTENT_PAGINATION')
+        # Empty and short feed pages may continue; only a null cursor ends a walk.
+        require(isinstance(cursor, str) and 0 < len(cursor) <= 8192, 'INCONSISTENT_PAGINATION')
     else:
         require(cursor is None, 'INCONSISTENT_PAGINATION')
     return doc['data'], cursor, more

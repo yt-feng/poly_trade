@@ -59,8 +59,8 @@ class FeedContract(unittest.TestCase):
         with self.assertRaises(ValueError): parse_page(page(more=True))
     def test_false_with_cursor_rejected(self):
         with self.assertRaises(ValueError): parse_page(page(cursor='next'))
-    def test_empty_with_more_rejected(self):
-        with self.assertRaises(ValueError): parse_page(page([], True, 'next'))
+    def test_empty_with_more_continues(self):
+        self.assertEqual(parse_page(page([], True, 'next')), ([], 'next', True))
     def test_oversized_body_rejected(self):
         with self.assertRaises(ValueError): parse_page(b' '* (MAX_BODY + 1))
     def test_offset_forbidden(self):
