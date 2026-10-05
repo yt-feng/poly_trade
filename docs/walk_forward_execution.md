@@ -65,3 +65,22 @@ inputs do not waive the private order/fill/cancel/fee/settlement/account gates.
 The report also repeats the canary context of 300 independent windows, 7 UTC
 dates and 100 execution-evidence records; those promotion gates are explicitly
 not enforced by this public replay.
+
+Run the intake contract first when a new capture and label package arrives:
+
+```bash
+python analysis/walk_forward_intake.py \
+  --observations /private/observations-v3.jsonl \
+  --labels /private/resolution-labels.jsonl \
+  --expected-observations-sha256 '<64 lowercase hex>' \
+  --expected-labels-sha256 '<64 lowercase hex>' \
+  --output /private/intake-report.json
+```
+
+The intake report checks the complete file hashes, every accepted v3 row's
+provenance hash format (the source bytes are not silently assumed available),
+field-level label validity, per-market timestamp monotonicity,
+condition identity, and whether a label was available before an observation or
+an observation occurred at/after resolution. It records only basenames and
+aggregate IDs/counts in the report. `--synthetic` is reserved for offline
+fixtures and forces `evidence_qualifies=false`; it never creates OOS metrics.

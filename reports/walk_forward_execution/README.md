@@ -17,3 +17,14 @@ evaluator.
 Provide a previously unseen canonical v3 JSONL block and a separate, hashed
 resolution-label JSONL file before generating a new report. Public replay
 metrics will still not satisfy the existing private-fill canary gate.
+
+Use `analysis/walk_forward_intake.py` as the reproducible handoff before
+`walk_forward_execution.py`. Supply both file SHA-256 values when the capture
+package is frozen. The intake fails closed on invalid v3 fields, invalid label
+fields, mismatched condition IDs, non-monotonic market time, labels available
+before feature receipt, observations at/after resolution, and future-label
+fields. Synthetic fixture runs may be marked explicitly with `--synthetic`,
+but the resulting report is always non-evidence and contains no OOS metrics.
+The checked-in [`intake_synthetic_blocked.json`](intake_synthetic_blocked.json)
+is one such fixture run: it proves the contract and leakage checks execute, but
+its one window/one date is explicitly blocked and cannot be used as evidence.

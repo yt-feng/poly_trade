@@ -1,0 +1,133 @@
+{
+  "alignment": {
+    "condition_mismatch_count": 0,
+    "condition_mismatch_market_ids": [],
+    "label_known_before_or_at_observation_count": 0,
+    "label_known_before_or_at_observation_ids": [],
+    "label_markets": 1,
+    "missing_label_market_count": 0,
+    "missing_label_market_ids": [],
+    "observation_at_or_after_resolution_count": 0,
+    "observation_at_or_after_resolution_ids": [],
+    "observation_markets": 1,
+    "orphan_label_market_count": 0,
+    "orphan_label_market_ids": []
+  },
+  "blocked_reasons": [
+    "fewer_than_300_independent_windows",
+    "fewer_than_7_independent_utc_dates",
+    "synthetic_input_not_evidence"
+  ],
+  "canary_allowed": false,
+  "canary_blocked": true,
+  "canary_requirements": {
+    "execution_evidence_min": 100,
+    "independent_utc_dates_min": 7,
+    "independent_windows_min": 300,
+    "private_execution_receipts_required": true,
+    "public_replay_does_not_satisfy_canary": true
+  },
+  "coverage": {
+    "accepted_observation_records": 1,
+    "independent_utc_dates": 1,
+    "independent_windows": 1,
+    "source_event_time_ms": {
+      "max": 1791000000000,
+      "min": 1791000000000
+    },
+    "utc_dates": [
+      "2026-10-03"
+    ]
+  },
+  "evidence_qualifies": false,
+  "files": {
+    "labels": {
+      "bytes": 300,
+      "expected_sha256": null,
+      "expected_sha256_valid": true,
+      "present": true,
+      "provided_name": "walk_forward_labels_valid.jsonl",
+      "sha256": "c0182a50536728fae719cdd392072c393999c055cd6f638ebeecdbed400bdcc4",
+      "sha256_match": null
+    },
+    "observations": {
+      "bytes": 774,
+      "expected_sha256": null,
+      "expected_sha256_valid": true,
+      "present": true,
+      "provided_name": "v3_observation_valid.jsonl",
+      "sha256": "22fab7bdadfcf412eaf9d16a1bd47fc8647c938f292efddb67007ad7d2fda780",
+      "sha256_match": null
+    }
+  },
+  "intake": "walk_forward_canonical_input_v1",
+  "labels": {
+    "accepted_records": 1,
+    "contract": {
+      "additional_properties": false,
+      "required_fields": [
+        "label_version",
+        "market_id",
+        "condition_id",
+        "outcome",
+        "resolved_time_ms",
+        "label_available_time_ms",
+        "source",
+        "source_sha256"
+      ],
+      "schema": "research/strategy/schema/walk_forward_label.schema.json",
+      "schema_version": 1
+    },
+    "input_records": 1,
+    "quarantined_records": 0,
+    "reason_counts": {}
+  },
+  "metrics": {
+    "brier": null,
+    "ece": null,
+    "net_pnl_usdc": null,
+    "oos": null
+  },
+  "observations": {
+    "accepted_book_records": 1,
+    "accepted_records": 1,
+    "contract": {
+      "forbidden_future_fields": [
+        "label",
+        "outcome",
+        "final_price",
+        "target_price",
+        "settlement",
+        "pnl",
+        "payoff"
+      ],
+      "observation_types": [
+        "book_snapshot",
+        "trade"
+      ],
+      "schema": "research/strategy/schema/v3_observation.schema.json",
+      "schema_version": 3
+    },
+    "input_records": 1,
+    "leakage_check": {
+      "forbidden_keys": [],
+      "passed": true
+    },
+    "quarantined_records": 0,
+    "reason_counts": {},
+    "source_sha256_unique_count": 1,
+    "source_sha256_values": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "source_sha256_verification": "format_only_without_source_bytes"
+  },
+  "schema_version": 1,
+  "status": "blocked",
+  "synthetic_input": true,
+  "time_order": {
+    "market_count": 1,
+    "nondecreasing_by_market": true,
+    "regression_count": 0,
+    "regressions": []
+  }
+}
