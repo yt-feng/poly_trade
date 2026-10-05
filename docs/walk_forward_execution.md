@@ -88,3 +88,21 @@ The output also carries an immutable `manifest_sha256` over its canonical JSON
 body (excluding that self-digest), plus deterministic set digests for markets,
 conditions, token roles and market/condition pairs. A changed input or edited
 manifest therefore cannot be mistaken for the frozen package.
+
+Run the split audit after intake and before fitting:
+
+```bash
+python analysis/walk_forward_split_audit.py \
+  --observations /private/observations-v3.jsonl \
+  --labels /private/resolution-labels.jsonl \
+  --expected-observations-sha256 '<64 lowercase hex>' \
+  --expected-labels-sha256 '<64 lowercase hex>' \
+  --output /private/split-audit.json
+```
+
+The split audit uses `(market_id, condition_id)` clusters, never splits a
+cluster across train/validation/test, and reports every boundary, purge and
+embargo interval. Training labels must be available by the train cutoff;
+validation/test labels must remain unavailable at their feature receive time.
+Any cluster overlap, boundary crossing, purge/embargo occupancy or label-time
+violation is a blocker. It is a structural audit only and emits no OOS metrics.

@@ -1,0 +1,156 @@
+{
+  "audit": "market_level_walk_forward_split_v1",
+  "blocked_reasons": [
+    "fewer_than_300_independent_windows",
+    "fewer_than_7_independent_utc_dates",
+    "no_complete_chronological_folds",
+    "synthetic_input_not_evidence"
+  ],
+  "canary_allowed": false,
+  "canary_blocked": true,
+  "canary_requirements": {
+    "execution_evidence_min": 100,
+    "independent_utc_dates_min": 7,
+    "independent_windows_min": 300,
+    "private_execution_receipts_required": true
+  },
+  "config": {
+    "embargo_ms": 1000,
+    "purge_ms": 300000,
+    "test_duration_ms": 900000,
+    "train_duration_ms": 3600000,
+    "validation_duration_ms": 900000
+  },
+  "contracts": {
+    "cluster_key": [
+      "market_id",
+      "condition_id"
+    ],
+    "labels_schema_version": 1,
+    "observations_schema_version": 3
+  },
+  "coverage": {
+    "accepted_observation_records": 1,
+    "condition_count": 1,
+    "coverage_sha256": {
+      "condition_ids": "2bc784398f0bab28c4a22682abde0029e29306957be2072e70ee408710b91d70",
+      "down_token_ids": "a962013989c670aca3c003ee96705b6971e66bfd215c0f24fe9368d00974fc38",
+      "market_condition_pairs": "f69065a0b9dc726d91a89ec9e8fe752d55be0c92156b00637712e6c759b051df",
+      "market_ids": "6546b4ff304a5027abc774cac9d8f2592d3e24e9fe76043d6e2a83396067cfe4",
+      "up_token_ids": "37325611c1d2590ddd3ea10dd9f38b56b59bf0bf2ce6c5a52329f7d2dbbdd7e7"
+    },
+    "inconsistent_market_identity_count": 0,
+    "inconsistent_market_identity_ids": [],
+    "independent_utc_dates": 1,
+    "independent_windows": 1,
+    "market_count": 1,
+    "source_event_time_ms": {
+      "max": 1791000000000,
+      "min": 1791000000000
+    },
+    "token_counts": {
+      "down": 1,
+      "up": 1
+    },
+    "utc_dates": [
+      "2026-10-03"
+    ]
+  },
+  "evidence_qualifies": false,
+  "files": {
+    "labels": {
+      "bytes": 300,
+      "expected_sha256": null,
+      "expected_sha256_valid": true,
+      "present": true,
+      "provided_name": "walk_forward_labels_valid.jsonl",
+      "sha256": "c0182a50536728fae719cdd392072c393999c055cd6f638ebeecdbed400bdcc4",
+      "sha256_match": null
+    },
+    "observations": {
+      "bytes": 774,
+      "expected_sha256": null,
+      "expected_sha256_valid": true,
+      "present": true,
+      "provided_name": "v3_observation_valid.jsonl",
+      "sha256": "22fab7bdadfcf412eaf9d16a1bd47fc8647c938f292efddb67007ad7d2fda780",
+      "sha256_match": null
+    }
+  },
+  "labels": {
+    "accepted_records": 1,
+    "input_records": 1,
+    "quarantined_records": 0,
+    "reason_counts": {}
+  },
+  "manifest_sha256": "53dd06fd3778903f63ac5a60960978ab7585d25b4bc02f34b71cfc308f264498",
+  "metrics": {
+    "brier": null,
+    "ece": null,
+    "net_pnl_usdc": null,
+    "oos": null
+  },
+  "observation_validation": {
+    "accepted_alignment": {
+      "future_event_records": 0,
+      "max_latency_ms": 120,
+      "median_latency_ms": 120,
+      "min_latency_ms": 120,
+      "missing_timestamp_records": 0,
+      "p95_latency_ms": 120,
+      "records_with_both_timestamps": 1
+    },
+    "accepted_records": 1,
+    "alignment": {
+      "future_event_records": 0,
+      "max_latency_ms": 120,
+      "median_latency_ms": 120,
+      "min_latency_ms": 120,
+      "missing_timestamp_records": 0,
+      "p95_latency_ms": 120,
+      "records_with_both_timestamps": 1
+    },
+    "input_records": 1,
+    "leakage_check": {
+      "forbidden_keys": [],
+      "passed": true
+    },
+    "missingness": {
+      "condition_id": 0,
+      "fees": 0,
+      "fees.asset": 0,
+      "fees.exponent": 0,
+      "fees.rate": 0,
+      "market_id": 0,
+      "observation_id": 0,
+      "observation_type": 0,
+      "provenance": 0,
+      "provenance.capture_id": 0,
+      "provenance.retrieved_at_ms": 0,
+      "provenance.source": 0,
+      "provenance.source_sha256": 0,
+      "received_time_ms": 0,
+      "rules": 0,
+      "rules.min_order_size": 0,
+      "rules.tick_size": 0,
+      "schema_version": 0,
+      "source_event_time_ms": 0,
+      "token_ids": 0
+    },
+    "quarantine": [],
+    "quarantined_records": 0,
+    "reason_counts": {},
+    "schema_version": 3
+  },
+  "schema_version": 1,
+  "split_audit": {
+    "blockers": [
+      "no_complete_chronological_folds"
+    ],
+    "cluster_count": 1,
+    "cluster_ids_sha256": "517fee14cba2ebedccc13caf6200e73e53d97ada0cce9b2258ccdd92557270e9",
+    "folds": []
+  },
+  "status": "blocked",
+  "synthetic_input": true
+}

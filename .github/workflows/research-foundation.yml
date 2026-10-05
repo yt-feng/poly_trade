@@ -10,6 +10,7 @@ on:
       - 'analysis/archive_baseline_audit.py'
       - 'analysis/v3_data_contract.py'
       - 'analysis/walk_forward_intake.py'
+      - 'analysis/walk_forward_split_audit.py'
       - 'analysis/walk_forward_execution.py'
       - 'research/strategy/schema/**'
       - 'docs/walk_forward_execution.md'
@@ -23,6 +24,7 @@ on:
       - 'tests/test_archive_baseline_audit.py'
       - 'tests/test_v3_data_contract.py'
       - 'tests/test_walk_forward_intake.py'
+      - 'tests/test_walk_forward_split_audit.py'
       - 'tests/test_walk_forward_execution.py'
       - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/walk_forward_*.jsonl'
@@ -39,6 +41,7 @@ on:
       - 'analysis/archive_baseline_audit.py'
       - 'analysis/v3_data_contract.py'
       - 'analysis/walk_forward_intake.py'
+      - 'analysis/walk_forward_split_audit.py'
       - 'analysis/walk_forward_execution.py'
       - 'research/strategy/schema/**'
       - 'docs/walk_forward_execution.md'
@@ -52,6 +55,7 @@ on:
       - 'tests/test_archive_baseline_audit.py'
       - 'tests/test_v3_data_contract.py'
       - 'tests/test_walk_forward_intake.py'
+      - 'tests/test_walk_forward_split_audit.py'
       - 'tests/test_walk_forward_execution.py'
       - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/walk_forward_*.jsonl'
@@ -114,7 +118,7 @@ jobs:
           PY
       - name: Compile tooling
         run: |
-          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_execution.py
+          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_split_audit.py analysis/walk_forward_execution.py
       - name: Check public-safe private archive paths
         run: |
           python - <<'PY'
@@ -136,6 +140,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_v3_data_contract.py' -v
           python -m unittest discover -s tests -p 'test_archive_baseline_audit.py' -v
           python -m unittest discover -s tests -p 'test_walk_forward_intake.py' -v
+          python -m unittest discover -s tests -p 'test_walk_forward_split_audit.py' -v
           python -m unittest discover -s tests -p 'test_walk_forward_execution.py' -v
           python analysis/canary_evidence_ledger.py \
             --input tests/fixtures/evidence_zero.json \

@@ -31,3 +31,9 @@ its one window/one date is explicitly blocked and cannot be used as evidence.
 The report's `manifest_sha256` covers the canonical report body; coverage set
 digests make market/condition/token identity changes visible without publishing
 the full private dataset.
+
+`analysis/walk_forward_split_audit.py` is the next gate. It emits per-fold
+train/validation/test counts and explicit purge/embargo/label-availability
+blockers using market/condition clusters. The checked-in
+[`split_audit_synthetic_blocked.json`](split_audit_synthetic_blocked.json)
+contains no OOS metrics and cannot qualify as evidence.
