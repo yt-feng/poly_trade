@@ -12,6 +12,7 @@ on:
       - 'analysis/walk_forward_intake.py'
       - 'analysis/walk_forward_split_audit.py'
       - 'analysis/preregistered_strategy.py'
+      - 'analysis/research_manifest_contracts.py'
       - 'analysis/execution_realism_contract.py'
       - 'analysis/walk_forward_execution.py'
       - 'analysis/public_acquisition_dry_run.py'
@@ -30,6 +31,7 @@ on:
       - 'tests/test_walk_forward_intake.py'
       - 'tests/test_walk_forward_split_audit.py'
       - 'tests/test_preregistered_strategy.py'
+      - 'tests/test_research_manifest_contracts.py'
       - 'tests/test_execution_realism_contract.py'
       - 'tests/test_walk_forward_execution.py'
       - 'tests/test_public_acquisition_dry_run.py'
@@ -50,6 +52,7 @@ on:
       - 'analysis/walk_forward_intake.py'
       - 'analysis/walk_forward_split_audit.py'
       - 'analysis/preregistered_strategy.py'
+      - 'analysis/research_manifest_contracts.py'
       - 'analysis/execution_realism_contract.py'
       - 'analysis/walk_forward_execution.py'
       - 'analysis/public_acquisition_dry_run.py'
@@ -68,6 +71,7 @@ on:
       - 'tests/test_walk_forward_intake.py'
       - 'tests/test_walk_forward_split_audit.py'
       - 'tests/test_preregistered_strategy.py'
+      - 'tests/test_research_manifest_contracts.py'
       - 'tests/test_execution_realism_contract.py'
       - 'tests/test_walk_forward_execution.py'
       - 'tests/test_public_acquisition_dry_run.py'
@@ -107,13 +111,12 @@ jobs:
           rm -f /tmp/archive.enc /tmp/archive-restored
       - name: Validate experiment and run manifests
         run: |
+          python -m unittest discover -s tests -p 'test_research_manifest_contracts.py' -v
           python - <<'PY'
           import json
           from pathlib import Path
-          for path in Path('research/strategy').glob('experiments/*.json'):
-              obj = json.loads(path.read_text())
-              assert obj['experiment_id'] and obj['scope'] == 'strategy_research'
-              assert obj['protocol']['public_quotes_are_not_fills'] is True
+          from analysis.research_manifest_contracts import validate_experiment_directory
+          validate_experiment_directory(Path('research/strategy/experiments'))
           obj = json.loads(Path('research/strategy/runs/run-manifest.example.json').read_text())
           for key in ('manifest_version','experiment_id','run_id','commit','source','windows','command','outputs','execution_evidence','promotion','pre_registration'):
               assert key in obj, key
@@ -133,7 +136,7 @@ jobs:
           PY
       - name: Compile tooling
         run: |
-          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_split_audit.py analysis/execution_realism_contract.py analysis/preregistered_strategy.py analysis/walk_forward_execution.py analysis/public_acquisition_dry_run.py
+          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_split_audit.py analysis/execution_realism_contract.py analysis/preregistered_strategy.py analysis/research_manifest_contracts.py analysis/walk_forward_execution.py analysis/public_acquisition_dry_run.py
       - name: Validate public acquisition blocker without network
         run: |
           python -m unittest discover -s tests -p 'test_public_acquisition_dry_run.py' -v
@@ -154,6 +157,7 @@ jobs:
           python - <<'PY'
           import json
           report = json.load(open('/tmp/preregistration-synthetic.json', encoding='utf-8'))
+          assert report['manifest_errors'] == []
           assert report['canary_blocked'] is True
           assert 'synthetic_input_not_evidence' in report['blockers']
           assert report['metrics']['oos'] is None
