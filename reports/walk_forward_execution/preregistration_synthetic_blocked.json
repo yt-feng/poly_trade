@@ -6,11 +6,1313 @@
   "canary_allowed": false,
   "canary_blocked": true,
   "cautions": [
-    "pbo_cscv_pending_until_post_evaluation"
+    "pbo_cscv_pending_until_post_evaluation",
+    "stress_outputs_not_observed"
   ],
   "evidence_qualifies": false,
+  "execution_realism": {
+    "audit": "execution_realism_stress_v1",
+    "blockers": [
+      "synthetic_input_not_evidence"
+    ],
+    "canary_allowed": false,
+    "canary_blocked": true,
+    "cautions": [
+      "stress_outputs_not_observed"
+    ],
+    "cells": [
+      {
+        "cell_id": "a46028785be7d4650cf48bf361d69cdf02a071cef2c27a189d7dfea7dfa39582",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "50c06cd763c91a908a17a01274ef203f245c364986f4bb1c75ee484e0a4b96f7",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "d60f3a979949abee7f5f16fa7c08dfb8f8481ad5a9d4682ccee83c8fb38c4c9a",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "74c0ee6e1058f61d66d97ad46c7681c16e8d5391f45765fefef07053df5b0387",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "a2e05eabab540da3daedb644c9839d511519853437d495680cd75a592765955e",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "7eed6a6daff49fa546572379dcc122af73d31880b499b847cf0ccc5128191d48",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "97839382304f2affd3e4219119c5c03ed5492b18bff75ca8eb462cac026d0e6d",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "9b547db085e4f9539b0454ac6e6e7fde0e554665d13b60cde2f9da49fab841c9",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "40611935b603da15f4a8d031add169baf90b7a6dbba16eeb39438c9ad4fcd715",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "1ed626a59797f154e9f42355cadbca3f8558e9a49e73f1f17ef62d693c29ea71",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "67b43a89b6503fbc518d7c5276aa84135994d5f01042715564f0e42ef742d0e5",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "c09ee6c7a099975e68a1f1ec479b4feafc7146d30ab7635a11d6941b789a6c86",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "2599541a6ca7f166e6682edb9f9eff43ac1b2b992afdbcc87828b5da01dc29b4",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "a3bd3188292bc870e3f1c1e0b52a2cad1aadd9bc0a9f63f5b3cbf62db2037446",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "47b515a626b820d21ba7064ba6282565f272d9a9278013d78f4ec4c1f137070d",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "b71f7e0d7e636aa00fcd48395a1eb85e8e4312407e37015fa0f39491690c42a6",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "67e67ddd108714e2538f460cb21c0aa55888a4a445f1bdd3acac577c76c0fdb6",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "0cdb5c27ef1280b8849109295edb5e643ad9d3ada6ad3647fb64b48e2dbcfdb0",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "7da1b411b0181ef36ee4c0348e6647dade9935c2d59dd36257f3db704dac40e8",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "bbbf5fd55960af9b255ece5d7a3d0c676e4dcfb957da8f4d31e424b14740d9eb",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "66223a8d0a8d96f86eb528aaf850c0ba6402f179f15e18850af656483252160e",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "cff08190a4fb2fc88ebf655b689d43f58d82e2b9e08b8d6d3d0889c243aec5bf",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "bdf0b66d7c066a5c32318714e42079adec250f746984199663a3b7743b3dcfc8",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "324efd70845f6a920831665ae8686b09055999b8e6978e1de3294619b75c800f",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "3d1dca73751808b3f50a37e4b3fdfda75ace0a8ea839428c54388b955fdaba17",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "7f6b2aaf2911e176839faf1b050095d5f428e3869f3acaad6546e5e462681a6c",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "4b0cbf7fad322156415f46eccba2188a1c00359f9e2ad9a3bdc4e68c888232c1",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "615f1e0f7b2bb05665918939ea74e96f12accd12353f055be1fabf126de8f1d6",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "9366ea00c593aa6f3a228a4c823f136e7cef1acbe9d806c2ab9b392bc9407f50",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "ddbc1772a819db9868d32543167330d047417abb1a5035e4600ad4b2226b36c5",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "4021c2f4bf6c6b93cba5d4e60ecf68e2c5acf9ee9419a5d97bc6bc4b8d91fd10",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "d21747616fb602f0c3979ffba6cbc163721ce82b2c39cd1263ba0df03a4e3449",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.00",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "a9799d0ef7bff1671e3c76cf3dbd162e15d74cd114296d6b496f9ba4be7a86ec",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "25da69e4b6057268994dc1bbc612ccc6d8e851da8b3c32211df92e4338af490a",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "784f577cd955ebbc2aa640b2d9dd38c003214060f0ca23988d93f45c87813871",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "a2885be1e20cea4392127e07e4ba85c2643db103ab3ae8a5bddc1767027d758d",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "5b9d128cec6b4143862fba0944472e40101e305c5bd4abecb33754ba32030043",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "a64f4e9a1db38c9480c8212643156a38196a1a9b58c87bf2d911792373144c78",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "45c6e1a985ea63c3d710473f92a8cc27b8f1e32c3b0b135b638085910e4b543b",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "344d4a21b30599cdc2500be3d905f453d9dc489af1e7f3d0c59769cda0d64cc1",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "ad1a169342bcb06e6fb738c19f1deb66a5c424d23a3982aedd107163dc9c2580",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "185adefe4fdaa230bba796dbb263fc19d041aed13d679980b7f64cd20b747464",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "ae5f57e1ef9a1667b023594d68fae2cbda35f0025396a95fc4935b8dd9f01bc8",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "f44a8784b99858fbd990f21fd84f0697e2263df20b9fd415d02a756e71a84251",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "2dc8d08793524418b9a2cbb68539349c3062dbfa01c0cb6446154da6b9fc136c",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "060260d02a12e152c84fd393de9e643dc35f5ffbfa793b0adef26dd2db133aa6",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "4c93b71e361865a92c894c89897037cf3f505576e51a4d9a2029c06ec7ea1e88",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "6c28108f966c924b775b5e8862291ff4001b24f7d6186b18cb72a410354f8e07",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 0,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "e4640d2fa2277e5a391acc5dcb25185adafe8edf9a341e7683deeb3fcf24a595",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "6a4e2285bea1305fb5ad4f7426679d33d6245f886fa29d7034c5c22c461dfd27",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "89c2070f588f7b6d47309ee2d97cf6c23d7594216adf9a401c59f429112959f8",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "a9ce62680d58343f20c7754b4091bf974acbbd5275bec9be740ce996587b5222",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "ef2ffa8277b7d85c2e0771d5665c89e1a190e3f5aaef6777ccd63877b24093ea",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "9feb4efb85eb5ff790082cd567954a5aeb38acb7e2a1629e43a49abc65dab965",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "cde9a50c312873ec0c53659d72c651349a7bbcd1328af555592d4bc91cdf84cd",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "066fe0793f0e3bc6b135c3bf437e7dfbc40607ee30d8f24a7c7a95b775d652b0",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 0,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "6fd5c821824861b36dbaa3433732087eb4e6ced4772b889cf393b269d58bd2d5",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "6e2fd50fbae678744f191dd495b536990ef3f5d0a75a34b88c13198799f3445b",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "cf23ca59738a834667132fcd04fb76a25194a95f1aaa8bb5b0c2cd63fbb7d59e",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "ec38bdfcbff373bd35b538feb5a353b1e0c28cf9260262a8d45af75bde88747e",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "0.50",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "0483227122f6b84c34b04c7502a9e532cd900ead53c58b04c8a2dd4518c277fd",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "23c4c34a216b81bbfce9b0f482770d62b4b035a317b1c8ac723cfd5791285559",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "allow_partial_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      },
+      {
+        "cell_id": "e851f4f550634d40e885b4889b0d2ab7f18c87dd03aef4aa51a3d7ebb22f6307",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 1000
+        }
+      },
+      {
+        "cell_id": "64896afd01ed0901b5a95bfc13ddd0b13d8266996d4486592fca5729997425e7",
+        "metrics": {
+          "brier": null,
+          "ece": null,
+          "fee_usdc": null,
+          "fill_rate": null,
+          "gross_pnl_usdc": null,
+          "net_pnl_usdc": null
+        },
+        "stress": {
+          "depth_fraction": "1.00",
+          "fee_rate_multiplier": "1.25",
+          "latency_ms": 1000,
+          "partial_fill_policy": "require_full_or_cancel",
+          "slippage_ticks": 1,
+          "ttl_ms": 5000
+        }
+      }
+    ],
+    "contract_errors": [],
+    "evidence_qualifies": false,
+    "metrics": {
+      "brier": null,
+      "ece": null,
+      "fee_usdc": null,
+      "fill_rate": null,
+      "gross_pnl_usdc": null,
+      "net_pnl_usdc": null,
+      "oos": null
+    },
+    "minimum_edge_gate": {
+      "field": "edge_buffer",
+      "rule": "predicted_edge > minimum_edge",
+      "unit": "probability",
+      "values": [
+        "0",
+        "0.01"
+      ]
+    },
+    "output_schema": {
+      "null_on_synthetic": true,
+      "per_cell": [
+        "gross_pnl_usdc",
+        "fee_usdc",
+        "net_pnl_usdc",
+        "fill_rate",
+        "brier",
+        "ece"
+      ]
+    },
+    "price_execution": {
+      "midpoint_allowed": false,
+      "required_depth": [
+        "asks",
+        "bids"
+      ],
+      "source": "displayed_ask_bid"
+    },
+    "schema_version": 1,
+    "status": "blocked",
+    "stress_matrix": {
+      "cell_count": 64,
+      "dimensions": {
+        "depth_fraction": [
+          "0.50",
+          "1.00"
+        ],
+        "fee_rate_multiplier": [
+          "1.00",
+          "1.25"
+        ],
+        "latency_ms": [
+          0,
+          1000
+        ],
+        "partial_fill_policy": [
+          "allow_partial_cancel",
+          "require_full_or_cancel"
+        ],
+        "slippage_ticks": [
+          0,
+          1
+        ],
+        "ttl_ms": [
+          1000,
+          5000
+        ]
+      },
+      "matrix_sha256": "29540014939f30972767343865dd75ea5debc91d7d29f00632aad4ca283ff495"
+    },
+    "synthetic_input": true
+  },
   "manifest_errors": [],
-  "manifest_sha256": "e8e716e96272e640c0936c065c3760c1f6d2796b380602ddb65122871976fc4e",
+  "manifest_sha256": "baf18c4b8bb8321391857eb0c1fb4c53f908911e64057c5c944a2f182123186c",
   "metrics": {
     "brier": null,
     "ece": null,

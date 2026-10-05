@@ -11,6 +11,7 @@ from analysis.preregistered_strategy import (
     parameter_grid_digest,
     validate_manifest,
 )
+from analysis.execution_realism_contract import OUTPUT_FIELDS, expand_stress_cells
 
 
 ROOT = Path(__file__).parents[1]
@@ -70,6 +71,7 @@ class PreRegisteredStrategyTests(unittest.TestCase):
         self.assertIn("test_data_used_for_selection", report["blockers"])
         self.assertIn("pbo_not_computed", report["blockers"])
         self.assertIn("cscv_not_computed", report["blockers"])
+        self.assertIn("execution_stress_outputs_missing", report["blockers"])
 
     def test_valid_post_evaluation_context_has_no_selection_blockers(self):
         manifest = registered_manifest()
@@ -81,6 +83,10 @@ class PreRegisteredStrategyTests(unittest.TestCase):
             selection_metric_source="validation",
             pbo_probability=0.2,
             cscv_result={"method": "CSCV", "partitions": 4, "pbo_probability": 0.2},
+            stress_outputs=[
+                {"cell_id": cell["cell_id"], "metrics": {field: 0.0 for field in OUTPUT_FIELDS}}
+                for cell in expand_stress_cells(manifest["execution_realism"])
+            ],
         )
         self.assertEqual(report["blockers"], [])
         self.assertTrue(report["canary_blocked"])

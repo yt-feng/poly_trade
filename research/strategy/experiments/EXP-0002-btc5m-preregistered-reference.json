@@ -13,6 +13,67 @@
     "label_rule": "label_available_time_ms <= train_end_ms",
     "timezone": "UTC"
   },
+  "execution_realism": {
+    "schema_version": 1,
+    "price_source": "displayed_ask_bid",
+    "midpoint_allowed": false,
+    "required_execution_fields": [
+      "books.<token>.asks",
+      "books.<token>.bids",
+      "rules.tick_size",
+      "rules.min_order_size",
+      "fees.rate",
+      "fees.exponent"
+    ],
+    "minimum_edge": {
+      "field": "edge_buffer",
+      "values": [
+        "0",
+        "0.01"
+      ],
+      "rule": "predicted_edge > minimum_edge",
+      "unit": "probability"
+    },
+    "stress_matrix": {
+      "fee_rate_multiplier": [
+        "1.00",
+        "1.25"
+      ],
+      "slippage_ticks": [
+        0,
+        1
+      ],
+      "latency_ms": [
+        0,
+        1000
+      ],
+      "depth_fraction": [
+        "0.50",
+        "1.00"
+      ],
+      "partial_fill_policy": [
+        "allow_partial_cancel",
+        "require_full_or_cancel"
+      ],
+      "ttl_ms": [
+        1000,
+        5000
+      ]
+    },
+    "cell_count": 64,
+    "matrix_sha256": "29540014939f30972767343865dd75ea5debc91d7d29f00632aad4ca283ff495",
+    "outputs": {
+      "per_cell": [
+        "gross_pnl_usdc",
+        "fee_usdc",
+        "net_pnl_usdc",
+        "fill_rate",
+        "brier",
+        "ece"
+      ],
+      "null_on_synthetic": true
+    }
+  },
   "parameter_grid": {
     "edge_buffer": [
       "0",
@@ -80,5 +141,5 @@
     "status": "not_computed_at_registration",
     "block_on_missing": true
   },
-  "manifest_sha256": "e8e716e96272e640c0936c065c3760c1f6d2796b380602ddb65122871976fc4e"
+  "manifest_sha256": "baf18c4b8bb8321391857eb0c1fb4c53f908911e64057c5c944a2f182123186c"
 }

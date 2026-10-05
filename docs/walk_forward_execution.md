@@ -52,6 +52,13 @@ The evaluator blocks when the manifest, exact data hashes, code identity,
 registered UTC dates or parameter set are absent or changed. Use the
 pre-registration command below to inspect that gate without fitting a model.
 
+The manifest's `execution_realism` contract fixes ask/bid/depth execution and
+forbids midpoint fills. It preregisters a 64-cell matrix over fee multiplier,
+slippage ticks, latency, available depth, partial-fill policy and TTL, plus a
+minimum-edge gate. Each cell must publish `gross_pnl_usdc`, `fee_usdc`,
+`net_pnl_usdc`, `fill_rate`, `brier` and `ece`; incomplete sensitivity or
+missing cost/edge inputs blocks the run.
+
 With the current checkout there is no canonical v3 observation block plus
 separate resolution-label file sufficient for a complete fold. The checked-in
 report therefore remains blocked and contains null metrics rather than
@@ -152,6 +159,7 @@ python analysis/preregistered_strategy.py \
   --selection-stage validation_only_pre_registered \
   --selection-metric brier --selection-metric-source validation \
   --pbo-probability '<0..1>' --cscv-result /private/cscv.json \
+  --stress-output /private/stress-output.json \
   --output /private/preregistration-post.json
 ```
 

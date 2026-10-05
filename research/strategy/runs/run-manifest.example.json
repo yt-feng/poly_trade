@@ -3,7 +3,7 @@
   "experiment_id": "EXP-0001-canary-foundation",
   "pre_registration": {
     "manifest": "research/strategy/experiments/EXP-0002-btc5m-preregistered-reference.json",
-    "manifest_sha256": "e8e716e96272e640c0936c065c3760c1f6d2796b380602ddb65122871976fc4e",
+    "manifest_sha256": "baf18c4b8bb8321391857eb0c1fb4c53f908911e64057c5c944a2f182123186c",
     "strategy_id": "btc5m_reference_v1",
     "parameters": {"edge_buffer": "replace-with-registered-value", "latency_ms": 1000, "order_size": "5", "order_ttl_ms": 5000},
     "selection_stage": "validation_only_pre_registered"

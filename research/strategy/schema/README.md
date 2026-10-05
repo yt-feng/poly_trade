@@ -31,3 +31,9 @@ grid, validation-only selection rule, input hashes, code commit and UTC
 evaluation dates. The manifest also requires CSCV/PBO multiple-testing control;
 `analysis/preregistered_strategy.py` enforces these fields and emits no OOS
 metrics.
+
+`execution_realism.schema.json` is referenced by the pre-registration schema.
+Its six-dimensional matrix covers fee multiplier, slippage ticks, latency,
+available depth, partial-fill policy and TTL. Every cell has gross/fee/net PnL,
+fill rate, Brier and ECE output slots; synthetic runs must leave all slots
+`null`.

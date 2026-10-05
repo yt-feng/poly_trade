@@ -44,3 +44,8 @@ It verifies the strategy ID, causal cutoffs, parameter grid, selection rule,
 data/code identities and evaluation dates. Post-evaluation reports must also
 provide CSCV/PBO multiple-testing diagnostics; missing diagnostics or a
 parameter/test-set change is a machine-readable blocker.
+
+The execution-realism section expands the registered matrix into stable cell
+IDs. It requires ask/bid depth and rejects midpoint execution; every cell's
+gross/fee/net PnL, fill rate, Brier and ECE fields remain `null` in the checked
+in synthetic report.

@@ -11,6 +11,7 @@
     "hypothesis",
     "protocol",
     "feature_cutoff",
+    "execution_realism",
     "parameter_grid",
     "candidate_count",
     "parameter_grid_sha256",
@@ -45,6 +46,7 @@
         "timezone": {"const": "UTC"}
       }
     },
+    "execution_realism": {"$ref": "execution_realism.schema.json"},
     "parameter_grid": {
       "type": "object",
       "minProperties": 1,

@@ -12,6 +12,7 @@ on:
       - 'analysis/walk_forward_intake.py'
       - 'analysis/walk_forward_split_audit.py'
       - 'analysis/preregistered_strategy.py'
+      - 'analysis/execution_realism_contract.py'
       - 'analysis/walk_forward_execution.py'
       - 'research/strategy/schema/**'
       - 'docs/walk_forward_execution.md'
@@ -27,6 +28,7 @@ on:
       - 'tests/test_walk_forward_intake.py'
       - 'tests/test_walk_forward_split_audit.py'
       - 'tests/test_preregistered_strategy.py'
+      - 'tests/test_execution_realism_contract.py'
       - 'tests/test_walk_forward_execution.py'
       - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/walk_forward_*.jsonl'
@@ -45,6 +47,7 @@ on:
       - 'analysis/walk_forward_intake.py'
       - 'analysis/walk_forward_split_audit.py'
       - 'analysis/preregistered_strategy.py'
+      - 'analysis/execution_realism_contract.py'
       - 'analysis/walk_forward_execution.py'
       - 'research/strategy/schema/**'
       - 'docs/walk_forward_execution.md'
@@ -60,6 +63,7 @@ on:
       - 'tests/test_walk_forward_intake.py'
       - 'tests/test_walk_forward_split_audit.py'
       - 'tests/test_preregistered_strategy.py'
+      - 'tests/test_execution_realism_contract.py'
       - 'tests/test_walk_forward_execution.py'
       - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/walk_forward_*.jsonl'
@@ -123,7 +127,7 @@ jobs:
           PY
       - name: Compile tooling
         run: |
-          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_split_audit.py analysis/preregistered_strategy.py analysis/walk_forward_execution.py
+          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_split_audit.py analysis/execution_realism_contract.py analysis/preregistered_strategy.py analysis/walk_forward_execution.py
       - name: Validate pre-registration gate without OOS evaluation
         run: |
           python analysis/preregistered_strategy.py \
@@ -141,6 +145,8 @@ jobs:
           assert 'synthetic_input_not_evidence' in report['blockers']
           assert report['metrics']['oos'] is None
           assert report['metrics']['brier'] is None
+          assert len(report['execution_realism']['cells']) == 64
+          assert all(value is None for cell in report['execution_realism']['cells'] for value in cell['metrics'].values())
           print('Pre-registration gate is structural and synthetic-only.')
           PY
       - name: Check public-safe private archive paths
@@ -166,6 +172,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_walk_forward_intake.py' -v
           python -m unittest discover -s tests -p 'test_walk_forward_split_audit.py' -v
           python -m unittest discover -s tests -p 'test_preregistered_strategy.py' -v
+          python -m unittest discover -s tests -p 'test_execution_realism_contract.py' -v
           python -m unittest discover -s tests -p 'test_walk_forward_execution.py' -v
           python analysis/canary_evidence_ledger.py \
             --input tests/fixtures/evidence_zero.json \

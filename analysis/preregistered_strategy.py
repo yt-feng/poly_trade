@@ -34,6 +34,11 @@ from pathlib import Path
 import re
 from typing import Any, Iterable
 
+try:
+    from execution_realism_contract import audit_execution_contract, validate_execution_contract
+except ImportError:  # pragma: no cover - package/import-mode convenience
+    from analysis.execution_realism_contract import audit_execution_contract, validate_execution_contract
+
 
 SCHEMA_VERSION = 1
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -132,6 +137,21 @@ def validate_manifest(manifest: Any) -> list[str]:
         if cutoff.get("timezone") != "UTC":
             _error(errors, "feature_cutoff_timezone_mismatch")
 
+    execution = manifest.get("execution_realism")
+    for error in validate_execution_contract(execution):
+        _error(errors, "execution_realism:" + error)
+    if isinstance(execution, dict) and isinstance(manifest.get("parameter_grid"), dict):
+        edge_values = execution.get("minimum_edge", {}).get("values") if isinstance(execution.get("minimum_edge"), dict) else None
+        grid_values = manifest["parameter_grid"].get("edge_buffer")
+        if isinstance(edge_values, list) and isinstance(grid_values, list):
+            try:
+                edge_set = {_canonical(value) for value in edge_values}
+                grid_set = {_canonical(value) for value in grid_values}
+            except (TypeError, ValueError):
+                edge_set, grid_set = set(), {b"invalid"}
+            if edge_set != grid_set:
+                _error(errors, "execution_realism:minimum_edge_grid_mismatch")
+
     grid = manifest.get("parameter_grid")
     if not isinstance(grid, dict) or not grid:
         _error(errors, "missing_parameter_grid")
@@ -229,6 +249,8 @@ def audit_manifest(
     selection_metric_source: str | None = None,
     pbo_probability: float | None = None,
     cscv_result: dict[str, Any] | None = None,
+    stress_outputs: list[dict[str, Any]] | None = None,
+    stress_covered_cell_ids: Iterable[str] | None = None,
     synthetic: bool = False,
 ) -> dict[str, Any]:
     """Audit one evaluation context without evaluating a strategy."""
@@ -243,6 +265,18 @@ def audit_manifest(
         errors = validate_manifest(manifest)
         blockers.extend(f"manifest:{error}" for error in errors)
     expected = manifest if isinstance(manifest, dict) else {}
+    execution_audit = audit_execution_contract(
+        expected.get("execution_realism"),
+        observed_outputs=stress_outputs,
+        covered_cell_ids=stress_covered_cell_ids,
+        synthetic=synthetic,
+    )
+    for reason in execution_audit["blockers"]:
+        if reason != "synthetic_input_not_evidence":
+            _error(blockers, "execution:" + reason)
+    cautions.extend(execution_audit["cautions"])
+    if phase == "post_evaluation" and stress_outputs is None and stress_covered_cell_ids is None:
+        _error(blockers, "execution_stress_outputs_missing")
     data = expected.get("data", {})
     code = expected.get("code", {})
     registered_dates = set(data.get("evaluation_dates_utc", []))
@@ -318,6 +352,7 @@ def audit_manifest(
             "cscv_result": cscv_result,
             "selection_bias_control": "PBO/CSCV required before post-evaluation selection",
         },
+        "execution_realism": execution_audit,
         "metrics": {"oos": None, "brier": None, "ece": None, "net_pnl_usdc": None},
     }
 
@@ -345,6 +380,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--selection-metric-source")
     parser.add_argument("--pbo-probability", type=float)
     parser.add_argument("--cscv-result", type=Path)
+    parser.add_argument("--stress-output", type=Path,
+                        help="JSON array containing one output record per registered stress cell")
     parser.add_argument("--synthetic", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -354,6 +391,9 @@ def main(argv: list[str] | None = None) -> int:
         label_hash = file_sha256(args.labels) if args.labels else None
         parameters = json.loads(args.parameters) if args.parameters else None
         cscv = _load_json(args.cscv_result) if args.cscv_result else None
+        stress_outputs = _load_json(args.stress_output) if args.stress_output else None
+        if stress_outputs is not None and not isinstance(stress_outputs, list):
+            raise ValueError("stress-output must be a JSON array")
         dates = [item for item in (args.evaluation_dates or "").split(",") if item]
         report = audit_manifest(
             manifest,
@@ -368,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
             selection_metric_source=args.selection_metric_source,
             pbo_probability=args.pbo_probability,
             cscv_result=cscv,
+            stress_outputs=stress_outputs,
             synthetic=args.synthetic,
         )
     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:

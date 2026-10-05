@@ -14,6 +14,12 @@ unregistered parameters, test-set or post-hoc selection, and missing CSCV/PBO
 multiple-testing diagnostics. The checked-in synthetic report is structural
 only and contains no OOS or canary metric.
 
+The same manifest carries the execution-realism contract: displayed ask/bid
+depth only, no midpoint fills, a minimum-edge gate, and a complete fee,
+slippage, latency, depth, partial-fill and TTL stress matrix. Every stress
+cell has null-safe gross/fee/net PnL, fill-rate, Brier and ECE slots for
+synthetic audits.
+
 Do not mix BTC 5-minute strategy evidence with `equity_daily`. Source public
 capture releases from `yt-feng/poly` by immutable tag/commit and record that
 identity in every run manifest.
