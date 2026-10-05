@@ -81,6 +81,22 @@ class WalkForwardIntakeTests(unittest.TestCase):
         self.assertIn("observation_file_sha256_mismatch", report["blocked_reasons"])
         self.assertIsNone(report["metrics"]["oos"])
 
+    def test_market_condition_or_token_identity_conflict_is_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            observations = Path(directory) / "observations.jsonl"
+            first = json.loads((FIXTURES / "v3_observation_valid.jsonl").read_text(encoding="utf-8"))
+            second = dict(first)
+            second["observation_id"] = "obs-conflicting-identity"
+            second["source_event_time_ms"] += 100
+            second["received_time_ms"] += 100
+            second["condition_id"] = "condition-conflict"
+            second["token_ids"] = {"up": "token-up-conflict", "down": "token-down-conflict"}
+            observations.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n", encoding="utf-8")
+            report = build_report(observations, FIXTURES / "walk_forward_labels_valid.jsonl")
+        self.assertIn("inconsistent_market_condition_or_token_identity", report["blocked_reasons"])
+        self.assertIn("label_condition_mismatch", report["blocked_reasons"])
+        self.assertEqual(report["coverage"]["inconsistent_market_identity_count"], 1)
+
     def test_cli_writes_public_safe_report(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "intake.json"
