@@ -1,6 +1,7 @@
 {
   "blocked_reasons": [
-    "missing_observation_file"
+    "missing_observation_file",
+    "missing_label_file"
   ],
   "canary_allowed": false,
   "canary_blocked": true,
@@ -10,6 +11,78 @@
     "accepted_book_records": 0,
     "label_records": 0,
     "observation_records": 0
+  },
+  "input_requirements": {
+    "canary_boundary": "These inputs can produce a public replay only; private order/fill/cancel/fee/settlement/account receipts remain required.",
+    "evaluation": {
+      "complete_chronological_fold": true,
+      "embargo_ms": 1000,
+      "event_cluster_key": "market_id",
+      "minimum_training_events_per_fold": 10,
+      "purge_ms": 300000
+    },
+    "observations": {
+      "format": "JSONL",
+      "historical_csv_or_midpoint_only": "insufficient",
+      "minimum_record": {
+        "execution_fields": [
+          "books.<token>.asks",
+          "books.<token>.bids",
+          "rules.tick_size",
+          "rules.min_order_size",
+          "fees.rate",
+          "fees.exponent",
+          "fees.asset"
+        ],
+        "observation_type": "book_snapshot",
+        "provenance_fields": [
+          "source",
+          "capture_id",
+          "source_sha256",
+          "retrieved_at_ms"
+        ],
+        "required_fields": [
+          "observation_id",
+          "source_event_time_ms",
+          "received_time_ms",
+          "market_id",
+          "condition_id",
+          "token_ids",
+          "books",
+          "fees",
+          "rules",
+          "provenance"
+        ]
+      },
+      "present": false,
+      "provided_name": "observations-v3.jsonl",
+      "role": "canonical_v3_book_observations"
+    },
+    "resolution_labels": {
+      "format": "JSONL",
+      "minimum_record": {
+        "availability_rule": "label_available_time_ms >= resolved_time_ms and is after the feature used for prediction",
+        "one_record_per": "market_id",
+        "outcome_values": [
+          "up",
+          "down"
+        ],
+        "required_fields": [
+          "condition_id",
+          "label_available_time_ms",
+          "label_version",
+          "market_id",
+          "outcome",
+          "resolved_time_ms",
+          "source",
+          "source_sha256"
+        ]
+      },
+      "present": false,
+      "provided_name": "resolution-labels.jsonl",
+      "public_quote_or_unresolved_market": "insufficient",
+      "role": "independent_resolution_labels"
+    }
   },
   "metrics": {
     "attempts": 0,

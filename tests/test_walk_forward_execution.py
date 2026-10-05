@@ -1,4 +1,5 @@
 import copy
+from pathlib import Path
 import unittest
 from decimal import Decimal
 
@@ -12,6 +13,7 @@ from analysis.walk_forward_execution import (
     expected_calibration_error,
     feature_key,
     fit_model,
+    run_files,
     simulate_order,
 )
 
@@ -129,6 +131,26 @@ class WalkForwardExecutionTests(unittest.TestCase):
         self.assertIsNotNone(report["metrics"]["ece"])
         self.assertIsNotNone(report["metrics"]["net_pnl_usdc"])
         self.assertIn("private_execution_receipts_required_for_canary", report["blocked_reasons"])
+
+    def test_missing_inputs_report_machine_readable_minimum_package(self):
+        config = WalkForwardConfig(min_training_events=10)
+        report = run_files(
+            Path("/private/observations-v3.jsonl"),
+            Path("/private/resolution-labels.jsonl"),
+            config,
+        )
+        self.assertTrue(report["canary_blocked"])
+        self.assertEqual(
+            report["blocked_reasons"], ["missing_observation_file", "missing_label_file"]
+        )
+        requirements = report["input_requirements"]
+        self.assertFalse(requirements["observations"]["present"])
+        self.assertFalse(requirements["resolution_labels"]["present"])
+        self.assertIn("source_event_time_ms", requirements["observations"]["minimum_record"]["required_fields"])
+        self.assertIn("label_available_time_ms", requirements["resolution_labels"]["minimum_record"]["required_fields"])
+        self.assertEqual(requirements["observations"]["provided_name"], "observations-v3.jsonl")
+        self.assertEqual(requirements["resolution_labels"]["provided_name"], "resolution-labels.jsonl")
+        self.assertIn("private order/fill", requirements["canary_boundary"])
 
 
 if __name__ == "__main__":

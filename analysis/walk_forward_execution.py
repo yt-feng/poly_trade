@@ -476,6 +476,7 @@ def evaluate(
                           "cluster_key": "market_id", "fit_cutoff_rule": "received_time_ms < train_end and label_available_time_ms <= train_end"},
         "folds": [], "metrics": _empty_metrics(),
         "blocked_reasons": [],
+        "input_requirements": _input_requirements(None, None, config),
     }
     if not accepted:
         report["blocked_reasons"].append("no_validated_book_observations")
@@ -578,7 +579,65 @@ def evaluate(
     return report
 
 
-def blocked_report(reason: str, *, config: WalkForwardConfig | None = None) -> dict[str, Any]:
+def _input_requirements(
+    observations_path: Path | None,
+    labels_path: Path | None,
+    config: WalkForwardConfig | None,
+) -> dict[str, Any]:
+    """Describe the smallest safe input package without publishing local paths."""
+    return {
+        "observations": {
+            "role": "canonical_v3_book_observations",
+            "provided_name": observations_path.name if observations_path else None,
+            "present": bool(observations_path and observations_path.exists()),
+            "format": "JSONL",
+            "minimum_record": {
+                "observation_type": "book_snapshot",
+                "required_fields": [
+                    "observation_id", "source_event_time_ms", "received_time_ms",
+                    "market_id", "condition_id", "token_ids", "books", "fees",
+                    "rules", "provenance",
+                ],
+                "provenance_fields": ["source", "capture_id", "source_sha256", "retrieved_at_ms"],
+                "execution_fields": [
+                    "books.<token>.asks", "books.<token>.bids", "rules.tick_size",
+                    "rules.min_order_size", "fees.rate", "fees.exponent", "fees.asset",
+                ],
+            },
+            "historical_csv_or_midpoint_only": "insufficient",
+        },
+        "resolution_labels": {
+            "role": "independent_resolution_labels",
+            "provided_name": labels_path.name if labels_path else None,
+            "present": bool(labels_path and labels_path.exists()),
+            "format": "JSONL",
+            "minimum_record": {
+                "required_fields": sorted(LABEL_KEYS),
+                "one_record_per": "market_id",
+                "outcome_values": ["up", "down"],
+                "availability_rule": "label_available_time_ms >= resolved_time_ms and is after the feature used for prediction",
+            },
+            "public_quote_or_unresolved_market": "insufficient",
+        },
+        "evaluation": {
+            "complete_chronological_fold": True,
+            "event_cluster_key": "market_id",
+            "minimum_training_events_per_fold": config.min_training_events if config else None,
+            "purge_ms": config.purge_ms if config else None,
+            "embargo_ms": config.embargo_ms if config else None,
+        },
+        "canary_boundary": "These inputs can produce a public replay only; private order/fill/cancel/fee/settlement/account receipts remain required.",
+    }
+
+
+def blocked_report(
+    reason: str | Iterable[str],
+    *,
+    config: WalkForwardConfig | None = None,
+    observations_path: Path | None = None,
+    labels_path: Path | None = None,
+) -> dict[str, Any]:
+    reasons = [reason] if isinstance(reason, str) else list(reason)
     report = {
         "schema_version": 1, "evaluator": "event_clustered_walk_forward_v1",
         "canary_blocked": True, "canary_allowed": False,
@@ -588,19 +647,26 @@ def blocked_report(reason: str, *, config: WalkForwardConfig | None = None) -> d
         "split_policy": {"cluster_key": "market_id", "purge_ms": config.purge_ms if config else None,
                           "embargo_ms": config.embargo_ms if config else None,
                           "fit_cutoff_rule": "received_time_ms < train_end and label_available_time_ms <= train_end"},
-        "folds": [], "metrics": _empty_metrics(), "blocked_reasons": [reason],
+        "folds": [], "metrics": _empty_metrics(), "blocked_reasons": reasons,
+        "input_requirements": _input_requirements(observations_path, labels_path, config),
     }
     return report
 
 
 def run_files(observations_path: Path, labels_path: Path, config: WalkForwardConfig) -> dict[str, Any]:
+    missing = []
     if not observations_path.exists():
-        return blocked_report("missing_observation_file", config=config)
+        missing.append("missing_observation_file")
+    if not labels_path.exists():
+        missing.append("missing_label_file")
+    if missing:
+        return blocked_report(missing, config=config, observations_path=observations_path, labels_path=labels_path)
     raw = load_jsonl(observations_path)
     validation = validate_records(raw)
     observations = [record for record in validation["accepted"] if record.get("observation_type") == "book_snapshot"]
     labels, label_report = load_labels(labels_path)
     report = evaluate(observations, labels, config)
+    report["input_requirements"] = _input_requirements(observations_path, labels_path, config)
     report["input"]["v3_validation"] = {key: value for key, value in validation.items() if key != "accepted"}
     report["input"]["labels_validation"] = label_report
     return report
@@ -628,7 +694,7 @@ def main() -> int:
                           "metrics": report["metrics"]}, sort_keys=True))
         return 0
     except (OSError, json.JSONDecodeError, EvaluationBlocked) as exc:
-        report = blocked_report(f"input_error:{exc}")
+        report = blocked_report(f"input_error:{exc}", observations_path=args.observations, labels_path=args.labels)
         write_report(report, args.output)
         print(json.dumps({"canary_blocked": True, "blocked_reasons": report["blocked_reasons"]}, sort_keys=True))
         return 0

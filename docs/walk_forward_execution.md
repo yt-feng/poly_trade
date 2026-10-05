@@ -51,3 +51,14 @@ report therefore remains blocked and contains null metrics rather than
 fabricated Brier, ECE, or PnL values. Even a future successful public replay
 will keep canary promotion blocked until private execution evidence passes the
 existing ledger gates.
+
+When either input is absent, `run_files` emits both file-specific blockers when
+applicable (`missing_observation_file` and/or `missing_label_file`) and writes
+an `input_requirements` object. That object is the minimum user handoff:
+canonical v3 JSONL book snapshots with source/receive timestamps, market and
+condition IDs, token IDs, executable bid/ask depth, tick/minimum-size and fee
+metadata plus immutable provenance; and one independently sourced JSONL
+resolution label per market with resolution time, availability time and a
+source SHA-256. Only basenames are recorded in the public report. A complete
+chronological fold still has to exist after purge/embargo, and these public
+inputs do not waive the private order/fill/cancel/fee/settlement/account gates.
