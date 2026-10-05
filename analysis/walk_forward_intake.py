@@ -74,6 +74,11 @@ def _utc_date(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).date().isoformat()
 
 
+def _stable_digest(values: list[str]) -> str:
+    payload = "\n".join(sorted(set(values))).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _time_order_report(records: list[dict[str, Any]]) -> dict[str, Any]:
     by_market: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
@@ -134,11 +139,33 @@ def _alignment_report(
 def _coverage_report(observations: list[dict[str, Any]]) -> dict[str, Any]:
     markets = {record["market_id"] for record in observations}
     dates = {_utc_date(record["source_event_time_ms"]) for record in observations}
+    conditions = {record["condition_id"] for record in observations}
+    token_ids = {role: {record["token_ids"][role] for record in observations} for role in ("up", "down")}
+    market_identity: dict[str, tuple[str, str, str]] = {}
+    identity_conflicts = []
+    for record in observations:
+        identity = (record["condition_id"], record["token_ids"]["up"], record["token_ids"]["down"])
+        prior = market_identity.setdefault(record["market_id"], identity)
+        if prior != identity and record["market_id"] not in identity_conflicts:
+            identity_conflicts.append(record["market_id"])
+    pairs = [f"{record['market_id']}\t{record['condition_id']}" for record in observations]
     return {
         "accepted_observation_records": len(observations),
         "independent_windows": len(markets),
         "independent_utc_dates": len(dates),
         "utc_dates": sorted(dates),
+        "market_count": len(markets),
+        "condition_count": len(conditions),
+        "token_counts": {role: len(values) for role, values in token_ids.items()},
+        "coverage_sha256": {
+            "market_ids": _stable_digest(list(markets)),
+            "condition_ids": _stable_digest(list(conditions)),
+            "up_token_ids": _stable_digest(list(token_ids["up"])),
+            "down_token_ids": _stable_digest(list(token_ids["down"])),
+            "market_condition_pairs": _stable_digest(pairs),
+        },
+        "inconsistent_market_identity_count": len(identity_conflicts),
+        "inconsistent_market_identity_ids": identity_conflicts[:20],
         "source_event_time_ms": {
             "min": min((row["source_event_time_ms"] for row in observations), default=None),
             "max": max((row["source_event_time_ms"] for row in observations), default=None),
@@ -203,6 +230,8 @@ def build_report(
     if not time_order["nondecreasing_by_market"]:
         blockers.append("observation_time_not_monotonic_by_market")
     coverage = _coverage_report(observations)
+    if coverage["inconsistent_market_identity_count"]:
+        blockers.append("inconsistent_market_condition_or_token_identity")
     if coverage["independent_windows"] < REQUIREMENTS["independent_windows"]:
         blockers.append("fewer_than_300_independent_windows")
     if coverage["independent_utc_dates"] < REQUIREMENTS["independent_utc_dates"]:
@@ -269,6 +298,10 @@ def build_report(
 
 def write_report(report: dict[str, Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
+    manifest = dict(report)
+    manifest.pop("manifest_sha256", None)
+    canonical = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    report["manifest_sha256"] = hashlib.sha256(canonical).hexdigest()
     output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 

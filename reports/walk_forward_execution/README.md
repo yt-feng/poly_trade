@@ -28,3 +28,6 @@ but the resulting report is always non-evidence and contains no OOS metrics.
 The checked-in [`intake_synthetic_blocked.json`](intake_synthetic_blocked.json)
 is one such fixture run: it proves the contract and leakage checks execute, but
 its one window/one date is explicitly blocked and cannot be used as evidence.
+The report's `manifest_sha256` covers the canonical report body; coverage set
+digests make market/condition/token identity changes visible without publishing
+the full private dataset.

@@ -84,3 +84,7 @@ condition identity, and whether a label was available before an observation or
 an observation occurred at/after resolution. It records only basenames and
 aggregate IDs/counts in the report. `--synthetic` is reserved for offline
 fixtures and forces `evidence_qualifies=false`; it never creates OOS metrics.
+The output also carries an immutable `manifest_sha256` over its canonical JSON
+body (excluding that self-digest), plus deterministic set digests for markets,
+conditions, token roles and market/condition pairs. A changed input or edited
+manifest therefore cannot be mistaken for the frozen package.

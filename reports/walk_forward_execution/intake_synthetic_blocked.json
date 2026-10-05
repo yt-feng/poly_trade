@@ -29,11 +29,26 @@
   },
   "coverage": {
     "accepted_observation_records": 1,
+    "condition_count": 1,
+    "coverage_sha256": {
+      "condition_ids": "2bc784398f0bab28c4a22682abde0029e29306957be2072e70ee408710b91d70",
+      "down_token_ids": "a962013989c670aca3c003ee96705b6971e66bfd215c0f24fe9368d00974fc38",
+      "market_condition_pairs": "f69065a0b9dc726d91a89ec9e8fe752d55be0c92156b00637712e6c759b051df",
+      "market_ids": "6546b4ff304a5027abc774cac9d8f2592d3e24e9fe76043d6e2a83396067cfe4",
+      "up_token_ids": "37325611c1d2590ddd3ea10dd9f38b56b59bf0bf2ce6c5a52329f7d2dbbdd7e7"
+    },
+    "inconsistent_market_identity_count": 0,
+    "inconsistent_market_identity_ids": [],
     "independent_utc_dates": 1,
     "independent_windows": 1,
+    "market_count": 1,
     "source_event_time_ms": {
       "max": 1791000000000,
       "min": 1791000000000
+    },
+    "token_counts": {
+      "down": 1,
+      "up": 1
     },
     "utc_dates": [
       "2026-10-03"
@@ -82,6 +97,7 @@
     "quarantined_records": 0,
     "reason_counts": {}
   },
+  "manifest_sha256": "e00c789eb9a0dfa848cd9879ba2e8eff37aef1fc7536e22a8f3d5f78abbeb8ac",
   "metrics": {
     "brier": null,
     "ece": null,
