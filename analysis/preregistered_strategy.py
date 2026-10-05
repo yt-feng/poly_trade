@@ -226,6 +226,8 @@ def validate_manifest(manifest: Any) -> list[str]:
             _error(errors, "pbo_cscv_must_be_required")
         if multiple.get("status") != "not_computed_at_registration":
             _error(errors, "invalid_multiple_testing_registration_status")
+        if multiple.get("block_on_missing") is not True:
+            _error(errors, "multiple_testing_must_block_on_missing")
 
     digest = manifest.get("manifest_sha256")
     if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
