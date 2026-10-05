@@ -1,6 +1,13 @@
 {
   "manifest_version": 1,
   "experiment_id": "EXP-0001-canary-foundation",
+  "pre_registration": {
+    "manifest": "research/strategy/experiments/EXP-0002-btc5m-preregistered-reference.json",
+    "manifest_sha256": "e8e716e96272e640c0936c065c3760c1f6d2796b380602ddb65122871976fc4e",
+    "strategy_id": "btc5m_reference_v1",
+    "parameters": {"edge_buffer": "replace-with-registered-value", "latency_ms": 1000, "order_size": "5", "order_ttl_ms": 5000},
+    "selection_stage": "validation_only_pre_registered"
+  },
   "run_id": "replace-with-utc-run-id",
   "repo": "yt-feng/poly_trade",
   "commit": "replace-with-commit-sha",

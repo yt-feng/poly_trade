@@ -42,8 +42,15 @@ Example:
 python analysis/walk_forward_execution.py \
   --observations /private/observations-v3.jsonl \
   --labels /private/walk-forward-labels.jsonl \
+  --manifest research/strategy/experiments/EXP-0002-btc5m-preregistered-reference.json \
+  --code-commit '<40 lowercase hex>' \
+  --evaluation-dates 2026-10-03,2026-10-04 \
   --output /private/walk-forward-report.json
 ```
+
+The evaluator blocks when the manifest, exact data hashes, code identity,
+registered UTC dates or parameter set are absent or changed. Use the
+pre-registration command below to inspect that gate without fitting a model.
 
 With the current checkout there is no canonical v3 observation block plus
 separate resolution-label file sufficient for a complete fold. The checked-in
@@ -106,3 +113,49 @@ embargo interval. Training labels must be available by the train cutoff;
 validation/test labels must remain unavailable at their feature receive time.
 Any cluster overlap, boundary crossing, purge/embargo occupancy or label-time
 violation is a blocker. It is a structural audit only and emits no OOS metrics.
+
+Before fitting any candidate, freeze the pre-registration manifest and run its
+gate against the exact input files and code commit:
+
+```bash
+python analysis/preregistered_strategy.py \
+  --manifest research/strategy/experiments/EXP-0002-btc5m-preregistered-reference.json \
+  --observations /private/observations-v3.jsonl \
+  --labels /private/resolution-labels.jsonl \
+  --code-commit '<40 lowercase hex>' \
+  --evaluation-dates 2026-10-03,2026-10-04 \
+  --phase pre_evaluation --output /private/preregistration.json
+```
+
+The manifest fixes the causal feature and label cutoffs, every candidate in
+the parameter grid, a validation-only selection metric and tie-break, the
+observation/label hashes, code commit and UTC evaluation dates. A candidate
+outside the grid, changed input/code identity, date outside the registration,
+or any test-set selection is a blocker. The post-evaluation gate additionally
+requires a machine-readable CSCV/PBO result; missing or malformed results are
+reported as both a blocker and a multiple-testing caution. This protects the
+walk-forward result from silently becoming a post-hoc search.
+
+After a replay, run the post gate with the chosen registered candidate and
+the validation-only selection record. Supply the CSCV result and its PBO
+probability; a test-tuned candidate, an unregistered parameter, or omitted
+diagnostics remains blocked:
+
+```bash
+python analysis/preregistered_strategy.py \
+  --manifest research/strategy/experiments/EXP-0002-btc5m-preregistered-reference.json \
+  --phase post_evaluation \
+  --observations /private/observations-v3.jsonl \
+  --labels /private/resolution-labels.jsonl \
+  --code-commit '<40 lowercase hex>' --evaluation-dates 2026-10-03,2026-10-04 \
+  --parameters '{"edge_buffer":"0","latency_ms":1000,"order_size":"5","order_ttl_ms":5000,"train_duration_ms":3600000,"test_duration_ms":900000,"purge_ms":300000,"embargo_ms":1000,"min_training_events":10,"calibration_bins":10}' \
+  --selection-stage validation_only_pre_registered \
+  --selection-metric brier --selection-metric-source validation \
+  --pbo-probability '<0..1>' --cscv-result /private/cscv.json \
+  --output /private/preregistration-post.json
+```
+
+The checked-in
+[`preregistration_synthetic_blocked.json`](../reports/walk_forward_execution/preregistration_synthetic_blocked.json)
+only exercises the contract. It is marked synthetic, has no OOS metrics, and
+cannot qualify as canary evidence.

@@ -11,6 +11,7 @@ on:
       - 'analysis/v3_data_contract.py'
       - 'analysis/walk_forward_intake.py'
       - 'analysis/walk_forward_split_audit.py'
+      - 'analysis/preregistered_strategy.py'
       - 'analysis/walk_forward_execution.py'
       - 'research/strategy/schema/**'
       - 'docs/walk_forward_execution.md'
@@ -25,6 +26,7 @@ on:
       - 'tests/test_v3_data_contract.py'
       - 'tests/test_walk_forward_intake.py'
       - 'tests/test_walk_forward_split_audit.py'
+      - 'tests/test_preregistered_strategy.py'
       - 'tests/test_walk_forward_execution.py'
       - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/walk_forward_*.jsonl'
@@ -42,6 +44,7 @@ on:
       - 'analysis/v3_data_contract.py'
       - 'analysis/walk_forward_intake.py'
       - 'analysis/walk_forward_split_audit.py'
+      - 'analysis/preregistered_strategy.py'
       - 'analysis/walk_forward_execution.py'
       - 'research/strategy/schema/**'
       - 'docs/walk_forward_execution.md'
@@ -56,6 +59,7 @@ on:
       - 'tests/test_v3_data_contract.py'
       - 'tests/test_walk_forward_intake.py'
       - 'tests/test_walk_forward_split_audit.py'
+      - 'tests/test_preregistered_strategy.py'
       - 'tests/test_walk_forward_execution.py'
       - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/walk_forward_*.jsonl'
@@ -101,8 +105,9 @@ jobs:
               assert obj['experiment_id'] and obj['scope'] == 'strategy_research'
               assert obj['protocol']['public_quotes_are_not_fills'] is True
           obj = json.loads(Path('research/strategy/runs/run-manifest.example.json').read_text())
-          for key in ('manifest_version','experiment_id','run_id','commit','source','windows','command','outputs','execution_evidence','promotion'):
+          for key in ('manifest_version','experiment_id','run_id','commit','source','windows','command','outputs','execution_evidence','promotion','pre_registration'):
               assert key in obj, key
+          assert obj['pre_registration']['strategy_id'] == 'btc5m_reference_v1'
           assert obj['execution_evidence']['real_confirmed_fills'] == 0
           assert obj['promotion']['eligible'] is False
           report = json.loads(Path('reports/canary_readiness_foundation/readiness.json').read_text())
@@ -118,7 +123,26 @@ jobs:
           PY
       - name: Compile tooling
         run: |
-          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_split_audit.py analysis/walk_forward_execution.py
+          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_split_audit.py analysis/preregistered_strategy.py analysis/walk_forward_execution.py
+      - name: Validate pre-registration gate without OOS evaluation
+        run: |
+          python analysis/preregistered_strategy.py \
+            --manifest research/strategy/experiments/EXP-0002-btc5m-preregistered-reference.json \
+            --observations tests/fixtures/v3_observation_valid.jsonl \
+            --labels tests/fixtures/walk_forward_labels_valid.jsonl \
+            --code-commit c3ff9549ad0b62ec19fa21c7d917781cd5e4273a \
+            --evaluation-dates 2026-10-03 \
+            --phase pre_evaluation --synthetic \
+            --output /tmp/preregistration-synthetic.json
+          python - <<'PY'
+          import json
+          report = json.load(open('/tmp/preregistration-synthetic.json', encoding='utf-8'))
+          assert report['canary_blocked'] is True
+          assert 'synthetic_input_not_evidence' in report['blockers']
+          assert report['metrics']['oos'] is None
+          assert report['metrics']['brier'] is None
+          print('Pre-registration gate is structural and synthetic-only.')
+          PY
       - name: Check public-safe private archive paths
         run: |
           python - <<'PY'
@@ -141,6 +165,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_archive_baseline_audit.py' -v
           python -m unittest discover -s tests -p 'test_walk_forward_intake.py' -v
           python -m unittest discover -s tests -p 'test_walk_forward_split_audit.py' -v
+          python -m unittest discover -s tests -p 'test_preregistered_strategy.py' -v
           python -m unittest discover -s tests -p 'test_walk_forward_execution.py' -v
           python analysis/canary_evidence_ledger.py \
             --input tests/fixtures/evidence_zero.json \

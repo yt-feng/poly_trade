@@ -10,6 +10,12 @@ fills are rejected because they are not executable evidence.
 The evaluator is deliberately conservative.  Missing data, unknown fee models,
 off-tick prices, stale books, and insufficient folds produce a blocked report
 instead of a fabricated score or profitability claim.
+
+The command-line entrypoint also requires the pre-registration gate from
+``analysis/preregistered_strategy.py``.  Direct helper calls such as
+``evaluate`` remain low-level test adapters; a replay intended for research
+must use the CLI with the exact manifest, data hashes, code commit and UTC
+evaluation dates.
 """
 from __future__ import annotations
 
@@ -22,8 +28,10 @@ from typing import Any, Iterable
 
 try:
     from v3_data_contract import load_jsonl, validate_records
+    from preregistered_strategy import audit_manifest, file_sha256
 except ImportError:  # pragma: no cover - package/import-mode convenience
     from analysis.v3_data_contract import load_jsonl, validate_records
+    from analysis.preregistered_strategy import audit_manifest, file_sha256
 
 
 LABEL_SCHEMA_VERSION = 1
@@ -684,23 +692,74 @@ def write_report(report: dict[str, Any], output: Path) -> None:
     output.write_text(json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--observations", type=Path, required=True)
     parser.add_argument("--labels", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--config", type=Path)
-    args = parser.parse_args()
+    parser.add_argument("--manifest", type=Path,
+                        help="required pre-registration manifest; evaluation is blocked without it")
+    parser.add_argument("--code-commit", help="commit recorded by the pre-registration manifest")
+    parser.add_argument("--evaluation-dates", help="registered UTC dates separated by commas")
+    parser.add_argument("--parameters", help="JSON object for the registered candidate; defaults to --config values")
+    parser.add_argument("--synthetic", action="store_true",
+                        help="exercise the gate only; never produce replay metrics")
+    args = parser.parse_args(argv)
     try:
         raw_config = json.loads(args.config.read_text(encoding="utf-8")) if args.config else None
         config = WalkForwardConfig.from_mapping(raw_config)
+        if args.manifest is None:
+            report = blocked_report("missing_preregistration_manifest", config=config,
+                                    observations_path=args.observations, labels_path=args.labels)
+            write_report(report, args.output)
+            print(json.dumps({"canary_blocked": True, "blocked_reasons": report["blocked_reasons"]}, sort_keys=True))
+            return 0
+        manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+        parameters = json.loads(args.parameters) if args.parameters else {
+            "edge_buffer": format(config.edge_buffer, "f"),
+            "latency_ms": config.latency_ms,
+            "order_size": format(config.order_size, "f"),
+            "order_ttl_ms": config.order_ttl_ms,
+            "train_duration_ms": config.train_duration_ms,
+            "test_duration_ms": config.test_duration_ms,
+            "purge_ms": config.purge_ms,
+            "embargo_ms": config.embargo_ms,
+            "min_training_events": config.min_training_events,
+            "calibration_bins": config.calibration_bins,
+        }
+        preregistration = audit_manifest(
+            manifest,
+            phase="pre_evaluation",
+            observations_sha256=file_sha256(args.observations) if args.observations.is_file() else None,
+            labels_sha256=file_sha256(args.labels) if args.labels.is_file() else None,
+            code_commit=args.code_commit,
+            evaluation_dates_utc=[item for item in (args.evaluation_dates or "").split(",") if item],
+            parameters=parameters,
+            synthetic=args.synthetic,
+        )
+        if preregistration["blockers"]:
+            report = blocked_report(preregistration["blockers"], config=config,
+                                    observations_path=args.observations, labels_path=args.labels)
+            report["preregistration"] = preregistration
+            write_report(report, args.output)
+            print(json.dumps({"canary_blocked": True, "blocked_reasons": report["blocked_reasons"]}, sort_keys=True))
+            return 0
+        if args.synthetic:
+            report = blocked_report("synthetic_input_not_evidence", config=config,
+                                    observations_path=args.observations, labels_path=args.labels)
+            report["preregistration"] = preregistration
+            write_report(report, args.output)
+            print(json.dumps({"canary_blocked": True, "blocked_reasons": report["blocked_reasons"]}, sort_keys=True))
+            return 0
         report = run_files(args.observations, args.labels, config)
+        report["preregistration"] = preregistration
         write_report(report, args.output)
         print(json.dumps({"canary_blocked": report["canary_blocked"], "blocked_reasons": report["blocked_reasons"],
                           "metrics": report["metrics"]}, sort_keys=True))
         return 0
-    except (OSError, json.JSONDecodeError, EvaluationBlocked) as exc:
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         report = blocked_report(f"input_error:{exc}", observations_path=args.observations, labels_path=args.labels)
         write_report(report, args.output)
         print(json.dumps({"canary_blocked": True, "blocked_reasons": report["blocked_reasons"]}, sort_keys=True))

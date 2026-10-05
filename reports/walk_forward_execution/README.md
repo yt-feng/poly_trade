@@ -37,3 +37,10 @@ train/validation/test counts and explicit purge/embargo/label-availability
 blockers using market/condition clusters. The checked-in
 [`split_audit_synthetic_blocked.json`](split_audit_synthetic_blocked.json)
 contains no OOS metrics and cannot qualify as evidence.
+
+The pre-registration gate is recorded in
+[`preregistration_synthetic_blocked.json`](preregistration_synthetic_blocked.json).
+It verifies the strategy ID, causal cutoffs, parameter grid, selection rule,
+data/code identities and evaluation dates. Post-evaluation reports must also
+provide CSCV/PBO multiple-testing diagnostics; missing diagnostics or a
+parameter/test-set change is a machine-readable blocker.

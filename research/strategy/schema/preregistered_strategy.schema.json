@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yt-feng/poly_trade/schema/preregistered-strategy.json",
+  "title": "Pre-registered BTC 5-minute strategy hypothesis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_type",
+    "strategy_id",
+    "hypothesis",
+    "protocol",
+    "feature_cutoff",
+    "parameter_grid",
+    "candidate_count",
+    "parameter_grid_sha256",
+    "selection_rule",
+    "data",
+    "code",
+    "multiple_testing",
+    "manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "manifest_type": {"const": "pre_registered_strategy_hypothesis"},
+    "strategy_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{1,127}$"},
+    "hypothesis": {"type": "string", "minLength": 1},
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pre_registered", "public_quotes_are_not_fills", "real_orders"],
+      "properties": {
+        "pre_registered": {"const": true},
+        "public_quotes_are_not_fills": {"const": true},
+        "real_orders": {"const": false}
+      }
+    },
+    "feature_cutoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feature_rule", "label_rule", "timezone"],
+      "properties": {
+        "feature_rule": {"const": "received_time_ms < train_end_ms"},
+        "label_rule": {"const": "label_available_time_ms <= train_end_ms"},
+        "timezone": {"const": "UTC"}
+      }
+    },
+    "parameter_grid": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "array", "minItems": 1}
+    },
+    "candidate_count": {"type": "integer", "minimum": 1},
+    "parameter_grid_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "selection_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "metric", "direction", "tie_break", "uses_test_data", "fixed_before_evaluation"],
+      "properties": {
+        "stage": {"const": "validation_only"},
+        "metric": {"type": "string", "minLength": 1},
+        "direction": {"enum": ["minimize", "maximize"]},
+        "tie_break": {"type": "array", "minItems": 1},
+        "uses_test_data": {"const": false},
+        "fixed_before_evaluation": {"const": true}
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observations_sha256", "labels_sha256", "evaluation_dates_utc", "timezone"],
+      "properties": {
+        "observations_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "labels_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "evaluation_dates_utc": {"type": "array", "minItems": 1, "items": {"type": "string", "format": "date"}},
+        "timezone": {"const": "UTC"}
+      }
+    },
+    "code": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "entrypoint"],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "entrypoint": {"type": "string", "minLength": 1}
+      }
+    },
+    "multiple_testing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_count", "pbo_method", "pbo_required", "cscv_required", "status", "block_on_missing"],
+      "properties": {
+        "candidate_count": {"type": "integer", "minimum": 1},
+        "pbo_method": {"const": "CSCV"},
+        "pbo_required": {"const": true},
+        "cscv_required": {"const": true},
+        "status": {"const": "not_computed_at_registration"},
+        "block_on_missing": {"const": true}
+      }
+    },
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

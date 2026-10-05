@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "manifest_type": "pre_registered_strategy_hypothesis",
+  "strategy_id": "btc5m_reference_v1",
+  "hypothesis": "A fixed, causal book-imbalance policy can improve validation Brier score after executable-price, fee, latency and minimum-size constraints without using test labels.",
+  "protocol": {
+    "pre_registered": true,
+    "public_quotes_are_not_fills": true,
+    "real_orders": false
+  },
+  "feature_cutoff": {
+    "feature_rule": "received_time_ms < train_end_ms",
+    "label_rule": "label_available_time_ms <= train_end_ms",
+    "timezone": "UTC"
+  },
+  "parameter_grid": {
+    "edge_buffer": [
+      "0",
+      "0.01"
+    ],
+    "latency_ms": [
+      1000
+    ],
+    "train_duration_ms": [
+      3600000
+    ],
+    "test_duration_ms": [
+      900000
+    ],
+    "purge_ms": [
+      300000
+    ],
+    "embargo_ms": [
+      1000
+    ],
+    "min_training_events": [
+      10
+    ],
+    "calibration_bins": [
+      10
+    ],
+    "order_size": [
+      "5"
+    ],
+    "order_ttl_ms": [
+      5000
+    ]
+  },
+  "candidate_count": 2,
+  "parameter_grid_sha256": "410add5989eb3a6b3d25a96e3c2ce8c7932cf91a99295d16ec8f1b05f5042f8e",
+  "selection_rule": {
+    "stage": "validation_only",
+    "metric": "brier",
+    "direction": "minimize",
+    "tie_break": [
+      "brier",
+      "net_pnl_usdc",
+      "parameter_json_lexicographic"
+    ],
+    "uses_test_data": false,
+    "fixed_before_evaluation": true
+  },
+  "data": {
+    "observations_sha256": "22fab7bdadfcf412eaf9d16a1bd47fc8647c938f292efddb67007ad7d2fda780",
+    "labels_sha256": "c0182a50536728fae719cdd392072c393999c055cd6f638ebeecdbed400bdcc4",
+    "evaluation_dates_utc": [
+      "2026-10-03"
+    ],
+    "timezone": "UTC"
+  },
+  "code": {
+    "commit": "c3ff9549ad0b62ec19fa21c7d917781cd5e4273a",
+    "entrypoint": "analysis/walk_forward_execution.py"
+  },
+  "multiple_testing": {
+    "candidate_count": 2,
+    "pbo_method": "CSCV",
+    "pbo_required": true,
+    "cscv_required": true,
+    "status": "not_computed_at_registration",
+    "block_on_missing": true
+  },
+  "manifest_sha256": "e8e716e96272e640c0936c065c3760c1f6d2796b380602ddb65122871976fc4e"
+}

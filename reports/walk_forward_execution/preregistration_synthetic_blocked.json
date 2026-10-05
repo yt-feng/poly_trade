@@ -1,0 +1,51 @@
+{
+  "audit": "pre_registered_strategy_v1",
+  "blockers": [
+    "synthetic_input_not_evidence"
+  ],
+  "canary_allowed": false,
+  "canary_blocked": true,
+  "cautions": [
+    "pbo_cscv_pending_until_post_evaluation"
+  ],
+  "evidence_qualifies": false,
+  "manifest_errors": [],
+  "manifest_sha256": "e8e716e96272e640c0936c065c3760c1f6d2796b380602ddb65122871976fc4e",
+  "metrics": {
+    "brier": null,
+    "ece": null,
+    "net_pnl_usdc": null,
+    "oos": null
+  },
+  "multiple_testing": {
+    "cscv_result": null,
+    "pbo_probability": null,
+    "selection_bias_control": "PBO/CSCV required before post-evaluation selection"
+  },
+  "phase": "pre_evaluation",
+  "registered": {
+    "candidate_count": 2,
+    "code_commit": "c3ff9549ad0b62ec19fa21c7d917781cd5e4273a",
+    "evaluation_dates_utc": [
+      "2026-10-03"
+    ],
+    "feature_rule": "received_time_ms < train_end_ms",
+    "label_rule": "label_available_time_ms <= train_end_ms",
+    "selection_rule": {
+      "direction": "minimize",
+      "fixed_before_evaluation": true,
+      "metric": "brier",
+      "stage": "validation_only",
+      "tie_break": [
+        "brier",
+        "net_pnl_usdc",
+        "parameter_json_lexicographic"
+      ],
+      "uses_test_data": false
+    }
+  },
+  "schema_version": 1,
+  "status": "blocked",
+  "strategy_id": "btc5m_reference_v1",
+  "synthetic_input": true
+}

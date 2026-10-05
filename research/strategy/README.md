@@ -5,6 +5,15 @@
 - `private/` is local-only; only authenticated ciphertext (`*.enc`) may be retained.
 - `schema/` records the required keys checked by offline CI.
 
+`EXP-0002-btc5m-preregistered-reference.json` is the machine-readable
+pre-registration for the BTC 5-minute reference hypothesis. It freezes the
+causal feature/label cutoffs, parameter grid, validation-only selection rule,
+input hashes, code commit and UTC dates. `analysis/preregistered_strategy.py`
+must pass before a replay is fitted; its post-evaluation phase blocks
+unregistered parameters, test-set or post-hoc selection, and missing CSCV/PBO
+multiple-testing diagnostics. The checked-in synthetic report is structural
+only and contains no OOS or canary metric.
+
 Do not mix BTC 5-minute strategy evidence with `equity_daily`. Source public
 capture releases from `yt-feng/poly` by immutable tag/commit and record that
 identity in every run manifest.

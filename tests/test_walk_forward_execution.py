@@ -1,5 +1,7 @@
 import copy
+import json
 from pathlib import Path
+import tempfile
 import unittest
 from decimal import Decimal
 
@@ -13,6 +15,7 @@ from analysis.walk_forward_execution import (
     expected_calibration_error,
     feature_key,
     fit_model,
+    main as execution_main,
     run_files,
     simulate_order,
 )
@@ -57,6 +60,34 @@ def label(market, when, outcome="up", available=None):
 
 
 class WalkForwardExecutionTests(unittest.TestCase):
+    def test_cli_requires_preregistration_before_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "report.json"
+            self.assertEqual(execution_main([
+                "--observations", str(Path(__file__).parent / "fixtures" / "v3_observation_valid.jsonl"),
+                "--labels", str(Path(__file__).parent / "fixtures" / "walk_forward_labels_valid.jsonl"),
+                "--output", str(output),
+            ]), 0)
+            report = json.loads(output.read_text(encoding="utf-8"))
+        self.assertIn("missing_preregistration_manifest", report["blocked_reasons"])
+        self.assertEqual(report["metrics"]["brier"], None)
+
+    def test_cli_synthetic_preregistration_gate_has_no_oos_metrics(self):
+        root = Path(__file__).parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "report.json"
+            self.assertEqual(execution_main([
+                "--observations", str(root / "tests" / "fixtures" / "v3_observation_valid.jsonl"),
+                "--labels", str(root / "tests" / "fixtures" / "walk_forward_labels_valid.jsonl"),
+                "--manifest", str(root / "research" / "strategy" / "experiments" / "EXP-0002-btc5m-preregistered-reference.json"),
+                "--code-commit", "c3ff9549ad0b62ec19fa21c7d917781cd5e4273a",
+                "--evaluation-dates", "2026-10-03", "--synthetic", "--output", str(output),
+            ]), 0)
+            report = json.loads(output.read_text(encoding="utf-8"))
+        self.assertIn("synthetic_input_not_evidence", report["blocked_reasons"])
+        self.assertIsNone(report["metrics"]["brier"])
+        self.assertIsNone(report["preregistration"]["metrics"]["oos"])
+
     def test_mid_price_is_rejected(self):
         decision = observation("m1", 1_000)
         with self.assertRaisesRegex(EvaluationBlocked, "MID_PRICE_NOT_EXECUTABLE"):

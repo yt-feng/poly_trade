@@ -22,3 +22,12 @@ records. A label identifies one market's resolved outcome and records both its
 resolution time and the time it became available to the researcher. The
 walk-forward evaluator joins a label only after its `label_available_time_ms`
 and never allows outcome, settlement, or target fields inside feature rows.
+
+## Pre-registered strategy manifests
+
+`preregistered_strategy.schema.json` defines the immutable strategy hypothesis
+manifest. It records the causal feature/label cutoffs, complete parameter
+grid, validation-only selection rule, input hashes, code commit and UTC
+evaluation dates. The manifest also requires CSCV/PBO multiple-testing control;
+`analysis/preregistered_strategy.py` enforces these fields and emits no OOS
+metrics.
