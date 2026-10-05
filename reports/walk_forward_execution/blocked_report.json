@@ -14,6 +14,13 @@
   },
   "input_requirements": {
     "canary_boundary": "These inputs can produce a public replay only; private order/fill/cancel/fee/settlement/account receipts remain required.",
+    "canary_gate_context": {
+      "enforced_by_this_public_replay": false,
+      "minimum_execution_evidence_records": 100,
+      "minimum_independent_utc_dates": 7,
+      "minimum_independent_windows": 300,
+      "private_receipts_required": true
+    },
     "evaluation": {
       "complete_chronological_fold": true,
       "embargo_ms": 1000,

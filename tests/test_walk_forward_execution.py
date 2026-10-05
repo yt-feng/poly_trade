@@ -150,6 +150,8 @@ class WalkForwardExecutionTests(unittest.TestCase):
         self.assertIn("label_available_time_ms", requirements["resolution_labels"]["minimum_record"]["required_fields"])
         self.assertEqual(requirements["observations"]["provided_name"], "observations-v3.jsonl")
         self.assertEqual(requirements["resolution_labels"]["provided_name"], "resolution-labels.jsonl")
+        self.assertEqual(requirements["canary_gate_context"]["minimum_independent_windows"], 300)
+        self.assertFalse(requirements["canary_gate_context"]["enforced_by_this_public_replay"])
         self.assertIn("private order/fill", requirements["canary_boundary"])
 
 

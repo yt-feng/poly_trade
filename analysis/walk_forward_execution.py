@@ -626,6 +626,13 @@ def _input_requirements(
             "purge_ms": config.purge_ms if config else None,
             "embargo_ms": config.embargo_ms if config else None,
         },
+        "canary_gate_context": {
+            "minimum_independent_windows": 300,
+            "minimum_independent_utc_dates": 7,
+            "minimum_execution_evidence_records": 100,
+            "enforced_by_this_public_replay": False,
+            "private_receipts_required": True,
+        },
         "canary_boundary": "These inputs can produce a public replay only; private order/fill/cancel/fee/settlement/account receipts remain required.",
     }
 

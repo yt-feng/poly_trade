@@ -62,3 +62,6 @@ resolution label per market with resolution time, availability time and a
 source SHA-256. Only basenames are recorded in the public report. A complete
 chronological fold still has to exist after purge/embargo, and these public
 inputs do not waive the private order/fill/cancel/fee/settlement/account gates.
+The report also repeats the canary context of 300 independent windows, 7 UTC
+dates and 100 execution-evidence records; those promotion gates are explicitly
+not enforced by this public replay.
