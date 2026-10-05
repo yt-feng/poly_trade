@@ -49,3 +49,12 @@ The execution-realism section expands the registered matrix into stable cell
 IDs. It requires ask/bid depth and rejects midpoint execution; every cell's
 gross/fee/net PnL, fill rate, Brier and ECE fields remain `null` in the checked
 in synthetic report.
+
+The one bounded public-feed attempt is recorded in
+[`public_acquisition_dry_run_blocked_20261005.json`](public_acquisition_dry_run_blocked_20261005.json).
+DNS was unavailable, so it produced no canonical v3 observations and no
+independent resolution labels. The corresponding minimum handoff package is
+[`public_v3_data_handoff_request.json`](../../research/strategy/runs/public_v3_data_handoff_request.json).
+This artifact records hashes of temporary failed-attempt archives only; it does
+not make public quotes, quote markouts, or replay metrics eligible for canary
+promotion.

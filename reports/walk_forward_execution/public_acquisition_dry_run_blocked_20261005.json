@@ -1,0 +1,188 @@
+{
+  "archives": {
+    "bytes_committed": false,
+    "files": [
+      {
+        "bytes": 2220,
+        "file": "snapshots-2026-10-05-000001.jsonl.gz",
+        "kind": "snapshots",
+        "rows": 8,
+        "sha256": "174310d0cf976712ea23462188b4f0ad1dabd9e085b5cdeb926fbefbe2c3cf97"
+      },
+      {
+        "bytes": 311,
+        "file": "labels-2026-10-05-000002.jsonl.gz",
+        "kind": "labels",
+        "rows": 8,
+        "sha256": "ade496aad3e15941bc693d81b869ec0e55b9658c61e42cce1376d752019a6f39"
+      },
+      {
+        "bytes": 1819,
+        "file": "raw-2026-10-05-000003.jsonl.gz",
+        "kind": "raw",
+        "rows": 36,
+        "sha256": "e2147df37258666ba37d6e7b96dc06553c6a10c024af9d071566e54717a43424"
+      }
+    ],
+    "hashes_committed": true,
+    "manifest_schema_version": 2,
+    "manifest_sha256": "48ceecb58cc2e9c8383302c2d6f64aca0fb6b81630b20511a2b0f60a0f7c4b4d",
+    "meaning": "Hashes identify the temporary failed-attempt artifacts; they do not prove feed data was received."
+  },
+  "attempt": {
+    "adapter": "poly/capture_v3.py",
+    "adapter_commit": "89f7b149cced7506dae94f2e2b0902933d273fc8",
+    "asset_scope": [
+      "btc"
+    ],
+    "captured_utc_date": "2026-10-05",
+    "command": "python capture_v3.py --assets btc --seconds 8 --output <temporary-output> --require-core --require-microstructure",
+    "credentials_used": false,
+    "duration_seconds": 8,
+    "mode": "public_read_only",
+    "orders_enabled": false,
+    "retry_count": 0,
+    "temporary_output_retained": false
+  },
+  "blocked_reasons": [
+    "public_feed_network_unreachable",
+    "no_canonical_v3_observations",
+    "missing_market_condition_token_identity",
+    "missing_source_event_and_receive_canonical_pair",
+    "missing_fee_tick_min_order_metadata",
+    "no_independent_resolution_labels",
+    "labels_are_quote_markout_not_resolution",
+    "public_replay_does_not_qualify_canary"
+  ],
+  "canary_allowed": false,
+  "canary_blocked": true,
+  "evidence_qualifies": false,
+  "labels": {
+    "candidate_rows": 8,
+    "independent": false,
+    "independent_resolution_labels": 0,
+    "kind": "quote_markout_not_fill_pnl",
+    "official_resolution_source_present": false
+  },
+  "metrics": {
+    "brier": null,
+    "ece": null,
+    "fees_usdc": null,
+    "gross_pnl_usdc": null,
+    "net_pnl_usdc": null,
+    "net_return": null,
+    "oos": null,
+    "real_fills": 0
+  },
+  "minimum_user_package": {
+    "acceptance_gates": {
+      "canonical_observation_records_minimum": 300,
+      "independent_resolution_labels": true,
+      "independent_utc_dates_minimum": 7,
+      "independent_windows_minimum": 300,
+      "private_fill_canary_gate_still_required": true,
+      "source_and_receive_times_required": true
+    },
+    "next_commands": [
+      "python analysis/walk_forward_intake.py --observations /private/observations-v3.jsonl --labels /private/resolution-labels.jsonl --output /tmp/intake.json",
+      "python analysis/walk_forward_split_audit.py ...",
+      "python analysis/preregistered_strategy.py ...",
+      "python analysis/walk_forward_execution.py ..."
+    ],
+    "observations": {
+      "format": "JSONL, one canonical record per line",
+      "path": "/private/observations-v3.jsonl",
+      "preserve": [
+        "immutable raw source bytes for the capture",
+        "sha256 for each raw source object and the JSONL file",
+        "exact UTC capture window and adapter/code commit"
+      ],
+      "required_fields": [
+        "schema_version",
+        "observation_id",
+        "source_event_time_ms",
+        "received_time_ms",
+        "market_id",
+        "condition_id",
+        "token_ids.up",
+        "token_ids.down",
+        "observation_type",
+        "books.up.bids",
+        "books.up.asks",
+        "books.down.bids",
+        "books.down.asks",
+        "fees.rate",
+        "fees.exponent",
+        "fees.asset",
+        "rules.tick_size",
+        "rules.min_order_size",
+        "provenance.source",
+        "provenance.capture_id",
+        "provenance.source_sha256",
+        "provenance.retrieved_at_ms"
+      ],
+      "schema": "research/strategy/schema/v3_observation.schema.json"
+    },
+    "provenance": {
+      "required": [
+        "source bytes and sha256",
+        "capture start/end UTC timestamps",
+        "market/condition/token IDs",
+        "contemporaneous fee, tick, and minimum-order metadata",
+        "adapter repository and immutable commit"
+      ],
+      "secrets": "Do not include credentials, private keys, or ARCHIVE_KEY."
+    },
+    "resolution_labels": {
+      "forbidden_substitutes": [
+        "quote_markout_not_fill_pnl",
+        "public price replay",
+        "midpoint or final_price inferred outcome"
+      ],
+      "format": "JSONL, one independent label per market_id",
+      "independence": "official resolution source kept separate from quote/book capture",
+      "path": "/private/resolution-labels.jsonl",
+      "required_fields": [
+        "label_version",
+        "market_id",
+        "condition_id",
+        "outcome",
+        "resolved_time_ms",
+        "label_available_time_ms",
+        "source",
+        "source_sha256"
+      ],
+      "schema": "research/strategy/schema/walk_forward_label.schema.json"
+    }
+  },
+  "network": {
+    "connection_count": 14,
+    "dns_or_transport_unavailable": true,
+    "error_class": "Temporary failure in name resolution",
+    "error_count": 12,
+    "fallback_or_bypass_used": false,
+    "hosts_attempted": [
+      "gamma-api.polymarket.com",
+      "ws-subscriptions-clob.polymarket.com",
+      "ws-live-data.polymarket.com",
+      "fapi.binance.com",
+      "fstream.binance.com",
+      "data-api.binance.vision"
+    ],
+    "http_timing_count": 10
+  },
+  "observations": {
+    "accepted_canonical_v3_records": 0,
+    "event_completeness_certified": false,
+    "fee_tick_min_order_metadata_records": 0,
+    "full_book_depth_records": 0,
+    "legacy_snapshot_rows": 8,
+    "market_condition_token_identity_records": 0,
+    "poly_valid_records": 0,
+    "source_event_receive_pairs": 0
+  },
+  "public_replay_boundary": "Public quotes and quote markouts are research inputs only; they cannot satisfy the private order/fill/cancel/fee/settlement/account canary gate.",
+  "report_id": "public-acquisition-dry-run-20261005",
+  "schema_version": 1,
+  "status": "blocked"
+}

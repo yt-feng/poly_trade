@@ -14,9 +14,11 @@ on:
       - 'analysis/preregistered_strategy.py'
       - 'analysis/execution_realism_contract.py'
       - 'analysis/walk_forward_execution.py'
+      - 'analysis/public_acquisition_dry_run.py'
       - 'research/strategy/schema/**'
       - 'docs/walk_forward_execution.md'
       - 'reports/walk_forward_execution/**'
+      - 'research/strategy/runs/public_v3_data_handoff_request.json'
       - 'docs/archive_baseline_audit.md'
       - 'research/strategy/runs/archive_baseline_20261004_manifest.json'
       - 'research/strategy/private/archive_baseline_20261004.compact.json.enc'
@@ -30,6 +32,7 @@ on:
       - 'tests/test_preregistered_strategy.py'
       - 'tests/test_execution_realism_contract.py'
       - 'tests/test_walk_forward_execution.py'
+      - 'tests/test_public_acquisition_dry_run.py'
       - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/walk_forward_*.jsonl'
       - 'tests/fixtures/evidence_*.json'
@@ -49,9 +52,11 @@ on:
       - 'analysis/preregistered_strategy.py'
       - 'analysis/execution_realism_contract.py'
       - 'analysis/walk_forward_execution.py'
+      - 'analysis/public_acquisition_dry_run.py'
       - 'research/strategy/schema/**'
       - 'docs/walk_forward_execution.md'
       - 'reports/walk_forward_execution/**'
+      - 'research/strategy/runs/public_v3_data_handoff_request.json'
       - 'docs/archive_baseline_audit.md'
       - 'research/strategy/runs/archive_baseline_20261004_manifest.json'
       - 'research/strategy/private/archive_baseline_20261004.compact.json.enc'
@@ -65,6 +70,7 @@ on:
       - 'tests/test_preregistered_strategy.py'
       - 'tests/test_execution_realism_contract.py'
       - 'tests/test_walk_forward_execution.py'
+      - 'tests/test_public_acquisition_dry_run.py'
       - 'tests/fixtures/v3_observation_*.jsonl'
       - 'tests/fixtures/walk_forward_*.jsonl'
       - 'tests/fixtures/evidence_*.json'
@@ -127,7 +133,14 @@ jobs:
           PY
       - name: Compile tooling
         run: |
-          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_split_audit.py analysis/execution_realism_contract.py analysis/preregistered_strategy.py analysis/walk_forward_execution.py
+          python -m py_compile tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_split_audit.py analysis/execution_realism_contract.py analysis/preregistered_strategy.py analysis/walk_forward_execution.py analysis/public_acquisition_dry_run.py
+      - name: Validate public acquisition blocker without network
+        run: |
+          python -m unittest discover -s tests -p 'test_public_acquisition_dry_run.py' -v
+          python analysis/public_acquisition_dry_run.py \
+            --output /tmp/public-acquisition-dry-run.json
+          cmp /tmp/public-acquisition-dry-run.json \
+            reports/walk_forward_execution/public_acquisition_dry_run_blocked_20261005.json
       - name: Validate pre-registration gate without OOS evaluation
         run: |
           python analysis/preregistered_strategy.py \

@@ -1,0 +1,45 @@
+{
+  "request_version": 1,
+  "asset_scope": ["polymarket_btc_5m"],
+  "status": "awaiting_private_or_user_supplied_package",
+  "observations_path": "/private/observations-v3.jsonl",
+  "labels_path": "/private/resolution-labels.jsonl",
+  "required_observation_contract": "research/strategy/schema/v3_observation.schema.json",
+  "required_label_contract": "research/strategy/schema/walk_forward_label.schema.json",
+  "required_provenance": [
+    "immutable source bytes",
+    "sha256 for each source object and JSONL file",
+    "UTC source_event_time_ms and received_time_ms",
+    "market_id, condition_id, and up/down token IDs",
+    "contemporaneous fee rate/exponent/asset",
+    "tick_size and min_order_size",
+    "adapter repository and immutable commit"
+  ],
+  "observation_minimum": {
+    "canonical_records": 300,
+    "independent_windows": 300,
+    "independent_utc_dates": 7,
+    "book_sides": ["bids", "asks"],
+    "midpoint_only_forbidden": true
+  },
+  "label_minimum": {
+    "one_independent_resolution_per_market": true,
+    "official_source_required": true,
+    "label_available_after_feature_receipt": true
+  },
+  "forbidden_substitutes": [
+    "legacy_csv",
+    "quote_markout_not_fill_pnl",
+    "midpoint_only",
+    "public_quote_as_fill",
+    "synthetic_receipt",
+    "inferred_or_future label"
+  ],
+  "safety": {
+    "no_credentials_in_repo": true,
+    "no_orders": true,
+    "no_live_funds": true,
+    "sha256_required": true
+  },
+  "canary_boundary": "Supplying this package enables offline contract and walk-forward checks only. Ten private, reconciled canary fills remain required before promotion."
+}
