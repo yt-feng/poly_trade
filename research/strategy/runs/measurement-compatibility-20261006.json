@@ -1,0 +1,41 @@
+{
+  "canary_gate_changed": false,
+  "deployment_approval_received": false,
+  "deployment_performed": false,
+  "manifest_version": 1,
+  "measurement_started": false,
+  "poly_code_sha256": {
+    "capture_v2.py": "9356670dd5029b1090bcecbe01049ddb81d32966fcdd68af5fe269754dbc99f5",
+    "capture_v3.py": "48392b226b88e81d70fcdd4e0c47b9fcf32d3d0f94459f13030fe9c74efbbb18",
+    "docs/book_observation_semantics.md": "762b8f4fae92e81026062ca232442e64a8bf82fa5b2a9e3eda0753671341be8d",
+    "measurement_v3.py": "d7c265ae27eabc85503b0c022e576cedd996a9a197ebbde6c45b411777b5b33d",
+    "tests/test_book_observation_semantics.py": "ff7c17098854196053dc28ad9d83341763f50ac92bb70a3b4cf7859826b76d64",
+    "tests/test_measurement_v3.py": "d7974c437217c7c229ec02c2fc6ad5b6494a7efc4fdda1fb8148ea8965c0752e"
+  },
+  "poly_work_commit": "abb93b212c6c4888a17fe64051473cc071227153",
+  "prior_commit": "2e973601c0d9414a0f1f90fb67898cd2c973198f",
+  "prior_preparation_manifest": "research/strategy/runs/measurement-preparation-20261006.json",
+  "private_identity_accessed": false,
+  "promotion_allowed": false,
+  "result": {
+    "artifact": "research_vault/records/ccb510149ca840ce89e34a3e0035b1bb.vault",
+    "ciphertext_sha256": "0129c1fadf3f8b34267c08f980552bb7484507bc8ed3961dd218fab17797fa2d",
+    "compressed_plaintext_sha256": "8bb9bd20689a79428f2a86d81cb138d99b98f32865017597fb43b7507739b8ec",
+    "plaintext_committed": false,
+    "plaintext_encoding": "gzip+json"
+  },
+  "scope": "offline compatibility and resource review",
+  "status": "prepared_offline_pending_production_approval",
+  "validation": {
+    "main_overlay_tests": 368,
+    "measurement_targeted_tests": 18,
+    "poly_ci": {
+      "conclusion": "success",
+      "head_sha": "abb93b212c6c4888a17fe64051473cc071227153",
+      "id": 37523351778,
+      "status": "completed",
+      "url": "https://github.com/yt-feng/poly/actions/runs/37523351778"
+    },
+    "poly_full_tests": 381
+  }
+}
