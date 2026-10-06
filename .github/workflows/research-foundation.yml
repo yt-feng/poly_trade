@@ -16,6 +16,7 @@ on:
       - 'analysis/price_clock_diagnostic.py'
       - 'analysis/quote_measurement_audit.py'
       - 'analysis/quote_missingness_semantics.py'
+      - 'analysis/recorded_price_bounds.py'
       - 'analysis/v3_data_contract.py'
       - 'analysis/walk_forward_intake.py'
       - 'analysis/walk_forward_split_audit.py'
@@ -43,6 +44,7 @@ on:
       - 'tests/test_price_clock_diagnostic.py'
       - 'tests/test_quote_measurement_audit.py'
       - 'tests/test_quote_missingness_semantics.py'
+      - 'tests/test_recorded_price_bounds.py'
       - 'tests/test_v3_data_contract.py'
       - 'tests/test_walk_forward_intake.py'
       - 'tests/test_walk_forward_split_audit.py'
@@ -73,6 +75,7 @@ on:
       - 'analysis/price_clock_diagnostic.py'
       - 'analysis/quote_measurement_audit.py'
       - 'analysis/quote_missingness_semantics.py'
+      - 'analysis/recorded_price_bounds.py'
       - 'analysis/v3_data_contract.py'
       - 'analysis/walk_forward_intake.py'
       - 'analysis/walk_forward_split_audit.py'
@@ -100,6 +103,7 @@ on:
       - 'tests/test_price_clock_diagnostic.py'
       - 'tests/test_quote_measurement_audit.py'
       - 'tests/test_quote_missingness_semantics.py'
+      - 'tests/test_recorded_price_bounds.py'
       - 'tests/test_v3_data_contract.py'
       - 'tests/test_walk_forward_intake.py'
       - 'tests/test_walk_forward_split_audit.py'
@@ -170,7 +174,7 @@ jobs:
           PY
       - name: Compile tooling
         run: |
-          python -m py_compile analysis/quote_missingness_semantics.py analysis/quote_measurement_audit.py analysis/price_clock_diagnostic.py analysis/quote_robustness.py analysis/spread_hurdle_diagnostic.py analysis/archive_coverage_ledger.py analysis/historical_walk_forward.py analysis/quote_factor_diagnostic.py tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_split_audit.py analysis/execution_realism_contract.py analysis/preregistered_strategy.py analysis/research_manifest_contracts.py analysis/walk_forward_execution.py analysis/public_acquisition_dry_run.py
+          python -m py_compile analysis/recorded_price_bounds.py analysis/quote_missingness_semantics.py analysis/quote_measurement_audit.py analysis/price_clock_diagnostic.py analysis/quote_robustness.py analysis/spread_hurdle_diagnostic.py analysis/archive_coverage_ledger.py analysis/historical_walk_forward.py analysis/quote_factor_diagnostic.py tools/archive_crypto.py analysis/canary_evidence_ledger.py analysis/archive_baseline_audit.py analysis/v3_data_contract.py analysis/walk_forward_intake.py analysis/walk_forward_split_audit.py analysis/execution_realism_contract.py analysis/preregistered_strategy.py analysis/research_manifest_contracts.py analysis/walk_forward_execution.py analysis/public_acquisition_dry_run.py
       - name: Validate public acquisition blocker without network
         run: |
           python -m unittest discover -s tests -p 'test_public_acquisition_dry_run.py' -v
@@ -228,6 +232,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_price_clock_diagnostic.py' -v
           python -m unittest discover -s tests -p 'test_quote_measurement_audit.py' -v
           python -m unittest discover -s tests -p 'test_quote_missingness_semantics.py' -v
+          python -m unittest discover -s tests -p 'test_recorded_price_bounds.py' -v
           python -m unittest discover -s tests -p 'test_walk_forward_intake.py' -v
           python -m unittest discover -s tests -p 'test_walk_forward_split_audit.py' -v
           python -m unittest discover -s tests -p 'test_preregistered_strategy.py' -v

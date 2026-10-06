@@ -1,0 +1,29 @@
+{
+  "canary_gate_changed": false,
+  "code_sha256": {
+    "analysis/archive_baseline_audit.py": "e1246fa3e156f18aa14c838fb3cc9ade76a251cb88a8161aa1817d4b186bd19b",
+    "analysis/archive_coverage_ledger.py": "e38ddcbfc26f178e657d545c94c995025c57941d3f5d6549c51b6b8374c26502",
+    "analysis/historical_walk_forward.py": "7c69db4ca78f2e94442ac2bd0f18059f15feb7e4daffda0e3dd67c4bef2a2f4e",
+    "analysis/price_clock_diagnostic.py": "05f91bbc1eb455e6b3c0d96109161c229fec983ed40acb05ffd5a8d06ffeb177",
+    "analysis/quote_factor_diagnostic.py": "cede9b9d99540d501e247023ddc9a1a69929251633a380082192fd03a9076144",
+    "analysis/quote_measurement_audit.py": "e028ef743077f11f458c81839095c47e5f9d6d43e8c36b7871b1f15069eb42e2",
+    "analysis/recorded_price_bounds.py": "eb2ba6de8160f3d29986ff2480a8453f7ce6e01b4fa17dd7697c929e8bc76897"
+  },
+  "freeze": {
+    "artifact": "research_vault/records/c4a13a610b7f495e82de01eb92f0615c.vault",
+    "ciphertext_sha256": "afdd3969ef2a02b2042b71c5a71c49407085054c78ec6af31e4729e43bdb6003",
+    "plaintext_encoding": "json",
+    "protocol_plaintext_sha256": "81759cb61dc37a56fb8fa2043026c80893448e05d0692314a1c016d2750c5bc4"
+  },
+  "manifest_version": 1,
+  "prior_commit": "b5fc7131007827c645343491490a51634c28a6fb",
+  "private_identity_accessed": false,
+  "promotion_allowed": false,
+  "result": null,
+  "scope": "offline recorded-condition bounds",
+  "status": "protocol_frozen_before_evaluation",
+  "validation": {
+    "full_local_tests": 746,
+    "new_synthetic_tests": 10
+  }
+}

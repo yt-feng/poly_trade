@@ -363,3 +363,37 @@ does not infer an HTTP success, order failure or venue event from CSV blanks.
 Detailed lineage, methods, counts and the next experiment remain sealed. A
 recorded quote satisfying fixed limit inequalities is at most a necessary
 price condition; queue priority, placement, cancellation and fills are unknown.
+
+## Recorded endpoint bounds
+
+```bash
+python analysis/recorded_price_bounds.py \
+  --poly-root /path/to/poly --database /private/coverage.sqlite \
+  --frozen-report /private/state-result.json \
+  --protocol /private/frozen-endpoint-plan.json \
+  --output /private/endpoint-bounds.json
+```
+
+This consumes frozen decisions, fits and signal gates. It preserves the first
+recorded entry and target checkpoints; invalid rows are never skipped to find
+a later favorable price. Endpoint prices use inclusive decimal comparisons.
+Full-book and own-field validation are separate measurement views on the same
+denominator. The latter rejects an observed crossed side and never synthesizes
+the other outcome's quote. Positive displayed size is a recorded-field
+requirement, not a minimum order, queue or available-liquidity certificate.
+
+A valid necessary price violation establishes failure even when the other
+endpoint is missing. Otherwise all required fields must pass, or the path stays
+unknown. Nonpositive/invalid sizes remain unvalidated under the frozen rule,
+so intervals are conservative and not necessarily sharp. For N selected paths,
+P confirmed passes and U unknowns, the fraction lies in [P/N, (P+U)/N]. Empty
+cells have null fractions. Separate calendar bounds preserve unavailable signal
+decisions rather than silently declaring them unselected. All UTC date, fixed
+price-bin and date-by-bin cells, including zero cells, are retained.
+
+These are descriptive bounds without a missing-at-random assumption. They are
+not confidence intervals, continuously observed paths, order-fill probabilities
+or profitability bounds. Any extrapolation from known paths to missing paths,
+future markets, atomic venue quotes or order execution needs additional evidence.
+No historical result is independent OOS merely because its reporting changed.
+Protocols, complete path ledgers, results and decisions remain sealed.
