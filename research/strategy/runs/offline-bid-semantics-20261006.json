@@ -12,7 +12,20 @@
     "plaintext_encoding": "json",
     "protocol_plaintext_sha256": "ce30814d8d1a9ec61dba5e24595308d9eb84de5320b8c75721a63d6e56e3c4ca"
   },
+  "freeze_ci": {
+    "conclusion": "success",
+    "head_sha": "10f50c838c22490e7f3f9e664ab6b59e33f57b70",
+    "run_id": 37514745968,
+    "status": "completed"
+  },
+  "freeze_commit": "10f50c838c22490e7f3f9e664ab6b59e33f57b70",
   "manifest_version": 1,
+  "poly_ci": {
+    "conclusion": "success",
+    "head_sha": "ff7cf7ef080b2c08c203b77cad5a237e96f73fb9",
+    "run_id": 37514623883,
+    "status": "completed"
+  },
   "poly_code_sha256": {
     ".github/workflows/book-observation-offline.yml": "0da86852e7db0c4bb7268f720f4b763f33ac8435137c0abc4298400260d417ed",
     ".github/workflows/polymarket-monthly-rolling-24h.yml": "0af7c00d5e6fc71ecbb55fc9df6158ae1c7a35764cfbeb365d1b24ae275d9610",
@@ -25,9 +38,15 @@
   "prior_commit": "7e26bb6c4beae6eda806f28d4451ddf82a1a1300",
   "private_identity_accessed": false,
   "promotion_allowed": false,
-  "result": null,
+  "result": {
+    "artifact": "research_vault/records/cf1d7790f6134c5386692ea2eb9362b1.vault",
+    "ciphertext_sha256": "5be9e76ec340485712b793b162ea06286d365c09796186623676b2e52ffc65db",
+    "compressed_plaintext_sha256": "cd464b1d6c81553b86a343257b6e9aeba91215c783e2430250010802ce939b9f",
+    "plaintext_committed": false,
+    "plaintext_encoding": "gzip+json"
+  },
   "scope": "offline observation semantics audit",
-  "status": "protocol_frozen_before_measurement",
+  "status": "completed_offline_semantics_audit",
   "validation": {
     "poly_full_tests": 363,
     "poly_new_counterexamples": 17,
