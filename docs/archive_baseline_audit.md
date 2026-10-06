@@ -89,6 +89,9 @@ publication; never commit plaintext findings, private identities or archive keys
 an existing private protocol and a hash-pinned local CSV file list. It reuses
 the archive timestamp/identity helpers and private-output writer. It does not
 add a data collector, execution path, parameter search or settlement inference.
+This older helper reproduces the caller's frozen file list; it does not certify
+that list's completeness. New archive research uses the complete UTC inventory
+entrypoint below. Keep historical protocols intact when producing corrections.
 
 ```bash
 python analysis/quote_factor_diagnostic.py \
@@ -118,3 +121,51 @@ are reported without retuning or declaring significance from a few dates.
 The CLI prints only a completion marker and writes detailed results outside the
 repository. Protocols and findings must be sealed with the existing recipient;
 public run metadata must contain no factor results or private configuration.
+
+## Complete UTC inventory and historical walk-forward
+
+Build coverage from every existing CSV before choosing a diagnostic interval:
+
+```bash
+python analysis/archive_coverage_ledger.py \
+  --poly-root /path/to/poly \
+  --database /private/coverage.sqlite \
+  --output /private/coverage.json
+python analysis/historical_walk_forward.py \
+  --poly-root /path/to/poly \
+  --database /private/coverage.sqlite \
+  --protocol /private/frozen-walk-forward.json \
+  --output /private/walk-forward.json
+```
+
+The inventory parses timezone-aware sample times into UTC and uses market-start
+identities. Neither filename dates nor raw timestamp prefixes select inputs.
+The ledger pins the complete source tree and bytes, deduplicates market/UTC-time
+keys, and distinguishes omitted existing files, absent calendar windows,
+invalid fields/times and conflicting captures. Invalid first observations are
+retained, so a diagnostic cannot skip to a more convenient future quote. A
+window with only invalid timestamps is present-but-invalid, not absent.
+Repeated captures never add independent market samples. Header presence does
+not establish depth availability; depth values must be finite and positive.
+
+Freeze explicit chronological train/validation dates, the unchanged candidate
+family and estimator settings, and decision-time quote bins before evaluation.
+Each validation market appears once in the walk-forward results. Scaling and
+coefficients fit only the fold's training labels. Common price features and
+depth-complete features use separate cohorts; all candidates and baselines
+within a cohort share the same training and scoring rows. Cross-cohort scores
+are not evidence of an incremental factor. Future price targets need no future
+depth; a separately identified legacy correction mode preserves the older
+depth-at-label restriction solely for like-for-like correction comparisons.
+
+Reports include every scheduled window, per-date/continuous-block/quote-bin
+paired errors, unknown-price counts, selection exclusions and conservative
+missing-label sensitivity bounds. A corrected old interval stays a correction
+version; historical exposure is not reset by new code or a different split.
+Source/receive availability remains unverified. Nothing estimates fills, PnL
+or capital growth, and no canary gate is modified.
+
+Coverage databases and plaintext reports stay outside the checkout. Large
+JSON journals may be gzip-compressed before sealing; their public manifest
+records `gzip+json` so local decryption can be followed by decompression.
+CI uses synthetic counterexamples only and never decrypts empirical journals.

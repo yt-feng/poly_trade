@@ -1,0 +1,26 @@
+{
+  "canary_gate_changed": false,
+  "code_sha256": {
+    "analysis/archive_baseline_audit.py": "e1246fa3e156f18aa14c838fb3cc9ade76a251cb88a8161aa1817d4b186bd19b",
+    "analysis/archive_coverage_ledger.py": "e38ddcbfc26f178e657d545c94c995025c57941d3f5d6549c51b6b8374c26502",
+    "analysis/historical_walk_forward.py": "7c69db4ca78f2e94442ac2bd0f18059f15feb7e4daffda0e3dd67c4bef2a2f4e",
+    "analysis/quote_factor_diagnostic.py": "cede9b9d99540d501e247023ddc9a1a69929251633a380082192fd03a9076144"
+  },
+  "freeze": {
+    "artifact": "research_vault/records/0f3672edbfed415cab0b4d985c96fcf8.vault",
+    "ciphertext_sha256": "36a6b03eac98e06c18644d963cfbb76eca51ee7e899d25b11e4b9c799237905c",
+    "plaintext_encoding": "gzip+json",
+    "protocol_plaintext_sha256": "611f26eea9f21afbcb1516d618ae8bc8e6ae98bd932feba34d2097646f7358a4"
+  },
+  "manifest_version": 1,
+  "prior_commit": "4738c2783b49d7b4deeef4e4992754adf133f247",
+  "private_identity_accessed": false,
+  "promotion_allowed": false,
+  "result": null,
+  "scope": "offline historical coverage correction and exploratory diagnostic",
+  "status": "protocol_frozen_before_evaluation",
+  "validation": {
+    "full_offline_tests_passed": 669,
+    "new_synthetic_counterexamples": 23
+  }
+}

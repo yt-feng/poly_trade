@@ -74,6 +74,15 @@ cost-adjusted, stress, or exit-reconciliation gates. Both phases keep
 `promotion_allowed: false`; a passing offline report is not authorization to
 trade.
 
+## Historical coverage and diagnostics
+
+For new offline archive research, start with the complete UTC inventory and
+deduplicated coverage ledger, then a frozen chronological diagnostic. The
+[commands and cohort rules](docs/archive_baseline_audit.md#complete-utc-inventory-and-historical-walk-forward)
+separate absent windows, invalid fields, unknown future quotes and depth
+availability. Corrected old samples remain corrections, never fresh OOS.
+New empirical journals follow [the sealed research policy](research_vault/POLICY.md).
+
 ## Safe private archive handling
 
 Install the maintained PyCA dependency and supply the user's passphrase only at
