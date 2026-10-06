@@ -254,3 +254,46 @@ not cross-validation, confidence intervals or a statistical significance test.
 All measurements are quote proxies in cents per hypothetical share, with no
 PnL, promotion, trading or account-growth claim. A failed or unproven family may
 remain a descriptive observation without proving every future variant impossible.
+
+
+## Small price and clock hypothesis
+
+```bash
+python analysis/price_clock_diagnostic.py \
+  --poly-root /path/to/poly \
+  --database /private/coverage.sqlite \
+  --legacy /private/walk-forward.json \
+  --protocol /private/frozen-state-plan.json \
+  --output /private/state-result.json
+```
+
+This bounded diagnostic uses recorded quotes and scheduled window time. The
+midpoint is only a state feature, never an execution price or authenticated
+probability. No official opening value or settlement label is inferred.
+Both sides use their actual bid/ask and future quoted changes. A state/clock
+mechanism can motivate a volatility hypothesis without implying profitable
+mean reversion or directional drift; the latter must face its own test.
+
+Freeze the small candidate family, chronological dates, observation states,
+costs and descriptive screening checks before any empirical run. All states of
+a market stay in the same date split. New coefficients and standardization use
+only training markets with every registered state labeled; excluded training
+markets are counted. Validation does not require future completeness. Report
+state panels separately, because repeated market states are dependent and are
+not portfolio transactions or additional independent trades.
+
+The old fit file is a read-only negative control. Original-state features,
+labels and predictions must match; applying the fixed old model at other states
+is explicitly a transfer diagnostic. New candidates are compared with every
+legacy candidate and the no-signal/always-side controls on shared per-scenario
+samples. A fixed algebraic assumed-cost buffer is not optimized on validation;
+cost and delay scenarios never reselect signals. Bid and ask MSE, including the
+unprojected prediction, are secondary to actual quoted spread hurdles.
+
+Each report retains complete calendar denominators, per-scenario unknowns,
+first subsequent recorded-ask sensitivity with the original exit unchanged,
+positive-depth checks, daily/block contribution removals, fold economics and
+all fixed screening failures. Screening is descriptive and cannot promote a
+candidate or change canary gates. Actual fees, minimum size, source/receive
+availability and fills remain unverified. All empirical outputs and protocols
+must be sealed under the existing research-vault policy.
