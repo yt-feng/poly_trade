@@ -421,6 +421,123 @@ def run(poly_root, trade_root, p, v3_input=None):
             'next_experiment': 'Freeze this baseline protocol before the next previously unseen v3 public capture; require timestamp/fee/minimum-size/tick provenance, measure one fixed forward block without retuning, and keep all execution claims blocked.'}
 
 
+def audit_quality_only(poly_root, utc_date):
+    """Inspect existing legacy CSV bytes without fitting, replay or label inference.
+
+    Descriptive retention means complete positive-size quote fields at an
+    in-window sample timestamp. It never certifies source/receive availability,
+    canonical identity, resolution labels or executable fills.
+    """
+    datetime.strptime(utc_date, '%Y-%m-%d')
+    root = Path(poly_root)
+    counts, reasons, missing = Counter(), Counter(), Counter()
+    files, records, conflicts, windows = [], {}, set(), set()
+    window_reasons = defaultdict(set)
+    time_min, time_max = None, None
+    required_metadata = ('condition_id', 'up_token_id', 'down_token_id',
+                         'source_event_ms', 'received_at_ns', 'fee_rate',
+                         'tick_size', 'min_order_size', 'label_available_time_ms')
+    for path in sorted((root / 'data/monthly_runs').rglob('*.csv')):
+        content = path.read_bytes()
+        counts['files_scanned'] += 1
+        selected = 0
+        for row in csv.DictReader(io.StringIO(content.decode('utf-8-sig'))):
+            counts['rows_scanned'] += 1
+            ts = timestamp(row.get('ts_iso'))
+            slug, start = market_start(row)
+            if not ((ts is not None and day(ts) == utc_date) or
+                    (start is not None and day(start) == utc_date)):
+                continue
+            selected += 1
+            counts['input_rows'] += 1
+            row_reasons = []
+            if slug is None:
+                row_reasons.append('invalid_btc5m_slug')
+            else:
+                windows.add(slug)
+            if ts is None:
+                row_reasons.append('invalid_or_naive_sample_time')
+            else:
+                time_min = ts if time_min is None else min(time_min, ts)
+                time_max = ts if time_max is None else max(time_max, ts)
+                if start is not None and not start <= ts < start + 300:
+                    row_reasons.append('sample_outside_window')
+            for field in required_metadata:
+                if row.get(field) in (None, ''):
+                    missing[field] += 1
+            if number(row.get('open_interest')) is None:
+                counts['oi_missing_rows'] += 1
+            values = tuple(number(row.get(field)) for field in PRICE_FIELDS + SIZE_FIELDS)
+            prices, sizes = values[:4], values[4:]
+            if any(value is None for value in values):
+                row_reasons.append('missing_or_nonfinite_quote_or_size')
+            elif any(not 0 < value < 100 for value in prices):
+                row_reasons.append('quote_price_outside_binary_range')
+            elif any(value <= 0 for value in sizes):
+                row_reasons.append('nonpositive_touch_size')
+            elif prices[1] > prices[0] or prices[3] > prices[2]:
+                row_reasons.append('crossed_quote')
+            if ts is not None and slug is not None:
+                key = (slug, ts)
+                if key in records:
+                    counts['duplicate_timestamp_rows'] += 1
+                    if records[key]['values'] != values:
+                        conflicts.add(slug)
+                        row_reasons.append('conflicting_quote_at_same_time')
+                else:
+                    records[key] = {'values': values, 'usable': not row_reasons}
+            reasons.update(set(row_reasons))
+            for reason in row_reasons:
+                if slug:
+                    window_reasons[reason].add(slug)
+        if selected:
+            files.append({'path': str(path.relative_to(root)), 'bytes': len(content),
+                          'sha256': hashlib.sha256(content).hexdigest(), 'selected_rows': selected})
+    kept = {key: row for key, row in records.items() if row['usable'] and key[0] not in conflicts}
+    kept_windows = {slug for slug, _ in kept}
+    window_reasons['conflicting_quote_at_same_time'].update(conflicts)
+    affected_windows = set().union(*window_reasons.values())
+    gaps = Counter()
+    grouped = defaultdict(list)
+    for slug, ts in kept:
+        grouped[slug].append(ts)
+    for times in grouped.values():
+        times.sort()
+        gaps.update(str(b - a) for a, b in zip(times, times[1:]))
+    raw_preserved = all(sha256(root / item['path']) == item['sha256'] for item in files)
+    return {
+        'schema_version': 1, 'audit': 'existing_legacy_csv_quality_only',
+        'utc_date': utc_date, 'source_commit': revision(root),
+        'scope': 'monthly_runs CSV rows whose sample or window date matches; no release asset substitution',
+        'source_files': files, 'raw_preserved_hashes_rechecked': raw_preserved,
+        'counts': dict(counts), 'sample_time_utc': {
+            'first': datetime.fromtimestamp(time_min, timezone.utc).isoformat() if time_min is not None else None,
+            'last': datetime.fromtimestamp(time_max, timezone.utc).isoformat() if time_max is not None else None},
+        'descriptive_cleaning': {
+            'input_windows': len(windows), 'retained_windows': len(kept_windows),
+            'window_retention_rate': len(kept_windows) / len(windows) if windows else None,
+            'retention_definition': 'at_least_one_descriptive_quote_not_complete_window',
+            'windows_without_any_rejected_row': len(windows - affected_windows),
+            'retained_unique_rows': len(kept), 'excluded_windows': len(windows - kept_windows),
+            'row_exclusion_reason_counts_overlap': dict(sorted(reasons.items())),
+            'windows_affected_by_reason_overlap': {k: len(v) for k, v in sorted(window_reasons.items())},
+            'gap_seconds_histogram': dict(gaps)},
+        'strict_execution': {
+            'accepted_windows': 0, 'window_retention_rate': 0 if windows else None,
+            'excluded_windows': len(windows), 'missing_metadata_rows': dict(missing),
+            'blockers': ['legacy_sampling_time_is_not_source_and_receive_time',
+                         'canonical_identity_not_certified', 'no_independent_resolution_labels',
+                         'fee_tick_minimum_provenance_unverified'],
+            'no_canonical_conversion_attempted': True},
+        'oi_dependency': {'baseline_requires_oi': False, 'oi_factor_requires_oi': True,
+                          'oi_rows_present': counts['input_rows'] - counts['oi_missing_rows'],
+                          'oi_imputed': False},
+        'prior_exposure': 'Previously used historical data; not unseen or confirmatory OOS.',
+        'metrics': {'pnl': None, 'brier': None, 'oos': None},
+        'canary_allowed': False, 'real_fills': 0,
+    }
+
+
 def write_private(path, result):
     path = Path(path).resolve()
     root = Path(__file__).resolve().parents[1]
@@ -436,12 +553,19 @@ def write_private(path, result):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--poly-root', type=Path, required=True)
-    parser.add_argument('--trade-root', type=Path, required=True)
-    parser.add_argument('--protocol', type=Path, required=True)
+    parser.add_argument('--trade-root', type=Path)
+    parser.add_argument('--protocol', type=Path)
+    parser.add_argument('--quality-date', help='Quality-only historical UTC date; no strategy evaluation')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--v3-input', type=Path, help='Optional canonical v3 JSONL; only contract-valid snapshots are replayed')
     args = parser.parse_args()
     try:
+        if args.quality_date:
+            write_private(args.output, audit_quality_only(args.poly_root, args.quality_date))
+            print('LOCAL_QUALITY_AUDIT_COMPLETE. No strategy evaluated; output remains private.')
+            return 0
+        if args.protocol is None or args.trade_root is None:
+            raise ValueError('PROTOCOL_AND_TRADE_ROOT_REQUIRED_FOR_REPLAY')
         protocol_bytes = args.protocol.read_bytes()
         p = validate_protocol(json.loads(protocol_bytes))
         result = run(args.poly_root, args.trade_root, p, v3_input=args.v3_input)

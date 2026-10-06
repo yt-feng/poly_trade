@@ -1,6 +1,9 @@
 import importlib.util
 import tempfile
 import unittest
+from unittest.mock import patch
+import csv
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -13,6 +16,55 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class ArchiveBaselineAuditTests(unittest.TestCase):
+    def quality_sample(self, rows):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / 'data/monthly_runs/source/quotes.csv'
+            path.parent.mkdir(parents=True)
+            with path.open('w', newline='') as handle:
+                writer = csv.DictWriter(handle, fieldnames=['ts_iso', 'slug'] + list(audit.PRICE_FIELDS + audit.SIZE_FIELDS))
+                writer.writeheader()
+                writer.writerows(rows)
+            before = path.read_bytes()
+            with patch.object(audit, 'revision', return_value='a' * 40):
+                report = audit.audit_quality_only(root, '2026-09-23')
+            self.assertEqual(before, path.read_bytes())
+            self.assertTrue(report['raw_preserved_hashes_rechecked'])
+            return report
+
+    def quality_row(self, offset=1):
+        start = int(datetime(2026, 9, 23, tzinfo=timezone.utc).timestamp())
+        row = {'ts_iso': datetime.fromtimestamp(start + offset, timezone.utc).isoformat(),
+               'slug': f'btc-updown-5m-{start}'}
+        row.update(dict(zip(audit.PRICE_FIELDS, (50, 49, 50, 49))))
+        row.update({field: 10 for field in audit.SIZE_FIELDS})
+        return row
+
+    def test_quality_without_oi_retains_descriptive_quotes_but_no_execution(self):
+        report = self.quality_sample([self.quality_row()])
+        self.assertEqual(report['descriptive_cleaning']['retained_windows'], 1)
+        self.assertEqual(report['strict_execution']['accepted_windows'], 0)
+        self.assertFalse(report['oi_dependency']['baseline_requires_oi'])
+        self.assertEqual(report['oi_dependency']['oi_rows_present'], 0)
+        self.assertIsNone(report['metrics']['pnl'])
+
+    def test_quality_conflict_excludes_entire_window_without_inventing_labels(self):
+        row, changed = self.quality_row(), self.quality_row()
+        changed['buy_up_cents'] = 51
+        report = self.quality_sample([row, self.quality_row(2), changed])
+        self.assertEqual(report['descriptive_cleaning']['retained_windows'], 0)
+        self.assertEqual(report['descriptive_cleaning']['excluded_windows'], 1)
+        self.assertIn('no_independent_resolution_labels', report['strict_execution']['blockers'])
+
+    def test_quality_excludes_nonpositive_touch_and_outside_window_rows(self):
+        row = self.quality_row()
+        row['buy_up_size'] = 0
+        report = self.quality_sample([row, self.quality_row(301)])
+        reasons = report['descriptive_cleaning']['row_exclusion_reason_counts_overlap']
+        self.assertEqual(reasons['nonpositive_touch_size'], 1)
+        self.assertEqual(reasons['sample_outside_window'], 1)
+        self.assertEqual(report['descriptive_cleaning']['retained_unique_rows'], 0)
+
     def test_protocol_rejects_missing_positive_costs(self):
         protocol = {
             "baselines": ["no_trade"], "reference_days": 1, "evaluation_days": 1,

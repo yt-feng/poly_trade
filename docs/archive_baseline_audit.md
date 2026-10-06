@@ -49,3 +49,36 @@ python analysis/archive_baseline_audit.py \
 
 The runner passes only records accepted by `analysis/v3_data_contract.py` into
 the quote adapter. Legacy CSV rows are quarantined instead of silently replayed.
+
+## Existing-data quality audit without strategy evaluation
+
+Use `--quality-date YYYY-MM-DD` to audit the mounted legacy CSV archive alone.
+This mode does not require a trading protocol and never fits a strategy,
+simulates orders, infers outcomes, or calculates returns:
+
+```bash
+python analysis/archive_baseline_audit.py \
+  --poly-root /path/to/poly \
+  --quality-date YYYY-MM-DD \
+  --output /private/quality-audit.json
+```
+
+Every CSV row is examined for scope using its sample timestamp and BTC5m slug.
+For the chosen date the report checks timestamp/window alignment, finite binary
+quotes, positive touch sizes, crossed quotes and duplicate/conflicting quote
+identities. A conflict excludes its entire window. Retention denominators and
+non-exclusive exclusion reason counts are explicit. Descriptive windows with
+at least one retained quote do not establish complete windows or execution
+quality. Source file bytes are unchanged and hashes are rechecked after audit.
+
+Legacy sample timestamps cannot establish per-feed source/receive availability;
+market slugs alone cannot certify condition/token identity. Independent label
+availability and fee/tick/minimum-size provenance remain separate requirements.
+OI missingness is reported separately and never disqualifies a book-only
+baseline; factors using OI require observed OI. Old data remains retrospectively
+exposed. A mounted CSV is never silently substituted for an unavailable release
+asset. Preserve any downloaded raw archive, manifest and sidecar before parsing.
+
+The detailed result is written outside the repository with owner-only
+permissions. Seal it to the existing, verified public recipient before
+publication; never commit plaintext findings, private identities or archive keys.

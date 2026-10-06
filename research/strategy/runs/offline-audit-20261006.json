@@ -1,0 +1,23 @@
+{
+  "artifact": {
+    "format": "X25519-HKDF-SHA256-AES256GCM-v1",
+    "path": "research_vault/records/a665f68df5364113bc6d47a350df1270.vault",
+    "plaintext_committed": false,
+    "sha256": "e39a8f16787e79c7904dcce6860a47cd7b6f4293f68b0140ada9552b25245696"
+  },
+  "manifest_version": 1,
+  "promotion": {
+    "eligible": false,
+    "live_trading": false
+  },
+  "recipient_verification": {
+    "decryption_tested": false,
+    "matches_prior_repository_envelopes": true,
+    "pinned_repository_commit": "0117c294562e02c5c5962ce61d5fef3782a5cd62",
+    "private_identity_accessed": false
+  },
+  "scope": "offline existing-data quality audit; no strategy evaluation",
+  "validation": {
+    "offline_tests_passed": 637
+  }
+}
