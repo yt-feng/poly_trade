@@ -39,6 +39,7 @@ LABEL_KEYS = {
     "label_version", "market_id", "condition_id", "outcome", "resolved_time_ms",
     "label_available_time_ms", "source", "source_sha256",
 }
+MAX_BOOK_AGE_MS = 1_500
 FEE_QUANTUM = Decimal("0.00001")
 OFFICIAL_FEES_URL = "https://docs.polymarket.com/trading/fees"
 OFFICIAL_ORDER_URL = "https://docs.polymarket.com/trading/place-orders"
@@ -135,10 +136,11 @@ def _best_levels(record: dict[str, Any], token: str, side: str) -> list[tuple[De
         price, size = _decimal(item.get("price")), _decimal(item.get("size"))
         if size < 0 or not _is_on_tick(price, tick):
             raise EvaluationBlocked("off_tick_or_invalid_book_level")
-        result.append((price, size))
+        if size > 0:
+            result.append((price, size))
     if not result:
         raise EvaluationBlocked("missing_executable_book_side")
-    return result
+    return sorted(result, key=lambda level: level[0], reverse=side == "sell")
 
 
 def _fee_metadata(record: dict[str, Any]) -> tuple[Decimal, Decimal, str]:
@@ -167,8 +169,9 @@ def simulate_order(
 ) -> dict[str, Any]:
     """Simulate one passive/marketable order against later displayed depth.
 
-    The first book available after latency is used.  Any remaining quantity is
-    cancelled at expiry; no queue position or hidden liquidity is invented.
+    Only fresh source events at/after order activation can witness a fill.
+    Missing coverage is unknown. Partial fills cancel the remainder in this
+    simulation; no queue position or hidden liquidity is invented.
     ``price_source=mid`` is rejected unconditionally.
     """
     if price_source in {"mid", "midpoint", "mid_price"}:
@@ -195,46 +198,75 @@ def simulate_order(
     decision_fee = _fee_metadata(decision)
     active_at = decision_receive + latency_ms
     expires_at = decision_receive + ttl_ms
+    def unknown(reason: str) -> dict[str, Any]:
+        return {"status": "unknown_execution", "reason": reason,
+                "requested_shares": str(requested), "filled_shares": None,
+                "remaining_shares": None, "active_at_ms": active_at,
+                "expires_at_ms": expires_at}
+
+    decision_event = decision.get("source_event_time_ms")
+    if (not _positive_int(decision_event) or decision_event > decision_receive
+            or decision_receive - decision_event > MAX_BOOK_AGE_MS):
+        return unknown("stale_or_invalid_decision_time")
     candidates = sorted(
         (row for row in market_records
-         if row.get("received_time_ms", 0) >= active_at
-         and row.get("received_time_ms", 0) <= expires_at),
+         if _positive_int(row.get("received_time_ms"))
+         and active_at <= row["received_time_ms"] <= expires_at),
         key=lambda row: row["received_time_ms"],
     )
     if not candidates:
-        return {
-            "status": "expired_unfilled", "requested_shares": str(requested),
-            "filled_shares": "0", "remaining_shares": str(requested),
-            "active_at_ms": active_at, "expires_at_ms": expires_at,
-        }
-    fill_record = candidates[0]
-    if fill_record.get("market_id") != decision.get("market_id"):
-        raise EvaluationBlocked("market_cluster_mismatch")
-    if fill_record.get("rules") != decision.get("rules"):
-        return {
-            "status": "blocked_rules_changed", "requested_shares": str(requested),
-            "filled_shares": "0", "remaining_shares": str(requested),
-        }
-    fill_fee = _fee_metadata(fill_record)
-    if fill_fee != decision_fee:
-        return {
-            "status": "blocked_fee_metadata_changed", "requested_shares": str(requested),
-            "filled_shares": "0", "remaining_shares": str(requested),
-        }
-    levels = _best_levels(fill_record, token, side)
-    if limit_price is not None:
-        limit = _decimal(limit_price)
-        if not _is_on_tick(limit, tick):
-            raise EvaluationBlocked("limit_price_off_tick")
-        opposite = _best_levels(fill_record, token, "sell" if side == "buy" else "buy")
-        midpoint = (levels[0][0] + opposite[0][0]) / Decimal("2")
-        if limit == midpoint:
-            raise EvaluationBlocked("MID_PRICE_NOT_EXECUTABLE")
-        # A limit order may only consume prices no worse than its limit.  A
-        # midpoint supplied as a limit still cannot pass unless it is displayed
-        # liquidity at a book level.
-        levels = [(price, size) for price, size in levels
-                  if (price <= limit if side == "buy" else price >= limit)]
+        return unknown("missing_post_order_feed")
+    limit = _decimal(limit_price) if limit_price is not None else None
+    if limit is not None and not _is_on_tick(limit, tick):
+        raise EvaluationBlocked("limit_price_off_tick")
+    last_receive = active_at
+    fill_record = None
+    for candidate in candidates:
+        if (candidate.get("market_id") != decision.get("market_id")
+                or candidate.get("condition_id") != decision.get("condition_id")
+                or candidate.get("token_ids") != decision.get("token_ids")):
+            raise EvaluationBlocked("market_cluster_mismatch")
+        event = candidate.get("source_event_time_ms")
+        received = candidate["received_time_ms"]
+        if not _positive_int(event) or event > received:
+            return unknown("invalid_post_order_source_time")
+        if received - event > MAX_BOOK_AGE_MS or received - last_receive > MAX_BOOK_AGE_MS:
+            return unknown("stale_or_missing_post_order_feed")
+        last_receive = received
+        # A late-delivered pre-order event cannot witness a post-order fill.
+        if event < active_at:
+            continue
+        if candidate.get("rules") != decision.get("rules"):
+            return unknown("rules_changed")
+        fill_fee = _fee_metadata(candidate)
+        if fill_fee != decision_fee:
+            return unknown("fee_metadata_changed")
+        try:
+            levels = _best_levels(candidate, token, side)
+        except EvaluationBlocked as exc:
+            if str(exc) == "missing_executable_book_side":
+                return unknown("missing_positive_depth")
+            raise
+        if limit is not None:
+            opposite = _best_levels(candidate, token, "sell" if side == "buy" else "buy")
+            midpoint = (levels[0][0] + opposite[0][0]) / Decimal("2")
+            if limit == midpoint:
+                raise EvaluationBlocked("MID_PRICE_NOT_EXECUTABLE")
+            levels = [(price, size) for price, size in levels
+                      if (price <= limit if side == "buy" else price >= limit)]
+        if levels:
+            fill_record = candidate
+            break
+    if fill_record is None:
+        # Only a causal, fresh observation at TTL closes the simulated interval.
+        # Otherwise absence of a quote is missing evidence, not a zero fill.
+        if (candidates[-1]["received_time_ms"] < expires_at
+                or candidates[-1]["source_event_time_ms"] < expires_at):
+            return unknown("incomplete_feed_through_expiry")
+        return {"status": "expired_unfilled", "requested_shares": str(requested),
+                "filled_shares": "0", "remaining_shares": str(requested),
+                "active_at_ms": active_at, "expires_at_ms": expires_at,
+                "expiry_evidence": "continuous_fresh_public_books_simulation_only"}
     remaining, filled, notional = requested, Decimal("0"), Decimal("0")
     fills = []
     for price, size in levels:
@@ -259,6 +291,7 @@ def simulate_order(
         "status": status, "requested_shares": str(requested), "filled_shares": str(filled),
         "remaining_shares": str(remaining), "active_at_ms": active_at,
         "expires_at_ms": expires_at, "fill_received_time_ms": fill_record["received_time_ms"],
+        "fill_source_event_time_ms": fill_record["source_event_time_ms"],
         "average_price": str(average) if average is not None else None,
         "notional_usdc": str(notional), "fee_usdc": str(fee), "fills": fills,
         "price_source": price_source, "side": side, "token": token,
@@ -270,10 +303,15 @@ def load_labels(path: Path) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     if not path.exists():
         return {}, {"input_records": 0, "accepted_records": 0, "quarantined_records": 0,
                     "reason_counts": {"missing_label_file": 1}}
+    return validate_labels(load_jsonl(path))
+
+
+def validate_labels(records: Iterable[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Validate every label; callers must block if any row is quarantined."""
     accepted: dict[str, dict[str, Any]] = {}
     reasons = Counter()
     total = 0
-    for record in load_jsonl(path):
+    for record in records:
         total += 1
         if not isinstance(record, dict) or set(record) != LABEL_KEYS:
             reasons["unknown_or_missing_label_fields"] += 1
@@ -315,7 +353,8 @@ def _observation_features(record: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {"market_id": record["market_id"], "condition_id": record["condition_id"],
                            "source_event_time_ms": record["source_event_time_ms"],
                            "received_time_ms": record["received_time_ms"], "rules": record["rules"],
-                           "fees": record["fees"], "books": books, "observation_id": record["observation_id"]}
+                           "fees": record["fees"], "books": books, "token_ids": record["token_ids"],
+                           "observation_id": record["observation_id"]}
     for token in ("up", "down"):
         asks = _best_levels(record, token, "buy")
         bids = _best_levels(record, token, "sell")
@@ -450,7 +489,7 @@ def expected_calibration_error(predictions: list[dict[str, Any]], bins: int = 10
 def _empty_metrics() -> dict[str, Any]:
     return {
         "predictions": 0, "brier": None, "ece": None, "attempts": 0,
-        "filled_attempts": 0, "partial_fills": 0, "expired_orders": 0,
+        "filled_attempts": 0, "partial_fills": 0, "expired_orders": 0, "unknown_orders": 0,
         "gross_pnl_usdc": None, "fees_usdc": None, "net_pnl_usdc": None,
         "net_return_on_filled_cost": None,
     }
@@ -462,6 +501,34 @@ def evaluate(
     config: WalkForwardConfig,
 ) -> dict[str, Any]:
     """Run blocked-safe walk-forward evaluation and return a public report."""
+    # Imported lazily because intake/split reuse the label loader in this module.
+    try:
+        from walk_forward_intake import audit_record_relationships
+        from walk_forward_split_audit import audit_execution_folds
+    except ImportError:
+        from analysis.walk_forward_intake import audit_record_relationships
+        from analysis.walk_forward_split_audit import audit_execution_folds
+    validation = validate_records(observations)
+    checked_labels, label_validation = validate_labels(labels.values())
+    blockers = []
+    if validation["quarantined_records"]:
+        blockers.append("quarantined_observation_records")
+    if label_validation["quarantined_records"]:
+        blockers.append("quarantined_label_records")
+    if any(key != value.get("market_id") for key, value in labels.items()):
+        blockers.append("label_mapping_identity_mismatch")
+    if blockers:
+        report = blocked_report(blockers, config=config)
+        report["input"] = {"observation_records": len(observations), "label_records": len(labels),
+                           "v3_validation": {k: v for k, v in validation.items() if k != "accepted"},
+                           "labels_validation": label_validation}
+        return report
+    observations = [row for row in observations if row["observation_type"] == "book_snapshot"]
+    relationships = audit_record_relationships(observations, checked_labels)
+    if relationships["blocked_reasons"]:
+        report = blocked_report(relationships["blocked_reasons"], config=config)
+        report["input_audit"] = relationships
+        return report
     validation_reasons = Counter()
     accepted: list[dict[str, Any]] = []
     for record in observations:
@@ -486,6 +553,16 @@ def evaluate(
         "blocked_reasons": [],
         "input_requirements": _input_requirements(None, None, config),
     }
+    if validation_reasons:
+        report["blocked_reasons"].extend(sorted(validation_reasons))
+        report["blocked_reasons"].append("feature_extraction_failed_without_sample_shrink")
+        return report
+    report["input_audit"] = relationships
+    split_audit = audit_execution_folds(observations, labels, folds)
+    report["split_audit"] = split_audit
+    if split_audit["blocked_reasons"]:
+        report["blocked_reasons"].extend(split_audit["blocked_reasons"])
+        return report
     if not accepted:
         report["blocked_reasons"].append("no_validated_book_observations")
         return report
@@ -507,7 +584,8 @@ def evaluate(
         except EvaluationBlocked as exc:
             fold["blocked_reason"] = str(exc)
             report["folds"].append(fold)
-            continue
+            report["blocked_reasons"].append(str(exc))
+            return report
         fold["training_events"] = model["training_events"]
         used_test_markets: set[str] = set()
         for market in fold["test_market_ids"]:
@@ -540,9 +618,13 @@ def evaluate(
                 row["trade"] = "none"
                 continue
             token = "up" if up_edge >= down_edge else "down"
-            order = simulate_order(feature, by_market[market], token=token, side="buy",
-                                   quantity=config.order_size, latency_ms=config.latency_ms,
-                                   ttl_ms=config.order_ttl_ms)
+            try:
+                order = simulate_order(feature, by_market[market], token=token, side="buy",
+                                       quantity=config.order_size, latency_ms=config.latency_ms,
+                                       ttl_ms=config.order_ttl_ms)
+            except EvaluationBlocked as exc:
+                report["blocked_reasons"].append(str(exc))
+                return report
             row["trade"] = token
             row["order"] = order
             execution_results.append({"prediction": row, "label": label})
@@ -560,6 +642,9 @@ def evaluate(
             metrics["partial_fills"] += 1
         if status == "expired_unfilled":
             metrics["expired_orders"] += 1
+        if status == "unknown_execution" or str(status).startswith("blocked_"):
+            metrics["unknown_orders"] += 1
+            continue
         filled = _decimal(order.get("filled_shares", "0"))
         if filled <= 0 or not order.get("average_price"):
             continue
@@ -572,7 +657,9 @@ def evaluate(
         fees += fee
         net += settlement - entry - fee
         cost += entry + fee
-    if execution_results:
+    if metrics["unknown_orders"]:
+        report["blocked_reasons"].append("unknown_execution_outcomes")
+    if execution_results and not metrics["unknown_orders"]:
         metrics["gross_pnl_usdc"] = str(gross)
         metrics["fees_usdc"] = str(fees)
         metrics["net_pnl_usdc"] = str(net)
@@ -676,14 +763,24 @@ def run_files(observations_path: Path, labels_path: Path, config: WalkForwardCon
         missing.append("missing_label_file")
     if missing:
         return blocked_report(missing, config=config, observations_path=observations_path, labels_path=labels_path)
-    raw = load_jsonl(observations_path)
-    validation = validate_records(raw)
-    observations = [record for record in validation["accepted"] if record.get("observation_type") == "book_snapshot"]
-    labels, label_report = load_labels(labels_path)
-    report = evaluate(observations, labels, config)
+    try:
+        from walk_forward_intake import build_report as intake_report
+    except ImportError:
+        from analysis.walk_forward_intake import build_report as intake_report
+    intake = intake_report(observations_path, labels_path)
+    # Small historical research is allowed; promotion coverage is not waived.
+    coverage_only = {"fewer_than_300_independent_windows", "fewer_than_7_independent_utc_dates"}
+    blockers = [reason for reason in intake["blocked_reasons"] if reason not in coverage_only]
+    if blockers:
+        report = blocked_report(blockers, config=config, observations_path=observations_path, labels_path=labels_path)
+    else:
+        raw = load_jsonl(observations_path)
+        labels, _ = load_labels(labels_path)
+        report = evaluate(raw, labels, config)
+    report["intake"] = intake
+    report["input"]["observation_records"] = intake["observations"]["input_records"]
+    report["input"]["label_records"] = intake["labels"]["input_records"]
     report["input_requirements"] = _input_requirements(observations_path, labels_path, config)
-    report["input"]["v3_validation"] = {key: value for key, value in validation.items() if key != "accepted"}
-    report["input"]["labels_validation"] = label_report
     return report
 
 

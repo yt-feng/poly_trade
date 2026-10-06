@@ -245,6 +245,46 @@ def audit_splits(observations: list[dict[str, Any]], labels: dict[str, dict[str,
     }
 
 
+def audit_execution_folds(observations: list[dict[str, Any]], labels: dict[str, dict[str, Any]],
+                          folds: list[dict[str, Any]]) -> dict[str, Any]:
+    """Audit the evaluator's actual train/test folds (no invented validation slice).
+
+    Entire clusters wholly inside purge/embargo are explicitly excluded.
+    A used cluster crossing either boundary blocks all evaluation metrics.
+    """
+    clusters, blockers = _cluster_records(observations, labels)
+    checks = []
+    for fold in folds:
+        reasons = []
+        train_ids, test_ids = set(fold["train_market_ids"]), set(fold["test_market_ids"])
+        if train_ids & test_ids:
+            reasons.append("cluster_overlap_between_splits")
+        excluded = []
+        for cluster in clusters:
+            market = cluster["market_id"]
+            if market in train_ids:
+                end = fold["train_end_ms"]
+                if max(cluster["end_event_ms"], cluster["last_received_ms"]) >= end:
+                    reasons.append("cluster_crosses_split_boundary")
+                if cluster["label_available_time_ms"] is None or cluster["label_available_time_ms"] > end:
+                    reasons.append("train_label_after_availability_cutoff")
+            elif market in test_ids:
+                if (cluster["start_event_ms"] < fold["test_start_ms"] or
+                        max(cluster["end_event_ms"], cluster["last_received_ms"]) >= fold["test_end_ms"]):
+                    reasons.append("cluster_crosses_split_boundary")
+            elif _interval_overlap(cluster, fold["train_end_ms"], fold["test_start_ms"]):
+                excluded.append(cluster)
+                if cluster["end_event_ms"] >= fold["test_start_ms"]:
+                    reasons.append("cluster_crosses_split_boundary")
+        checks.append({"fold": fold["fold"], "blocked_reasons": sorted(set(reasons)),
+                       "purged_or_embargoed_clusters": _cluster_counts(excluded)})
+        blockers.extend(reasons)
+    if not folds:
+        blockers.append("no_complete_chronological_folds")
+    return {"folds": checks, "blocked_reasons": sorted(set(blockers)),
+            "cluster_count": len(clusters)}
+
+
 def _manifest_digest(report: dict[str, Any]) -> str:
     unsigned = dict(report)
     unsigned.pop("manifest_sha256", None)

@@ -167,3 +167,37 @@ The checked-in
 [`preregistration_synthetic_blocked.json`](../reports/walk_forward_execution/preregistration_synthetic_blocked.json)
 only exercises the contract. It is marked synthetic, has no OOS metrics, and
 cannot qualify as canary evidence.
+
+## Execution-path corrections
+
+The execution CLI runs intake and audits the actual train/test folds before
+fitting. Any quarantined observation or label, missing/mismatched identity,
+reused condition/token identity, non-monotonic source/receive time, label known
+at feature receipt, or observation received at/after resolution blocks the
+whole evaluation. Feature extraction failures and invalid folds cannot shrink
+the profit sample silently. Small historical samples may still be inspected;
+the 300-window/7-date promotion thresholds remain reported in intake. Purge and
+embargo exclusions are counted explicitly; used clusters cannot cross fold
+boundaries. The separate three-way split audit remains available for candidate
+selection; execution does not pretend it ran a validation slice it never used.
+
+Book touches use only positive-size levels, sorted by executable price. A
+zero-size level cannot create an edge or change the chosen limit price. A
+post-order simulated fill requires source time at/after activation, source time
+no later than receipt, and both source age and observation gap within 1,500 ms.
+Missing coverage, pre-order delayed messages, absent positive depth, or changing
+rules/fees yield `unknown_execution`. These attempts are counted; any unknown
+attempt leaves aggregate cost/return/PnL null. A simulated unfilled expiry needs
+fresh causal observations through TTL, not an empty quote list. Partial-fill
+cancellation remains a simulation assumption, never a venue acknowledgement.
+
+Open interest is not an input to this book-only reference policy. A historical
+quality audit must report OI availability separately; only factors explicitly
+using OI require it. No OI field is fabricated or added to the v3 book contract.
+
+Regression commands (offline; no credentials):
+
+```bash
+python -m unittest discover -s tests -p 'test_execution_path_regressions.py' -v
+python -m unittest discover -s tests -p 'test_*.py'
+```

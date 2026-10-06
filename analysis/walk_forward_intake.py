@@ -88,7 +88,7 @@ def _time_order_report(records: list[dict[str, Any]]) -> dict[str, Any]:
         previous = None
         for index, row in enumerate(rows):
             current = (row["source_event_time_ms"], row["received_time_ms"])
-            if previous is not None and current < previous:
+            if previous is not None and (current[0] < previous[0] or current[1] < previous[1]):
                 regressions.append({"market_id": market_id, "row_index": index})
             previous = current
     return {
@@ -118,7 +118,7 @@ def _alignment_report(
             condition_mismatches.append(record["market_id"])
         if record["received_time_ms"] >= label["label_available_time_ms"]:
             label_known_before_observation.append(record["observation_id"])
-        if record["source_event_time_ms"] >= label["resolved_time_ms"]:
+        if max(record["source_event_time_ms"], record["received_time_ms"]) >= label["resolved_time_ms"]:
             observation_after_resolution.append(record["observation_id"])
     return {
         "observation_markets": len(observation_markets),
@@ -173,6 +173,48 @@ def _coverage_report(observations: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def audit_record_relationships(observations: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Structural checks shared by intake and execution, after schema validation.
+
+    Coverage size remains a promotion gate; identity and causal time checks
+    apply even to a small historical research sample.
+    """
+    blockers = []
+    alignment = _alignment_report(observations, labels)
+    if alignment["missing_label_market_count"]:
+        blockers.append("missing_resolution_label_for_observation_market")
+    if alignment["orphan_label_market_count"]:
+        blockers.append("orphan_resolution_label_market")
+    if alignment["condition_mismatch_count"]:
+        blockers.append("label_condition_mismatch")
+    if alignment["label_known_before_or_at_observation_count"]:
+        blockers.append("label_available_before_or_at_observation")
+    if alignment["observation_at_or_after_resolution_count"]:
+        blockers.append("observation_at_or_after_resolution")
+
+    time_order = _time_order_report(observations)
+    if not time_order["nondecreasing_by_market"]:
+        blockers.append("observation_time_not_monotonic_by_market")
+    coverage = _coverage_report(observations)
+    if coverage["inconsistent_market_identity_count"]:
+        blockers.append("inconsistent_market_condition_or_token_identity")
+    conditions, tokens = {}, {}
+    for row in observations:
+        market = row["market_id"]
+        condition = row["condition_id"]
+        if conditions.setdefault(condition, market) != market:
+            blockers.append("condition_aliased_across_markets")
+        if row["token_ids"]["up"] == row["token_ids"]["down"]:
+            blockers.append("same_token_for_both_outcomes")
+        for role, token in row["token_ids"].items():
+            if tokens.setdefault(token, (market, role)) != (market, role):
+                blockers.append("token_aliased_across_market_or_outcome")
+        if row["source_event_time_ms"] > row["received_time_ms"]:
+            blockers.append("source_event_after_receive")
+    return {"alignment": alignment, "time_order": time_order, "coverage": coverage,
+            "blocked_reasons": sorted(set(blockers))}
+
+
 def build_report(
     observations_path: Path,
     labels_path: Path,
@@ -214,24 +256,9 @@ def build_report(
     if not labels:
         blockers.append("no_valid_resolution_labels")
 
-    alignment = _alignment_report(observations, labels)
-    if alignment["missing_label_market_count"]:
-        blockers.append("missing_resolution_label_for_observation_market")
-    if alignment["orphan_label_market_count"]:
-        blockers.append("orphan_resolution_label_market")
-    if alignment["condition_mismatch_count"]:
-        blockers.append("label_condition_mismatch")
-    if alignment["label_known_before_or_at_observation_count"]:
-        blockers.append("label_available_before_or_at_observation")
-    if alignment["observation_at_or_after_resolution_count"]:
-        blockers.append("observation_at_or_after_resolution")
-
-    time_order = _time_order_report(observations)
-    if not time_order["nondecreasing_by_market"]:
-        blockers.append("observation_time_not_monotonic_by_market")
-    coverage = _coverage_report(observations)
-    if coverage["inconsistent_market_identity_count"]:
-        blockers.append("inconsistent_market_condition_or_token_identity")
+    structural = audit_record_relationships(observations, labels)
+    blockers.extend(structural["blocked_reasons"])
+    alignment, time_order, coverage = (structural[key] for key in ("alignment", "time_order", "coverage"))
     if coverage["independent_windows"] < REQUIREMENTS["independent_windows"]:
         blockers.append("fewer_than_300_independent_windows")
     if coverage["independent_utc_dates"] < REQUIREMENTS["independent_utc_dates"]:

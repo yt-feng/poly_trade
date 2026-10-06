@@ -95,7 +95,7 @@ class WalkForwardExecutionTests(unittest.TestCase):
                            latency_ms=0, ttl_ms=1_000, price_source="mid", limit_price="0.195")
         with self.assertRaisesRegex(EvaluationBlocked, "MID_PRICE_NOT_EXECUTABLE"):
             tick_aligned = observation("m1", 1_000, ask="0.21", bid="0.19")
-            simulate_order(tick_aligned, [tick_aligned], token="up", side="buy", quantity="5",
+            simulate_order(tick_aligned, [observation("m1", 1_200, ask="0.21", bid="0.19")], token="up", side="buy", quantity="5",
                            latency_ms=0, ttl_ms=1_000, limit_price="0.20")
 
     def test_partial_fill_and_expiry_are_explicit(self):
@@ -107,7 +107,8 @@ class WalkForwardExecutionTests(unittest.TestCase):
         self.assertEqual(Decimal(result["filled_shares"]), Decimal("2"))
         expired = simulate_order(decision, [], token="up", side="buy", quantity="5",
                                  latency_ms=1_000, ttl_ms=5_000)
-        self.assertEqual(expired["status"], "expired_unfilled")
+        self.assertEqual(expired["status"], "unknown_execution")
+        self.assertIsNone(expired["filled_shares"])
 
     def test_future_rows_and_labels_cannot_enter_fit(self):
         first = observation("m1", 1_000, ask="0.20", observation_id="old-row")
@@ -149,8 +150,9 @@ class WalkForwardExecutionTests(unittest.TestCase):
     def test_end_to_end_report_has_cost_adjusted_metrics_and_stays_blocked(self):
         rows = [observation(f"m{i}", i * 1_000, ask="0.20", ask_size="10") for i in range(1, 13)]
         rows.append(observation("test", 20_000, ask="0.20", ask_size="10"))
+        rows.append(observation("test", 21_100, ask="0.20", ask_size="10"))
         labels = {f"m{i}": label(f"m{i}", i * 1_000 + 200, available=i * 1_000 + 300) for i in range(1, 13)}
-        labels["test"] = label("test", 20_200, available=20_300)
+        labels["test"] = label("test", 22_000, available=22_100)
         config = WalkForwardConfig(train_duration_ms=12_000, test_duration_ms=10_000,
                                    purge_ms=100, embargo_ms=100, latency_ms=1_000,
                                    order_ttl_ms=5_000, order_size=Decimal("5"),
