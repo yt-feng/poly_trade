@@ -169,3 +169,47 @@ Coverage databases and plaintext reports stay outside the checkout. Large
 JSON journals may be gzip-compressed before sealing; their public manifest
 records `gzip+json` so local decryption can be followed by decompression.
 CI uses synthetic counterexamples only and never decrypts empirical journals.
+
+## Spread hurdle from frozen predictions
+
+```bash
+python analysis/spread_hurdle_diagnostic.py \
+  --poly-root /path/to/poly \
+  --database /private/coverage.sqlite \
+  --predictions /private/walk-forward.json \
+  --protocol /private/frozen-spread-hurdle.json \
+  --output /private/spread-hurdle.json
+```
+
+This entrypoint verifies the prior prediction file, ledger, original model
+coefficients, features and exact quote timestamps. It never trains a model.
+Every old scheduled window remains accounted for; an unexpected feature,
+label, market or timestamp mismatch stops the diagnostic instead of silently
+dropping rows. First-future-quote quality rules stay unchanged.
+
+The observed quantity is future recorded bid minus decision recorded ask on
+the same token. Up and Down use their own archived books. A reversed Up score
+may be registered as a Down directional hypothesis, but it is not a calibrated
+Down price forecast and never substitutes complementary synthetic prices.
+Directions remain separate hypotheses without position selection or a combined
+capital path. Small prediction-error improvements alone cannot demonstrate
+that movement exceeds the observed spread.
+
+Freeze every signal rule and hypothetical cost scenario before evaluating the
+quote paths. Report all attempts, including zero-signal and zero-cost failures.
+The gross spread gate is identical across cost scenarios; assumptions subtract
+costs from that same selection without searching for another threshold. The
+zero-cost case is optimistic. Assumed fees/slippage never become historical
+actual charges merely because they appear in a report.
+
+Activity-weighted proxy comparisons use the same labeled market denominator
+for every candidate and the always-same-side/no-signal controls. Selected-only
+means have different subsets and are not paired skill comparisons. Unknown
+future quotes receive binary-price lower/upper bounds. Separate calendar stress
+bounds retain windows whose signals cannot be reconstructed, under an explicit
+hypothetical missing one-share exposure; these are not realized losses.
+
+Budget arithmetic is a static one-share/top-of-book illustration. Reported size
+is treated as shares only under a stated assumption; minimum order, historical
+fees, tick size, source/receive timing and execution remain unverified. No fill,
+portfolio PnL, capital reuse, turnover or small-account growth is inferred.
