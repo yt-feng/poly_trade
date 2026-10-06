@@ -12,13 +12,26 @@
     "plaintext_encoding": "gzip+json",
     "protocol_plaintext_sha256": "611f26eea9f21afbcb1516d618ae8bc8e6ae98bd932feba34d2097646f7358a4"
   },
+  "freeze_ci": {
+    "conclusion": "success",
+    "id": 37499018692,
+    "sha": "10767d51333544739bbef6c4b6a86f43ed35e527",
+    "status": "completed",
+    "url": "https://github.com/yt-feng/poly_trade/actions/runs/37499018692"
+  },
+  "freeze_commit": "10767d51333544739bbef6c4b6a86f43ed35e527",
   "manifest_version": 1,
   "prior_commit": "4738c2783b49d7b4deeef4e4992754adf133f247",
   "private_identity_accessed": false,
   "promotion_allowed": false,
-  "result": null,
+  "result": {
+    "artifact": "research_vault/records/fc9be2c7df7f416d8a86f9db154afd9b.vault",
+    "ciphertext_sha256": "a95808bee39a48e8718afb3834836a70a121dbb76f42539550e127ad3d6b8956",
+    "plaintext_committed": false,
+    "plaintext_encoding": "gzip+json"
+  },
   "scope": "offline historical coverage correction and exploratory diagnostic",
-  "status": "protocol_frozen_before_evaluation",
+  "status": "completed_exploratory_diagnostic",
   "validation": {
     "full_offline_tests_passed": 669,
     "new_synthetic_counterexamples": 23
