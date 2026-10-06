@@ -1,0 +1,38 @@
+{
+  "canary_gate_changed": false,
+  "deployment_performed": false,
+  "manifest_version": 1,
+  "measurement_started": false,
+  "poly_code_sha256": {
+    ".github/workflows/book-observation-offline.yml": "76cdb0f08c9af4688d93069ec4addf450a05a047487b3954669c5540462db403",
+    "capture_v2.py": "9356670dd5029b1090bcecbe01049ddb81d32966fcdd68af5fe269754dbc99f5",
+    "capture_v3.py": "ceca154b174c005b449e52dcf3ca5a232510b47d4fc717cc27da8c677da8b460",
+    "docs/book_observation_semantics.md": "efdc412f7e16827067c120095e1b0addcb121f22cb4f8fa703f1d37e5ec6db8c",
+    "measurement_v3.py": "d7c265ae27eabc85503b0c022e576cedd996a9a197ebbde6c45b411777b5b33d",
+    "tests/test_book_observation_semantics.py": "ff7c17098854196053dc28ad9d83341763f50ac92bb70a3b4cf7859826b76d64",
+    "tests/test_measurement_v3.py": "1922740dd28a66c1af6a7ee1155679dc5baa332f747bfd4559aaa6dfdb4dda31"
+  },
+  "poly_work_commit": "5eebdcf47bcb60c4b03d135c5d09ef0a8f3af2c0",
+  "prior_commit": "0098ba2b241303df172fb6a3a251b144dccf1d39",
+  "private_identity_accessed": false,
+  "promotion_allowed": false,
+  "result": {
+    "artifact": "research_vault/records/a268dc49e09840e4a01f2dd24c673ea0.vault",
+    "ciphertext_sha256": "4a90f4dd8a48b04c6924f1f2217979622104a62526032087373c4a590167151d",
+    "compressed_plaintext_sha256": "287ab35b1c3a6a607c92fb4e96a645c569df75ecf448363fdcbe93c4bd6339a0",
+    "plaintext_committed": false,
+    "plaintext_encoding": "gzip+json"
+  },
+  "scope": "measurement preparation only",
+  "status": "prepared_offline_pending_production_approval",
+  "validation": {
+    "poly_ci": {
+      "conclusion": "success",
+      "head_sha": "5eebdcf47bcb60c4b03d135c5d09ef0a8f3af2c0",
+      "id": 37520717760,
+      "status": "completed",
+      "url": "https://github.com/yt-feng/poly/actions/runs/37520717760"
+    },
+    "poly_full_tests": 378
+  }
+}
