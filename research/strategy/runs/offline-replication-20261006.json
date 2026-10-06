@@ -1,0 +1,20 @@
+{
+  "canary_gate_changed": false,
+  "freeze": {
+    "artifact": "research_vault/records/2bd1f38e923546e7a31a22dd081a55eb.vault",
+    "ciphertext_sha256": "696e3702326e807113358073b1bbbd5625ed6d2ce25da000e297f922e6d7c2f8",
+    "protocol_plaintext_sha256": "3ea77625318a1b639310f63f3fb5214480f2a7a62cbaf1cd59f96e35118f302e"
+  },
+  "frozen_code_sha256": "cede9b9d99540d501e247023ddc9a1a69929251633a380082192fd03a9076144",
+  "manifest_version": 1,
+  "prior_commit": "f52c1c9f2e0571f0b9e91c02aeb62d1ba0df7739",
+  "private_identity_accessed": false,
+  "promotion_allowed": false,
+  "result": null,
+  "scope": "offline exploratory diagnostic replication; no execution evidence",
+  "status": "protocol_frozen_before_replication",
+  "validation": {
+    "code_changes": false,
+    "focused_offline_tests_passed": 9
+  }
+}
