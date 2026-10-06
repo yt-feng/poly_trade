@@ -213,3 +213,44 @@ Budget arithmetic is a static one-share/top-of-book illustration. Reported size
 is treated as shares only under a stated assumption; minimum order, historical
 fees, tick size, source/receive timing and execution remain unverified. No fill,
 portfolio PnL, capital reuse, turnover or small-account growth is inferred.
+
+
+## Fixed-signal robustness checks
+
+```bash
+python analysis/quote_robustness.py \
+  --poly-root /path/to/poly \
+  --database /private/coverage.sqlite \
+  --predictions /private/walk-forward.json \
+  --prior-report /private/spread-hurdle.json \
+  --protocol /private/frozen-robustness.json \
+  --output /private/robustness.json
+```
+
+Freeze the diagnostic protocol before running. This consumes the exact previous
+predictions and quote paths; it verifies coefficients, causal decision/lookback
+indices, market identity, label timing, duplicates, crossed books and depth.
+It does not refit or reselect signals. The original entry and the first/third
+actual records strictly after decision are compared at the original fixed exit
+record. Bad records count as steps and are never skipped. An entry at or after
+the scheduled exit is unknown. Recorded intervals are sampling sensitivity,
+not source-event latency or verified availability at decision time.
+
+Every prior candidate, side and hypothetical cost remains reported. Price-only
+and positive displayed-depth views are separate. A depth failure is unknown in
+the latter, with conservative quote-domain bounds; positive depth cannot prove
+an executable size or a fill. Each scenario retains its own unknowns, original
+calendar coverage and shared candidate denominator. An additional intersection
+of all delay scenarios supports paired delay comparisons without hiding the
+observations excluded from that intersection.
+
+The report includes medians, nearest-rank quantiles, tails, and largest absolute
+and positive contribution shares. Positive-to-net ratios can exceed one when
+losses offset gains; they are distinct from gross-positive shares. Uniform
+largest-positive removal and leave-one-UTC-day/six-hour-block-out calculations
+keep models fixed. All calendar groups, including inactive/missing groups,
+remain visible; active-removal counts are separate. These describe concentration,
+not cross-validation, confidence intervals or a statistical significance test.
+All measurements are quote proxies in cents per hypothetical share, with no
+PnL, promotion, trading or account-growth claim. A failed or unproven family may
+remain a descriptive observation without proving every future variant impossible.

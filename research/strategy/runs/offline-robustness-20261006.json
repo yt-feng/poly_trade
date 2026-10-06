@@ -1,0 +1,28 @@
+{
+  "canary_gate_changed": false,
+  "code_sha256": {
+    "analysis/archive_baseline_audit.py": "e1246fa3e156f18aa14c838fb3cc9ade76a251cb88a8161aa1817d4b186bd19b",
+    "analysis/archive_coverage_ledger.py": "e38ddcbfc26f178e657d545c94c995025c57941d3f5d6549c51b6b8374c26502",
+    "analysis/historical_walk_forward.py": "7c69db4ca78f2e94442ac2bd0f18059f15feb7e4daffda0e3dd67c4bef2a2f4e",
+    "analysis/quote_factor_diagnostic.py": "cede9b9d99540d501e247023ddc9a1a69929251633a380082192fd03a9076144",
+    "analysis/quote_robustness.py": "9965e5675ec822f9e3d83fc6622144d1c0370e3757d52c9a2bc317dee5ebafae",
+    "analysis/spread_hurdle_diagnostic.py": "98c05a64fb93502f19430708fddb2932f5e64dce483efc6c00de1fff82b765f7"
+  },
+  "freeze": {
+    "artifact": "research_vault/records/64d007d97c00402daa72c76caefc08b1.vault",
+    "ciphertext_sha256": "8ba0dfcde4f4d61ed60abaf6c22ba6d65089a74179dc6c112766cdc94a3a37ba",
+    "plaintext_encoding": "json",
+    "protocol_plaintext_sha256": "e674007f0fe18e2feb7678232ecc2cd7a446f1c1659e1d0a5fc22fb0b35479a6"
+  },
+  "manifest_version": 1,
+  "prior_commit": "38430ef2f9612e6f384958856c04be05e57eb25a",
+  "private_identity_accessed": false,
+  "promotion_allowed": false,
+  "result": null,
+  "scope": "offline fixed-signal robustness diagnostic",
+  "status": "protocol_frozen_before_evaluation",
+  "validation": {
+    "full_offline_tests_passed": 696,
+    "new_synthetic_counterexamples": 14
+  }
+}
