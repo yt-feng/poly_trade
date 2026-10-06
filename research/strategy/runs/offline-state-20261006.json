@@ -15,13 +15,44 @@
     "plaintext_encoding": "json",
     "protocol_plaintext_sha256": "840a1acc054366626549510ea60bfc6290e14b9c53b0e635e1fec98a52e6dd29"
   },
+  "freeze_ci": {
+    "conclusion": "success",
+    "id": 37507833363,
+    "sha": "a66b77acc8e7be1cf5c8a72fd0526767d04b236d",
+    "status": "completed",
+    "url": "https://github.com/yt-feng/poly_trade/actions/runs/37507833363"
+  },
+  "freeze_commit": "a66b77acc8e7be1cf5c8a72fd0526767d04b236d",
   "manifest_version": 1,
   "prior_commit": "a09dd7fc12106e298ec5f90f62ce5a863dbe8cc6",
   "private_identity_accessed": false,
   "promotion_allowed": false,
-  "result": null,
+  "result": {
+    "compressed_plaintext_sha256": "e187f8e8c7e36f8e49db454e3ef6e0b50cc8753b2f06bc214062413bd0a3c6f2",
+    "parts": [
+      {
+        "artifact": "research_vault/records/64b6350e97a44d06a7004a8d9df8de45.vault",
+        "ciphertext_sha256": "bbee78ec7109642714819c3388f11397aa161787ce951dd32fbad042bf429fe2"
+      },
+      {
+        "artifact": "research_vault/records/8c2c468ea3e4418587049877d71611e7.vault",
+        "ciphertext_sha256": "3c8bcd724f8ef95bb68a669464f3ed1c0fbba5bf1a1b0c0012a51329218f0482"
+      },
+      {
+        "artifact": "research_vault/records/fbae06f8f8084638946270cf23cd3e5a.vault",
+        "ciphertext_sha256": "ed667e7c69ad982366cc98eafcff1bf30832c2914d7e71b55ea7f2ceda8a67c0"
+      },
+      {
+        "artifact": "research_vault/records/ee1b8cacffba485cb74a027abff78f7a.vault",
+        "ciphertext_sha256": "28160e8008ea1c3134236c5e6068b165340ba45f66f42d2e3b1a0e0f6289f1ab"
+      }
+    ],
+    "plaintext_committed": false,
+    "plaintext_encoding": "gzip+json",
+    "reconstruction": "concatenate decrypted part bytes in listed order, then gunzip and parse JSON"
+  },
   "scope": "offline small state hypothesis diagnostic",
-  "status": "protocol_frozen_before_evaluation",
+  "status": "completed_exploratory_state_diagnostic",
   "validation": {
     "full_offline_tests_passed": 711,
     "new_synthetic_counterexamples": 15
