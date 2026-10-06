@@ -1,2 +1,5 @@
 # Public-repo-safe archive encryption; PyCA is the maintained upstream package.
 cryptography>=43,<51
+
+# Offline quote-factor linear algebra; the full requirements already include NumPy.
+numpy>=1.26,<3

@@ -82,3 +82,39 @@ asset. Preserve any downloaded raw archive, manifest and sidecar before parsing.
 The detailed result is written outside the repository with owner-only
 permissions. Seal it to the existing, verified public recipient before
 publication; never commit plaintext findings, private identities or archive keys.
+
+## Frozen historical quote-factor diagnostic
+
+`analysis/quote_factor_diagnostic.py` runs a bounded descriptive experiment from
+an existing private protocol and a hash-pinned local CSV file list. It reuses
+the archive timestamp/identity helpers and private-output writer. It does not
+add a data collector, execution path, parameter search or settlement inference.
+
+```bash
+python analysis/quote_factor_diagnostic.py \
+  --poly-root /path/to/poly \
+  --protocol /private/frozen-protocol.json \
+  --output /private/diagnostic.json
+```
+
+Freeze the dates, timing, few candidate feature sets, baselines and ablations
+before evaluating the real data; seal that protocol before publishing it. The
+source files are hashed before and after processing. Features use only sample
+timestamps strictly before the decision. Future bid/ask changes are scoring
+targets within the same market, never fills or financial returns. Actual feed
+availability is not recoverable from legacy sample timestamps.
+
+The output retains one ledger record for every scheduled BTC5m market on the
+frozen dates, including absent windows, rejected decision/lookback quotes,
+conflicting identities and unknown future quotes. It selects the scheduled
+quote before inspecting its quality and never skips an invalid future quote to
+find a favorable later label. OI and settlement fields are not read. All models
+share one common feature/label cohort; unknown labels remain counted and get
+explicit conservative error bounds rather than imputation. Train-only scaling,
+ridge coefficients and factor cutpoints are frozen for validation. Temporal
+blocks, per-date effects, baseline comparisons and leave-one-factor-out changes
+are reported without retuning or declaring significance from a few dates.
+
+The CLI prints only a completion marker and writes detailed results outside the
+repository. Protocols and findings must be sealed with the existing recipient;
+public run metadata must contain no factor results or private configuration.
