@@ -16,13 +16,36 @@
     "plaintext_encoding": "json",
     "protocol_plaintext_sha256": "857128fe2fd2ae11963d03060259197a776f87cd4ddb5d74f0b632c2638413c3"
   },
+  "freeze_ci": {
+    "conclusion": "success",
+    "id": 37511269658,
+    "sha": "3a0192b25440c966d9482cb507816ad0240b5146",
+    "status": "completed",
+    "url": "https://github.com/yt-feng/poly_trade/actions/runs/37511269658"
+  },
+  "freeze_commit": "3a0192b25440c966d9482cb507816ad0240b5146",
   "manifest_version": 1,
   "prior_commit": "9232a88d0bbe23229fab6e64c38164cbc976a2fb",
   "private_identity_accessed": false,
   "promotion_allowed": false,
-  "result": null,
+  "result": {
+    "compressed_plaintext_sha256": "3495ac98771b514e7d28b971140c463df788d046e71be9438645da36a48f6303",
+    "parts": [
+      {
+        "artifact": "research_vault/records/9b4016559832406abe4b1a96039950d0.vault",
+        "ciphertext_sha256": "07e73a2fa19225c464e0330d6c20da8670e35434445df4c07795de968fae07c5"
+      },
+      {
+        "artifact": "research_vault/records/1508435c829c4a91a51cf053f05e9c73.vault",
+        "ciphertext_sha256": "b48c8844b89967d0a38f32f5f35c80bc579af90af57c038a1f46a59b596ecfc1"
+      }
+    ],
+    "plaintext_committed": false,
+    "plaintext_encoding": "gzip+json",
+    "reconstruction": "concatenate decrypted part bytes in listed order, then gunzip and parse JSON"
+  },
   "scope": "offline frozen measurement audit",
-  "status": "protocol_frozen_before_measurement",
+  "status": "completed_offline_measurement_audit",
   "validation": {
     "full_offline_tests_passed": 728,
     "new_synthetic_counterexamples": 17

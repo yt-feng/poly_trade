@@ -327,7 +327,8 @@ is a recovery observation, never an imputed exit.
 Panels retain planned, feature-valid, prediction-available, selected and
 observed-path denominators, including unavailable price bins, by UTC date and
 fixed price bins. Raw CSV cells, line numbers, source hashes and file spans
-support each matched record. File endings and continued empty rows describe
+support each matched record. Omitted counter keys represent zero. File endings
+and continued empty rows describe
 what was recorded; CSV alone cannot distinguish venue closure, an empty book,
 API failure, parsing loss, or collector shutdown. The old collector requests
 the two sides sequentially and does not preserve their separate source/receive
