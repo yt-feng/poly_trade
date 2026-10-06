@@ -15,13 +15,35 @@
     "plaintext_encoding": "json",
     "protocol_plaintext_sha256": "81759cb61dc37a56fb8fa2043026c80893448e05d0692314a1c016d2750c5bc4"
   },
+  "freeze_ci": {
+    "conclusion": "success",
+    "head_sha": "1c98033162f28aefba0c26d7db8d82160390823c",
+    "id": 37517455086,
+    "status": "completed"
+  },
+  "freeze_commit": "1c98033162f28aefba0c26d7db8d82160390823c",
   "manifest_version": 1,
   "prior_commit": "b5fc7131007827c645343491490a51634c28a6fb",
   "private_identity_accessed": false,
   "promotion_allowed": false,
-  "result": null,
+  "result": {
+    "compressed_plaintext_sha256": "75036646970e78a99a78bccc93090771a9c0b110c5ff9927e17e7c9df9f01bfb",
+    "parts": [
+      {
+        "artifact": "research_vault/records/ac05bcfbb2d4499b87d43eef8b6a537e.vault",
+        "ciphertext_sha256": "e8565118c7de97db759032d9e05212250d2055615c4b729ca2f14e39f0546968"
+      },
+      {
+        "artifact": "research_vault/records/1ae29f539dd940dba2ef85fdc3a8e575.vault",
+        "ciphertext_sha256": "5b48908e26812bdb1620b328c2528b416eb5c6dfcd705fdb8d1961f342cd737d"
+      }
+    ],
+    "plaintext_committed": false,
+    "plaintext_encoding": "gzip+json",
+    "reconstruction": "concatenate decrypted part bytes in listed order, then gunzip and parse JSON"
+  },
   "scope": "offline recorded-condition bounds",
-  "status": "protocol_frozen_before_evaluation",
+  "status": "completed_offline_bound_audit",
   "validation": {
     "full_local_tests": 746,
     "new_synthetic_tests": 10
