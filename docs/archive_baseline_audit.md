@@ -297,3 +297,45 @@ all fixed screening failures. Screening is descriptive and cannot promote a
 candidate or change canary gates. Actual fees, minimum size, source/receive
 availability and fills remain unverified. All empirical outputs and protocols
 must be sealed under the existing research-vault policy.
+
+## Frozen measurement audit
+
+```bash
+python analysis/quote_measurement_audit.py \
+  --poly-root /path/to/poly \
+  --database /private/coverage.sqlite \
+  --frozen-report /private/state-result.json \
+  --protocol /private/frozen-measurement-plan.json \
+  --output /private/measurement-audit.json
+```
+
+This diagnostic consumes the existing frozen result. It neither fits models nor
+recomputes economic scores. Decision offset is measured from the market slug's
+window start; the forecast horizon is a separate parameter. Exit matching uses
+the first recorded row at or after decision plus horizon, within the frozen
+tolerance. Delayed entry never moves that exit. Invalid first records are kept.
+
+The independent integer-UTC matcher checks feature eligibility, first-row
+selection, labels, frozen-fit predictions and signal gates against the prior
+result. It separates no future record, a late first record, missing own bid,
+invalid own ask/crossed side, invalid opposite book, and the complete-book label.
+Side-only availability measures the effect of the common-label requirement;
+it is not a replacement label, revised signal, or evidence of an executable exit.
+Zero/nonpositive depth remains separate from absent price. A later valid quote
+is a recovery observation, never an imputed exit.
+
+Panels retain planned, feature-valid, prediction-available, selected and
+observed-path denominators, including unavailable price bins, by UTC date and
+fixed price bins. Raw CSV cells, line numbers, source hashes and file spans
+support each matched record. File endings and continued empty rows describe
+what was recorded; CSV alone cannot distinguish venue closure, an empty book,
+API failure, parsing loss, or collector shutdown. The old collector requests
+the two sides sequentially and does not preserve their separate source/receive
+timestamps or HTTP/venue status in these CSVs. Current source inspection does
+not authenticate the exact source revision that produced each historical row.
+
+Publish only generic tooling and synthetic tests. Seal protocols, complete
+measurement ledgers and factual reviews under the existing vault policy. Any
+recomputation required by a demonstrated implementation defect is a correction
+on exposed data, never independent OOS evidence. Observed-subset positives are
+not established alpha; unresolved missingness also does not disprove all signal.
