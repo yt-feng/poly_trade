@@ -14,13 +14,36 @@
     "plaintext_encoding": "json",
     "protocol_plaintext_sha256": "e674007f0fe18e2feb7678232ecc2cd7a446f1c1659e1d0a5fc22fb0b35479a6"
   },
+  "freeze_ci": {
+    "conclusion": "success",
+    "id": 37504695054,
+    "sha": "f5e18869564f331b40164d223c4472461a74571d",
+    "status": "completed",
+    "url": "https://github.com/yt-feng/poly_trade/actions/runs/37504695054"
+  },
+  "freeze_commit": "f5e18869564f331b40164d223c4472461a74571d",
   "manifest_version": 1,
   "prior_commit": "38430ef2f9612e6f384958856c04be05e57eb25a",
   "private_identity_accessed": false,
   "promotion_allowed": false,
-  "result": null,
+  "result": {
+    "compressed_plaintext_sha256": "2b3925b5af49929b8a19676bfbfb636f3bab10283ee6cc05ad52631c62a36b60",
+    "parts": [
+      {
+        "artifact": "research_vault/records/d7dcdc5b4afb41bd858115552ef2fa6c.vault",
+        "ciphertext_sha256": "c4e30998cc2c62c5c56c8592413cd74c4d16f1f3efc50be2e3371b3b89abea2a"
+      },
+      {
+        "artifact": "research_vault/records/4c4bebeaf5fe49f2a4be9a06cd296df9.vault",
+        "ciphertext_sha256": "998541c03fcee40c1765f195b775fdd14a5be8787726110d0019768a5811c769"
+      }
+    ],
+    "plaintext_committed": false,
+    "plaintext_encoding": "gzip+json",
+    "reconstruction": "concatenate decrypted part bytes in listed order, then gunzip and parse JSON"
+  },
   "scope": "offline fixed-signal robustness diagnostic",
-  "status": "protocol_frozen_before_evaluation",
+  "status": "completed_exploratory_robustness",
   "validation": {
     "full_offline_tests_passed": 696,
     "new_synthetic_counterexamples": 14
