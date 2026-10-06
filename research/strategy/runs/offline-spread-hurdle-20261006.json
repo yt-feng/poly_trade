@@ -13,13 +13,26 @@
     "plaintext_encoding": "json",
     "protocol_plaintext_sha256": "879f0b13777dd11499c6ec18c53ec92ac2e25d99229fcd904cac3a3e701e26b5"
   },
+  "freeze_ci": {
+    "conclusion": "success",
+    "id": 37502051329,
+    "sha": "693a829ebc0996eb3f96070034a88edefd809af3",
+    "status": "completed",
+    "url": "https://github.com/yt-feng/poly_trade/actions/runs/37502051329"
+  },
+  "freeze_commit": "693a829ebc0996eb3f96070034a88edefd809af3",
   "manifest_version": 1,
   "prior_commit": "e4fbe68a109d6a262710035b33c75af47fe3e8b1",
   "private_identity_accessed": false,
   "promotion_allowed": false,
-  "result": null,
+  "result": {
+    "artifact": "research_vault/records/f1a01bcc71264c459ad2a0b6499bf30c.vault",
+    "ciphertext_sha256": "2d4230dff8e9a6e8702b6aaec66c31333c9ca855ef4ed0c876a314c1e72627d4",
+    "plaintext_committed": false,
+    "plaintext_encoding": "gzip+json"
+  },
   "scope": "offline frozen-prediction quote hurdle diagnostic",
-  "status": "protocol_frozen_before_evaluation",
+  "status": "completed_exploratory_quote_hurdle",
   "validation": {
     "full_offline_tests_passed": 682,
     "new_synthetic_counterexamples": 13
