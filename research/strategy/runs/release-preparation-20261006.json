@@ -1,0 +1,24 @@
+{
+  "canary_gate_changed": false,
+  "deployment_approval_received": true,
+  "deployment_performed": false,
+  "manifest_version": 1,
+  "measurement_started": false,
+  "poly_base_commit": "7ee5c86e1b4bc5a4c9f9c434a793dc69afb35df2",
+  "poly_release_commit": "4ec21c1ec0cc6de291ab3c1ecc24bfb137508059",
+  "prior_commit": "0d3360008757d665ce984836c61a8c2d51c8f7d3",
+  "private_identity_accessed": false,
+  "promotion_allowed": false,
+  "result": {
+    "artifact": "research_vault/records/a38de3a319c245f49528c87517061961.vault",
+    "ciphertext_sha256": "689652e1128b04da9a7a3718acc3361714b66b2228efdd5daf8c0b53ead780ec",
+    "compressed_plaintext_sha256": "17c7f63627097ee995e247c31814b9da93164eefe2be690627f974aaa17aebd3",
+    "plaintext_committed": false,
+    "plaintext_encoding": "gzip+json"
+  },
+  "status": "approved_release_prepared_pending_ci_scope",
+  "validation": {
+    "local_release_tests": 368,
+    "remote_release_ci_triggered": false
+  }
+}
