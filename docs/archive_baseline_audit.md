@@ -340,3 +340,26 @@ measurement ledgers and factual reviews under the existing vault policy. Any
 recomputation required by a demonstrated implementation defect is a correction
 on exposed data, never independent OOS evidence. Observed-subset positives are
 not established alpha; unresolved missingness also does not disprove all signal.
+
+## Missing-bid generation semantics
+
+```bash
+python analysis/quote_missingness_semantics.py \
+  --poly-root /path/to/poly --database /private/coverage.sqlite \
+  --protocol /private/frozen-semantics-plan.json \
+  --output /private/bid-semantics.json
+```
+
+This descriptive audit preserves empty, zero, malformed and numeric fields as
+different states. It reports source hashes, headers, bid/size/depth/level-count
+signatures, UTC date and recorded-window-offset counts, and adjacent runs of
+unavailable bids. Later numeric recovery is not an interpolated exit. A tail
+of a recorded window is not proof of market closure. Cached market debug files
+are audited for identity overlap and their limited role as metadata evidence.
+
+Matching the legacy no-parsed-level signature cannot distinguish an empty
+response side from missing/null fields or all-unparseable prices. The audit
+does not infer an HTTP success, order failure or venue event from CSV blanks.
+Detailed lineage, methods, counts and the next experiment remain sealed. A
+recorded quote satisfying fixed limit inequalities is at most a necessary
+price condition; queue priority, placement, cancellation and fills are unknown.

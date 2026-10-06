@@ -1,0 +1,37 @@
+{
+  "canary_gate_changed": false,
+  "code_sha256": {
+    "analysis/archive_baseline_audit.py": "e1246fa3e156f18aa14c838fb3cc9ade76a251cb88a8161aa1817d4b186bd19b",
+    "analysis/archive_coverage_ledger.py": "e38ddcbfc26f178e657d545c94c995025c57941d3f5d6549c51b6b8374c26502",
+    "analysis/historical_walk_forward.py": "7c69db4ca78f2e94442ac2bd0f18059f15feb7e4daffda0e3dd67c4bef2a2f4e",
+    "analysis/quote_missingness_semantics.py": "b2dcda2dd0bbf451777135379315b358cf12e7db9d925971e83410364be416d6"
+  },
+  "freeze": {
+    "artifact": "research_vault/records/5a66521b65394c8a97e6fa0f8b38cd70.vault",
+    "ciphertext_sha256": "077933224771f68f4cc3ef3eecb5752d15e13741f8d4a425306d5e1f07e948c8",
+    "plaintext_encoding": "json",
+    "protocol_plaintext_sha256": "ce30814d8d1a9ec61dba5e24595308d9eb84de5320b8c75721a63d6e56e3c4ca"
+  },
+  "manifest_version": 1,
+  "poly_code_sha256": {
+    ".github/workflows/book-observation-offline.yml": "0da86852e7db0c4bb7268f720f4b763f33ac8435137c0abc4298400260d417ed",
+    ".github/workflows/polymarket-monthly-rolling-24h.yml": "0af7c00d5e6fc71ecbb55fc9df6158ae1c7a35764cfbeb365d1b24ae275d9610",
+    "capture_v2.py": "9356670dd5029b1090bcecbe01049ddb81d32966fcdd68af5fe269754dbc99f5",
+    "capture_v3.py": "47e87e3003f0d0012ef759c3c029f42bf4bad5cb6762593889f94077f156c643",
+    "microstructure_v3.py": "bc8f28682332f8b51499b3cacdf8fec9c044ecd960b447854f6d94175a950b8f",
+    "polymarket_quotes.py": "1ea17f892ef82c83a967ade3d9fa5635fa02ed85c57c40565494a31ae92a822c"
+  },
+  "poly_commit": "ff7cf7ef080b2c08c203b77cad5a237e96f73fb9",
+  "prior_commit": "7e26bb6c4beae6eda806f28d4451ddf82a1a1300",
+  "private_identity_accessed": false,
+  "promotion_allowed": false,
+  "result": null,
+  "scope": "offline observation semantics audit",
+  "status": "protocol_frozen_before_measurement",
+  "validation": {
+    "poly_full_tests": 363,
+    "poly_new_counterexamples": 17,
+    "trade_full_tests": 736,
+    "trade_new_counterexamples": 8
+  }
+}
