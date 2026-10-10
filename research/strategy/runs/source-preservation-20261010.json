@@ -157,5 +157,28 @@
     "restore_wrong_order_and_corrupt_ciphertext": "rejected"
   },
   "recovery_guide": "docs/source_bundle_restore.md",
-  "limitations": "The sealed provenance identifies independently recovered sources and missing original run outputs. This is not a byte-identical copy of an old workflow artifact."
+  "limitations": "The sealed provenance identifies independently recovered sources and missing original run outputs. This is not a byte-identical copy of an old workflow artifact.",
+  "decryption_requirements": {
+    "pin_alone_sufficient": false,
+    "private_files": [
+      "identity.keybundle",
+      "recovery.key"
+    ],
+    "user_possession": "not_verified_from_public_repository",
+    "actual_user_identity_restore": "not_performed",
+    "protocol_changed": false,
+    "new_persistent_identity_created": false
+  },
+  "supplements": [
+    {
+      "kind": "sealed_source_closure_audit",
+      "format": "json",
+      "path": "research_vault/records/378236bf84f8482dae1a54cef0bdbbbe.vault",
+      "plaintext_sha256": "323befb78c6ec5075d2976195be521dedf12d69bb0d18dd8c8f383363a6ebf9f",
+      "plaintext_bytes": 40256,
+      "ciphertext_sha256": "62b037124299c1adf3dd5a27390c7aa596cb11e9081d1eb2c01de878c10d0dd1",
+      "ciphertext_bytes": 53977,
+      "original_run_complete": false
+    }
+  ]
 }

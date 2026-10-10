@@ -4,11 +4,20 @@ This is generic security tooling, not a strategy report. No new empirical findin
 
 ## Status and boundary
 
-A personal recipient has NOT been initialized. Until it is, do not publish new private journal content. A four-digit PIN alone has only 10,000 possible values and is not suitable to protect public ciphertext. This design uses a random X25519 private identity; the two local recovery files and an interactively entered PIN are required to unlock it. The PIN is never hardcoded or committed. Public-key encryption lets a later authorized process seal a new entry with only the public recipient, without accessing any private identity.
+A public recipient is present in `research_vault/recipient.json`. Its presence proves that a public encryption key was recorded; it does not prove that the user received, retained or successfully tested the matching private recovery files. Public repository evidence does not verify that private-side handoff. Do not infer recoverability from a valid envelope or a successful synthetic test.
+
+This format is not passphrase-only encryption. Decryption requires the matching `identity.keybundle`, `recovery.key` and the PIN that protects that identity. The originally selected passphrase cannot decrypt these envelopes by itself, and the public repository cannot establish which PIN protects the private bundle. No compatibility migration, key rotation or persistent identity creation is performed by the source-preservation work.
+
+A four-digit PIN alone has only 10,000 possible values and is not suitable to protect public ciphertext. This design uses a random X25519 private identity; the two local recovery files and an interactively entered PIN are required to unlock it. The PIN is never hardcoded or committed. Public-key encryption lets a later authorized process seal a new entry with only the public recipient, without accessing any private identity.
 
 Existing plaintext Git history, reports, PR descriptions, workflow output, release assets and downloaded copies are NOT retroactively hidden by adding encryption. No destructive history rewrite or repository-visibility change is performed here. Treat previously published material as public. Encryption does not erase it.
 
 ## One local initialization (run from the repository root)
+
+These commands are for a new independent installation with no existing recipient.
+Do not run them to recover an existing archive: a new identity cannot open old
+ciphertext. For this checkout, use the matching existing recovery files if they
+are available; their delivery and possession have not been verified here.
 
 ```bash
 python3 -m pip install -r requirements-vault.txt

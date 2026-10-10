@@ -18,6 +18,16 @@ The existing recipient was compared with its pinned historical public key and
 prior envelopes. No personal private identity was read: these checks are **not**
 a successful decryption test with the user's recovery files.
 
+## Passphrase compatibility
+
+The existing public-key format requires **both matching private recovery files
+and the identity's PIN**. The originally selected passphrase alone cannot decrypt
+this package. A committed public recipient does not establish that the user has
+received or retained `identity.keybundle` and `recovery.key`, or which PIN protects
+them. Their possession and a real user-identity restore remain unverified. The
+temporary synthetic identity used for testing has no ability to open production
+ciphertext. This work does not change the protocol or generate replacement keys.
+
 ## Recover locally
 
 Run from the repository root with Python 3.11 or later. Use the existing identity
@@ -102,9 +112,16 @@ No source observation becomes a confirmed fill or unseen evaluation by being
 preserved. The original run remains incomplete until its missing outputs are
 independently recovered.
 
+An additive encrypted audit, referenced by the index's `supplements` list, records
+the source search, available-input inventory and precise reproduction limits.
+It is a standalone vault envelope containing UTF-8 JSON, not another tar part.
+Open a supplement with the existing `tools/research_vault.py open` command and
+the same identity, writing outside the checkout. Do not append it to the ordered
+tar parts. This audit does not replace missing observations with inferred winners.
+
 ## Repository and workflow scope
 
-Only encrypted data, a neutral manifest and this recovery guide are added. No
+Only encrypted data, a neutral manifest and recovery documentation are added or updated. No
 collector, trading code, dependency or workflow is changed. Under the inspected
 main workflow configuration, these paths trigger only `research-vault-contract`:
 its existing offline synthetic tests and existing tooling-only artifact (14-day
