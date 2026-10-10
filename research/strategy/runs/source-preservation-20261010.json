@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "kind": "encrypted_source_reconstruction",
+  "preservation_status": "independent_originals_preserved_original_run_incomplete",
+  "original_artifact_byte_identity": false,
+  "archive_format": "tar",
+  "recipient_id": "fbd48fbb052f0f4d47187fe6f5b4cab93215517fcfb37ea456441ddf13e9141d",
+  "plaintext_bytes": 282859520,
+  "plaintext_sha256": "2cbe424e2501c1c8109aca8f443050e3877c58259cf1d1ed05580ec23ff6591d",
+  "parts": [
+    {
+      "sequence": 1,
+      "path": "research_vault/records/eb04235c00324860b2a6c446b18bb672.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "9078775e5123500028d78c55b9d9045676a70967876a9017b4f405ba017e8e58",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "d512264a0f3c34614f0c9133f33aa59d312a86584b07029597ffe6cefe8b1e1a"
+    },
+    {
+      "sequence": 2,
+      "path": "research_vault/records/d0af030f307041fcb048a4d7931d8d3a.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "143cc652930d164909917513cf8ac50cc1131f0497edd39f960ddc8e129aea6f",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "a4b56e7d69925b03fe4f27c074343501dc085321aab5bb3b9f2686cfc6394dc1"
+    },
+    {
+      "sequence": 3,
+      "path": "research_vault/records/d28d471125cb4485b67af8360e70c7bd.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "d33e56ed36bccbc9447287d7ad35c83145e0a1fbf85501dac00ec287b77f8b57",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "7ee8b168547ca33bcf6d4c29166a7e72e9d672b5757f24765e9b7ead8e825daa"
+    },
+    {
+      "sequence": 4,
+      "path": "research_vault/records/34270463c1ed4f7ebe7b760df4dd572b.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "d83f18f1b3cec1e5932276ffe472f7f5c0b70568b5701b43070bc064a31102c1",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "b577bc284d269b988bbe1a58920337ead0d38293f9aba5d0dc163ae1d7580019"
+    },
+    {
+      "sequence": 5,
+      "path": "research_vault/records/e83db55b309c407e98d1d79eee120a10.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "997b99686e1fff25c99ce05df8c1d1925e3c9f7ad0019a97a45f6e7f3d519a49",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "143b251550c22ec337e32ba7b10753d5ce3c5b287e768dfed4cfd3cc0243ce5e"
+    },
+    {
+      "sequence": 6,
+      "path": "research_vault/records/f7b84c75d7e04d489423910709ac7089.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "7d84eeab9cf7911e0456114f0204e04bd5a3f862cdbbf6a834d60796c0ff1ac6",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "464fb5d758016d306713d1da4e961d48ebfaca7ecbd75539bccc53b3ea4e3042"
+    },
+    {
+      "sequence": 7,
+      "path": "research_vault/records/2ae9c21c93754124b8e09029ee1d07ac.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "5a4f3daad596182678db6a9a432dc44820a6d98a97abd87a60ce51915ea4c4a5",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "9547cca96799788736fedb3dedba8327afb30d0095b8b00f0704dff9d16c8151"
+    },
+    {
+      "sequence": 8,
+      "path": "research_vault/records/8c3cdf3b87794528a00103369b7883d8.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "8e4cb14f550081370f16a45f9c7081eb50f0c9bc110450c8773e334e3f73ef95",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "148a7350ebad3b7377df6a064a4369ffb1e5f0ea40fe784d3c16fdc0bded2701"
+    },
+    {
+      "sequence": 9,
+      "path": "research_vault/records/ac14310fa34b4d879d4f6ba67e00602f.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "0217f8fc312245bfbb629d9973afdf7088d56983bb0f9b4afa469ba06c7a748f",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "3c289a73f4144ef12cb8283e96d23a06178ba0973ed272bb0fa7101baa8e671a"
+    },
+    {
+      "sequence": 10,
+      "path": "research_vault/records/3755aa8e52a04dbbb81145956fa29b19.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "1e3bf6c7200f187eac320792d81c406c2eedd3649b04b36f01fb25d00d2e6812",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "9b27d621a74ae02791387c927be9ac2f671c1ceda0f0f67038578215f2a98f9a"
+    },
+    {
+      "sequence": 11,
+      "path": "research_vault/records/ac7879dbddd8459480f85268f9224d6c.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "c2eba42153ff6c12d7e4a9985b910fa1e5035c9ccd144e9354330678ad0829b3",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "f3f07c1b1d4b52aab32dca9446a0edb2c275019ae87c1ec9fc0666e4e4e0bccb"
+    },
+    {
+      "sequence": 12,
+      "path": "research_vault/records/c85166b7e3bc4f37bbeb32cc593fed82.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "af1def091c324f6d5b7526d8ab57f18d0e69b32035191f8a734b3bbad5310250",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "b6a9b61f50117abb939ddcd8073187e5d5a04894d009e88e47c51e3104a8e242"
+    },
+    {
+      "sequence": 13,
+      "path": "research_vault/records/75cc3ddb35874aceaf10985c8ac3dd92.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "d1358e974e7e3a24e00ccc66efb07cc11912d0587973cc5146614a49b5305e18",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "9774047c2914a926fb65881f4f630027e28be0bd9ff38a6bc1952c4b0aaff54e"
+    },
+    {
+      "sequence": 14,
+      "path": "research_vault/records/48268c53664e4624ab59278c9b39343f.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "3ce23379d1f60ee5d28017cf517be55b227d09090a7f814c7f5b789e5a49f6e2",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "86b846d8e5f511aa569f2064af53404b38a8336017bdf7b8d54b83b969124cb3"
+    },
+    {
+      "sequence": 15,
+      "path": "research_vault/records/374f109177ed45cb81209e3653d6c86b.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "1bcc937f5ede8e7c598be535c8856d849ba3615546236d804163c13d0e92f0ea",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "bdd1b1d403e4ce6cb101cdccc373cd0dc142499081608fbdfbf000740a004227"
+    },
+    {
+      "sequence": 16,
+      "path": "research_vault/records/284ca2e2b38b4f7690dc8bb2eeba59cd.vault",
+      "plaintext_bytes": 16777216,
+      "plaintext_sha256": "43049e193c0983cfc9e91e6a837fa9e7061ecae47e7b6059c31fa07d89c6eac0",
+      "ciphertext_bytes": 22369925,
+      "ciphertext_sha256": "1ddb5a15bf8818e38e22e34aa3e54fa2e1428991760b904f0a9313fd77e5c973"
+    },
+    {
+      "sequence": 17,
+      "path": "research_vault/records/b5d5171226ac4d8097a05ab085010332.vault",
+      "plaintext_bytes": 14424064,
+      "plaintext_sha256": "ebd518df57bf76735215676faab4985ed70f4ed6d23798b8910955ddd4e26641",
+      "ciphertext_bytes": 19232389,
+      "ciphertext_sha256": "835cf45934dd6ccbb19e792584eb3e465fb6102c7c6a9a63d2ee3dc5624e479f"
+    }
+  ],
+  "verification": {
+    "source_digests_and_sidecars": "passed",
+    "source_gzip_and_jsonl": "passed",
+    "tar_member_hashes": "passed",
+    "split_reassembly_hash": "passed",
+    "full_bundle_synthetic_identity_roundtrip": "passed",
+    "production_envelope_syntax_and_hashes": "passed",
+    "production_recipient_decryption": "not_performed_no_private_identity_access",
+    "documented_restore_recipe_full_bundle_synthetic": "passed",
+    "restore_wrong_order_and_corrupt_ciphertext": "rejected"
+  },
+  "recovery_guide": "docs/source_bundle_restore.md",
+  "limitations": "The sealed provenance identifies independently recovered sources and missing original run outputs. This is not a byte-identical copy of an old workflow artifact."
+}
