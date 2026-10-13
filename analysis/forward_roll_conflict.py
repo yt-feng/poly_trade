@@ -16,6 +16,7 @@ from pathlib import Path
 
 from canary_core import CausalSignals
 from canary_readiness import load, replay
+from canary_continuity import GapMask
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTRY = ROOT / "config" / "canary_forward_v1.json"
@@ -206,11 +207,12 @@ def write_csv(path: Path, rows: list[dict]) -> None:
             writer.writerow({k: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v for k, v in row.items()})
 
 
-def run(input_root: Path, output_root: Path, registry_path: Path = DEFAULT_REGISTRY) -> dict:
+def run(input_root: Path, output_root: Path, registry_path: Path = DEFAULT_REGISTRY, quality_report: Path | None = None) -> dict:
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     if registry["candidate"]["hypothesis"] != "roll_conflict" or registry["candidate"]["execution_model"] != "taker" or int(registry["candidate"]["hold_seconds"]) != 30:
         raise ValueError("forward v1 candidate identity changed; create a new registry version instead")
-    rows, source_coverage = load(input_root)
+    gaps = GapMask.from_report(quality_report)
+    rows, source_coverage = load(input_root, gaps)
     boundary = int(registry["registration"]["forward_min_window_start_ms"])
     forward_rows = [r for r in rows if slug_start_ms(r["slug"]) >= boundary]
     coverage = {
@@ -227,7 +229,8 @@ def run(input_root: Path, output_root: Path, registry_path: Path = DEFAULT_REGIS
         "pre_boundary_returns_excluded": True,
         "source_conflicting_duplicates": source_coverage["conflicting_duplicates"],
     }
-    engine = CausalSignals()
+    coverage.update(gaps.metadata)
+    engine = CausalSignals(gaps)
     features = [engine.update(r) for r in rows]
     hold = int(registry["candidate"]["hold_seconds"])
     delays = [int(registry["candidate"]["primary_latency_seconds"]), int(registry["candidate"]["stress_latency_seconds"])]
@@ -235,7 +238,7 @@ def run(input_root: Path, output_root: Path, registry_path: Path = DEFAULT_REGIS
     all_attempts = []
     all_blocks = []
     for delay in delays:
-        raw = replay(rows, features, "roll_conflict", hold, delay, "taker")
+        raw = replay(rows, features, "roll_conflict", hold, delay, "taker", gaps)
         forward = [a for a in raw if slug_start_ms(a["slug"]) >= boundary]
         summary, blocks = summarize_latency(forward, registry, delay)
         by_delay[str(delay)] = summary
@@ -284,8 +287,9 @@ def main() -> None:
     parser.add_argument("--input", default="forward_inputs/captured")
     parser.add_argument("--output", default="forward_results")
     parser.add_argument("--registry", default=str(DEFAULT_REGISTRY))
+    parser.add_argument("--quality-report", type=Path, help="Local quality_v2 JSON with known BTC missing_intervals")
     args = parser.parse_args()
-    result = run(Path(args.input), Path(args.output), Path(args.registry))
+    result = run(Path(args.input), Path(args.output), Path(args.registry), args.quality_report)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

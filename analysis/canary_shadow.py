@@ -2,9 +2,11 @@
 import argparse,json,sys
 from pathlib import Path
 from canary_core import CausalSignals
+from canary_continuity import GapMask
 
-def stream(source,destination):
-    engine=CausalSignals();attempted=set();count=0
+def stream(source,destination,gaps=None):
+    gaps=gaps if gaps is not None else GapMask()
+    engine=CausalSignals(gaps);attempted=set();count=0
     for line in source:
         if not line.strip():continue
         row=json.loads(line)
@@ -16,14 +18,17 @@ def stream(source,destination):
               'side':side,'shares':5,'decision_ask':ask,'price_ceiling':min(.99,ask+f['tick_size']),
               'virtual_exposure_ceiling_usd':5,'expiry_ms':row['sample_ms']+5000,
               'selection_status':'post_exploration_shortlist_requires_forward_validation'}
-        f.update(proposal=proposal,live_enabled=False,private_execution_reconciled=False)
+        # Report provenance is output diagnostics only, after signal/proposal generation.
+        f.update(proposal=proposal,live_enabled=False,private_execution_reconciled=False,
+                 quality_report=dict(gaps.metadata))
         destination.write(json.dumps(f,ensure_ascii=False,allow_nan=False)+'\n');destination.flush();count+=1
     return count
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--input',required=True);p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();a.output.parent.mkdir(parents=True,exist_ok=True)
+    p.add_argument('--quality-report',type=Path,help='Local quality_v2 JSON with known BTC missing_intervals')
+    a=p.parse_args();gaps=GapMask.from_report(a.quality_report);a.output.parent.mkdir(parents=True,exist_ok=True)
     with a.output.open('w')as out:
-        if a.input=='-':stream(sys.stdin,out)
+        if a.input=='-':stream(sys.stdin,out,gaps)
         else:
-            with open(a.input)as src:stream(src,out)
+            with open(a.input)as src:stream(src,out,gaps)

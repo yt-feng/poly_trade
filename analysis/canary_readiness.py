@@ -11,6 +11,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from canary_core import CausalSignals,HYPOTHESES,ShadowRisk,number,observed,fee_per_share,official_winner,live_readiness
+from canary_continuity import GapMask,continuous_path
 
 SHARES=5
 
@@ -21,12 +22,14 @@ def checked_rows(path):
     with gzip.open(path,'rt',encoding='utf-8') as f:
         for line in f:yield json.loads(line)
 
-def load(root):
+def load(root,gaps=None):
+    gaps=gaps if gaps is not None else GapMask()
     seen={}; files=[];total=0;duplicates=0;conflicts=0
     for p in sorted(root.rglob('snapshots-*.jsonl.gz')):
         count=0
         for row in checked_rows(p):
             if row.get('asset')!='btc':continue
+            gaps.check_row(row)
             count+=1;total+=1;key=(row['slug'],row['sample_ms'])
             if key in seen:
                 duplicates+=1
@@ -41,6 +44,7 @@ def load(root):
          'v3_start_ms':rows[0]['sample_ms'] if rows else None,'v3_end_ms':rows[-1]['sample_ms'] if rows else None,
          'duplicate_rows':duplicates,'conflicting_duplicates':conflicts,'files':files,
          'sample_role':'New production v3 only; previous development clips and v2 excluded from new strategy returns.'}
+    cov.update(gaps.metadata)
     return rows,cov
 
 def quality_quote(row,side):
@@ -63,7 +67,8 @@ def historical_fee(row):
     rate=number(f.get('rate'))
     return rate if f.get('known') and number(f.get('exponent'))==1 and rate is not None and 0<=rate<=1 else None
 
-def replay(rows,features,hypothesis,hold,delay,mode):
+def replay(rows,features,hypothesis,hold,delay,mode,gaps=None):
+    gaps=gaps if gaps is not None else GapMask()
     times=[r['sample_ms'] for r in rows]; used=set();out=[]
     for i,f in enumerate(features):
         side_n=f['directions'][hypothesis]
@@ -74,6 +79,7 @@ def replay(rows,features,hypothesis,hold,delay,mode):
           'status':'no_entry_quote','pnl_lower_bound_usd':0.,'fill_is_proxy':True,'decision_signal_cutoff_ms':f['signal_cutoff_ms']}
         target=times[i]+delay*1000;e=quote_after(rows,times,target,side,f['slug'])
         if e is None:out.append(item);continue
+        if not continuous_path(rows,i,e,gaps):item['status']='entry_path_gap';out.append(item);continue
         if not quality_quote(rows[e],side):item['status']='entry_invalid';out.append(item);continue
         entry_rate=historical_fee(rows[e])
         if entry_rate is None:item['status']='entry_fee_unknown';out.append(item);continue
@@ -92,7 +98,7 @@ def replay(rows,features,hypothesis,hold,delay,mode):
             for k in range(e,len(rows)):
                 now=times[k]
                 if now>expiry or rows[k]['slug']!=f['slug']:break
-                if k>e and times[k]-times[k-1]>2500:item['status']='entry_path_gap';break
+                if not continuous_path(rows,max(e,k-1),k,gaps):item['status']='entry_path_gap';break
                 if cancel_effective is not None and now>=cancel_effective:
                     item['status']='cancelled';break
                 adverse=features[k].get('spot_return_5s_bps')
@@ -115,7 +121,7 @@ def replay(rows,features,hypothesis,hold,delay,mode):
                     status='exit_unvalued',pnl_lower_bound_usd=-SHARES*(entry_price+fee_in))
         x=quote_after(rows,times,times[e]+(hold+delay)*1000,side,f['slug'])
         if x is None:out.append(item);continue
-        if any(times[k]-times[k-1]>2500 for k in range(e+1,x+1)):
+        if not continuous_path(rows,e,x,gaps):
             item['status']='exit_path_gap';out.append(item);continue
         b=rows[x][side];exit_rate=historical_fee(rows[x])
         if not quality_quote(rows[x],side) or (number(b.get('bid_size'))or 0)<SHARES or exit_rate is None:
@@ -152,8 +158,9 @@ def summarize(attempts):
           statuses=dict(Counter(a['status']for a in g))))
     return sorted(result,key=lambda x:(x['hypothesis'],x['mode'],x['hold_seconds'],x['latency_seconds']))
 
-def mechanism(rows,features):
+def mechanism(rows,features,gaps=None):
     """Nonoverlapping ten-second probes; summarize by independent market, not ticks."""
+    gaps=gaps if gaps is not None else GapMask()
     out=[];times=[r['sample_ms']for r in rows];next_allowed=0
     for i,f in enumerate(features):
         if times[i]<next_allowed or f['roll_pressure_usd_s'] is None:continue
@@ -161,7 +168,7 @@ def mechanism(rows,features):
         if not observed(now,times[i],5000,True):continue
         x=bisect.bisect_left(times,times[i]+5000)
         if x>=len(rows)or times[x]-times[i]>6500 or rows[x]['slug']!=rows[i]['slug']:continue
-        if any(times[k]-times[k-1]>2500 for k in range(i+1,x+1)):continue
+        if not continuous_path(rows,i,x,gaps):continue
         later=(rows[x].get('microstructure')or{}).get('twap60')or{}
         if not observed(later,times[x],5000,True):continue
         n=number(now.get('price'));l=number(later.get('price'))
@@ -180,15 +187,16 @@ def write_csv(path,rows):
         w=csv.DictWriter(f,fields);w.writeheader()
         for r in rows:w.writerow({k:json.dumps(v,ensure_ascii=False)if isinstance(v,(list,dict))else v for k,v in r.items()})
 
-def run(root,out):
-    out.mkdir(parents=True,exist_ok=True);rows,cov=load(root)
+def run(root,out,quality_report=None):
+    gaps=GapMask.from_report(quality_report)
+    out.mkdir(parents=True,exist_ok=True);rows,cov=load(root,gaps)
     if not rows:raise ValueError('No production v3. Do not replace with old smoke data.')
-    engine=CausalSignals();features=[engine.update(r)for r in rows]
+    engine=CausalSignals(gaps);features=[engine.update(r)for r in rows]
     attempts=[]
     for name in HYPOTHESES:
         for mode in ('taker','maker_trade_through_proxy'):
             for hold in (15,30):
-                for delay in (1,3):attempts+=replay(rows,features,name,hold,delay,mode)
+                for delay in (1,3):attempts+=replay(rows,features,name,hold,delay,mode,gaps)
     summaries=summarize(attempts)
     present={(s['hypothesis'],s['mode'],s['hold_seconds'],s['latency_seconds'])for s in summaries}
     for name in HYPOTHESES:
@@ -223,7 +231,7 @@ def run(root,out):
       'note':'Subsequent windows after a post-hoc shortlist, not an independently sized confirmatory trial.'}
     (out/'shortlist_forward.json').write_text(json.dumps(forward,indent=2))
     write_csv(out/'forward_configurations.csv',forward_summaries)
-    probes=mechanism(rows,features);aggregate=[]
+    probes=mechanism(rows,features,gaps);aggregate=[]
     for slug in sorted({p['slug']for p in probes}):
         g=[p for p in probes if p['slug']==slug and p['trend_absolute_error']is not None]
         if g:aggregate.append({'slug':slug,'nonoverlapping_probes':len(g),'roll_mae':statistics.mean(p['roll_absolute_error']for p in g),'trend_mae':statistics.mean(p['trend_absolute_error']for p in g)})
@@ -254,4 +262,5 @@ def run(root,out):
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();run(a.input,a.output)
+    p.add_argument('--quality-report',type=Path,help='Local quality_v2 JSON with known BTC missing_intervals')
+    a=p.parse_args();run(a.input,a.output,a.quality_report)

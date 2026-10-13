@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from decimal import Decimal
 import math
+from canary_continuity import GapMask
 
 HYPOTHESES=('roll','roll_veto','roll_confirm','roll_conflict','twap_trend')
 
@@ -48,12 +49,19 @@ def official_winner(label, row):
             'source':'polymarket_market_resolved','no_proxy_labels':True}
 
 class CausalSignals:
-    def __init__(self):self.history=deque();self.last_ms=None
+    def __init__(self,gaps=None):
+        self.history=deque();self.last_ms=None;self.last_asset=None
+        self.gaps=gaps if gaps is not None else GapMask()
     def update(self,row):
         ms=int(row['sample_ms'])
+        self.gaps.check_row(row)
         if self.last_ms is not None and ms<=self.last_ms:raise ValueError('Strictly increasing sample time required')
-        if self.last_ms is not None and ms-self.last_ms>2500:self.history.clear()
-        self.last_ms=ms
+        # Underlying BTC reference history may cross 5m markets, but not a known
+        # sampling gap or an asset switch. A 2s delta alone can still be jitter.
+        asset=row.get('asset')
+        if self.last_ms is not None and (ms-self.last_ms>2500 or asset!=self.last_asset or
+                self.gaps.intersects(self.last_ms,ms)):self.history.clear()
+        self.last_ms=ms;self.last_asset=asset
         m=row.get('microstructure') or {};rules=m.get('rules') or {}
         valid=dict(m.get('valid') or {})
         micro_causal=number(m.get('asof_ms')) is not None and m['asof_ms']<=ms
