@@ -250,7 +250,8 @@ def run(args):
     if not 0 < args.initial_cash <= 100 or not 1 <= args.timeout_seconds <= 3600:
         raise ValueError('RESEARCH_BUDGET')
     output.mkdir(parents=True, mode=0o700)
-    status = {'version': 1, 'status': 'failed', 'stage': 'acquisition', 'live_orders_enabled': False, 'plaintext_published': False}
+    status = {'version': 1, 'status': 'failed', 'stage': 'acquisition', 'strategy_evaluated': False,
+              'live_orders_enabled': False, 'plaintext_published': False}
     with tempfile.TemporaryDirectory(prefix='quality-first-private-') as temporary:
         private = Path(temporary)
         metadata = {
@@ -298,6 +299,7 @@ def run(args):
                 if not (private / 'results').is_dir() or not any((private / 'results').iterdir()):
                     raise ValueError('RESEARCH_OUTPUT_MISSING')
                 status['status'] = 'complete'
+                status['strategy_evaluated'] = True
             except Exception as exc:
                 # Diagnostics are sealed below; exception text is never public.
                 print(type(exc).__name__, str(exc))

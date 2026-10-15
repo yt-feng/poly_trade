@@ -407,27 +407,159 @@ def replay(decisions, model, threshold, initial_cash=10., latency_ms=1000,
 
 
 def complete_set_diagnostic(decisions, initial_cash):
-    """Necessary quote condition only, never an atomic two-leg fill claim."""
-    seen = set()
-    rows = []
-    for decision in decisions:
-        if not decision_eligible(decision) or decision["slug"] in seen:
+    """Falsify complete-set quote conditions after fixed receive-time delays.
+
+    Both legs are inspected in the first snapshot at/after each arrival, without
+    searching ahead for a better quote. These are observations, never fills.
+    """
+    if not math.isfinite(initial_cash) or initial_cash <= 0:
+        raise ValueError("positive initial cash required")
+    times = [decision["sample_ms"] for decision in decisions]
+    seen, rows = set(), []
+    latencies = (1000, 3000)
+
+    def identity(decision):
+        raw = decision["raw"]
+        return (raw.get("slug"), rules(raw).get("condition_id"),
+                raw.get("up_token_id"), raw.get("down_token_id"))
+
+    def leg_check(decision, side, shares, limit, expected, arrival=None):
+        raw, rejected = decision["raw"], []
+        book = raw.get(side) or {}
+        ask, depth = number(book.get("ask")), number(book.get("ask_size"))
+        received = number(book.get("received_ms"))
+        tick = number(rules(raw).get("tick_size"))
+        if identity(decision) != expected:
+            rejected.append("market_or_token_identity_changed")
+        if book.get("token_id") is not None and book["token_id"] != raw.get(side + "_token_id"):
+            rejected.append("book_token_identity_conflict")
+        if not quote_valid(raw, side):
+            rejected.append("quote_invalid_or_stale")
+        if arrival is not None and (received is None or received < arrival):
+            rejected.append("quote_received_before_arrival")
+        if not (rules(raw).get("active") is True and rules(raw).get("closed") is False
+                and rules(raw).get("accepting_orders") is True):
+            rejected.append("market_not_open")
+        if depth is None or depth < shares:
+            rejected.append("insufficient_ask_depth")
+        minimum = minimum_shares(decision, ask) if ask is not None else None
+        if minimum is None or minimum > shares + 1e-9:
+            rejected.append("current_minimum_unmet")
+        step = number(decision.get("rules", {}).get("order_size_step"))
+        if step is not None and (step <= 0 or abs(shares / step - round(shares / step)) > 1e-7):
+            rejected.append("current_size_step_unmet")
+        if tick is None or not 0 < tick < 1:
+            rejected.append("tick_unknown")
+        elif abs(limit / tick - round(limit / tick)) > 1e-7:
+            rejected.append("decision_limit_off_current_tick_grid")
+        if ask is None or ask > limit + 1e-10:
+            rejected.append("decision_limit_exceeded")
+        amount = fee(raw, ask, shares) if ask is not None and 0 < ask < 1 else None
+        if amount is None:
+            rejected.append("fee_unknown")
+        return {"side": side, "ask": ask, "ask_size": depth, "received_ms": received,
+                "tick_size": tick, "current_minimum_shares": minimum,
+                "decision_limit": limit, "fee_usd": amount,
+                "quote_constraints_satisfied": not rejected, "reasons": rejected}
+
+    for i, decision in enumerate(decisions):
+        if (not decision.get("evaluation_scope_included", True) or not decision_eligible(decision)
+                or decision["slug"] in seen):
             continue
         raw = decision["raw"]
-        shares = max((minimum_shares(decision, raw[s]["ask"]) or 0) for s in ("up", "down"))
-        if shares <= 0:
+        expected = identity(decision)
+        if not all(expected) or expected[2] == expected[3]:
             continue
-        fees = [fee(raw, raw[s]["ask"], shares) for s in ("up", "down")]
-        if any(x is None for x in fees):
+        tick = number(rules(raw).get("tick_size"))
+        if tick is None or not 0 < tick < 1 or not all(quote_valid(raw, side) for side in ("up", "down")):
             continue
-        total = shares * (raw["up"]["ask"] + raw["down"]["ask"]) + sum(fees)
-        if total < shares and total <= initial_cash and all((number(raw[s].get("ask_size")) or 0) >= shares for s in ("up", "down")):
-            seen.add(decision["slug"])
-            rows.append({"slug": decision["slug"], "sample_ms": decision["sample_ms"],
-                         "quote_cost_usd": total, "gross_redemption_value_usd": shares,
-                         "executable_profit_established": False, "two_leg_execution_observed": False})
+        minima = [minimum_shares(decision, number(raw[side]["ask"])) for side in ("up", "down")]
+        if any(value is None for value in minima):
+            continue
+        shares = max(minima)
+        limits = {side: min(1 - tick, number(raw[side]["ask"]) + tick) for side in ("up", "down")}
+        original = {side: leg_check(decision, side, shares, limits[side], expected) for side in ("up", "down")}
+        if not all(leg["quote_constraints_satisfied"] for leg in original.values()):
+            continue
+        total = sum(shares * leg["ask"] + leg["fee_usd"] for leg in original.values())
+        if not total < shares or total > initial_cash:
+            continue
+        seen.add(decision["slug"])
+        candidate = {"slug": decision["slug"], "sample_ms": decision["sample_ms"],
+                     "shares_per_leg": shares, "quote_cost_usd": total,
+                     "gross_redemption_value_usd": shares, "original_quote_legs": original,
+                     "executable_profit_established": False, "two_leg_execution_observed": False,
+                     "delayed_checks": []}
+        rows.append(candidate)  # Retain the original candidate regardless of all later failures.
+        for latency in latencies:
+            arrival = decision["sample_ms"] + latency
+            check = {"latency_ms": latency, "arrival_ms": arrival, "observed_ms": None,
+                     "quotes_support_complete_set": False, "quote_cost_usd": None,
+                     "actual_fills": 0, "two_leg_execution_observed": False,
+                     "cash_receipt_observed": False, "reasons": [], "legs": {},
+                     "second_leg_failure_possible": True, "one_leg_only_quote_support": False,
+                     "exposure_note": "Non-atomic legs can leave one-sided inventory if only one fills; no fill or inventory is inferred."}
+            candidate["delayed_checks"].append(check)
+            j = bisect.bisect_left(times, arrival)
+            if j >= len(decisions) or times[j] > arrival + 2500:
+                check["reasons"].append("arrival_snapshot_unobserved")
+                continue
+            future = decisions[j]
+            check["observed_ms"] = times[j]
+            check["observation_lag_ms"] = times[j] - arrival
+            if not future.get("evaluation_scope_included", True):
+                check["reasons"].append("outside_predefined_sampling_scope")
+            if not decision_eligible(future):
+                check["reasons"].append("future_snapshot_execution_quality")
+            if not continuous(decisions, i, j):
+                check["reasons"].append("arrival_path_gap_or_market_change")
+            legs = {side: leg_check(future, side, shares, limits[side], expected, arrival)
+                    for side in ("up", "down")}
+            check["legs"] = legs
+            supported = [side for side, leg in legs.items() if leg["quote_constraints_satisfied"]]
+            check["one_leg_only_quote_support"] = len(supported) == 1
+            if len(supported) != 2:
+                check["reasons"].append("one_or_both_leg_constraints_failed")
+            receipts = [leg["received_ms"] for leg in legs.values()]
+            if None in receipts or abs(receipts[0] - receipts[1]) > 250:
+                check["reasons"].append("pair_quote_skew")
+            if all(leg["ask"] is not None and leg["fee_usd"] is not None for leg in legs.values()):
+                delayed_cost = sum(shares * leg["ask"] + leg["fee_usd"] for leg in legs.values())
+                check["quote_cost_usd"] = delayed_cost
+                if delayed_cost >= shares:
+                    check["reasons"].append("cost_not_below_redemption")
+                if delayed_cost > initial_cash:
+                    check["reasons"].append("combined_cost_exceeds_cash")
+            check["quotes_support_complete_set"] = not check["reasons"]
+            stress = {"extra_ticks_per_leg": 1, "quote_cost_usd": None,
+                      "quotes_support_complete_set": False, "reasons": list(check["reasons"])}
+            check["extra_tick_stress"] = stress
+            stressed_cost = 0.
+            for side, leg in legs.items():
+                price = leg["ask"] + leg["tick_size"] if leg["ask"] is not None and leg["tick_size"] is not None else None
+                if price is None or not 0 < price < 1:
+                    stress["reasons"].append(side + "_stress_price_invalid")
+                    break
+                current_min = minimum_shares(future, price)
+                amount = fee(future["raw"], price, shares)
+                if amount is None or current_min is None or current_min > shares + 1e-9:
+                    stress["reasons"].append(side + "_stress_fee_or_minimum_invalid")
+                    break
+                if price > limits[side] + 1e-10:
+                    stress["reasons"].append(side + "_stress_exceeds_decision_limit")
+                stressed_cost += shares * price + amount
+            else:
+                stress["quote_cost_usd"] = stressed_cost
+                if stressed_cost >= shares:
+                    stress["reasons"].append("stress_cost_not_below_redemption")
+                if stressed_cost > initial_cash:
+                    stress["reasons"].append("stress_combined_cost_exceeds_cash")
+                stress["quotes_support_complete_set"] = not stress["reasons"]
     return {"necessary_quote_conditions": rows, "actual_fills": 0,
-            "unmodelled": ["non_atomic_second_leg", "merge_or_redemption_cost_and_cash_delay"]}
+            "latencies_ms": list(latencies), "arrival_snapshot_tolerance_ms": 2500,
+            "observation_rule": "first_snapshot_at_or_after_arrival; never_search_for_a_better_later_quote",
+            "unmodelled": ["non_atomic_second_leg", "actual_order_acceptance_and_fills",
+                           "merge_or_redemption_cost_and_cash_delay"]}
 
 
 def run(input_root, output_root, initial_cash=10., frozen_model=None):

@@ -37,7 +37,9 @@ holdout, and freeze a no-trade model when none passes. No train/validation/test
 partition of existing archives is described as prospective evidence.
 
 The separate complete-set diagnostic records necessary two-sided quote
-conditions only. It cannot establish atomic fills, merge costs or cash timing.
+conditions, then checks their first observed arrival snapshot after one and
+three seconds, including a further tick on each leg. It retains every original
+candidate and failed leg. It cannot establish atomic fills, merge costs or cash timing.
 See [primary research sources](quality_first_research_sources.md) for other
 mechanisms and the conditions required to evaluate them.
 
