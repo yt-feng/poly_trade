@@ -60,6 +60,12 @@ def fixed_model():
     return {"family": "book_residual", "coef": [.20, 0., 0., 0., 0., 0.]}
 
 
+def synthetic_provenance(rows):
+    return {"files": [{"path": "synthetic", "sha256": "0" * 64, "rows": len(rows),
+                       "first_sample_ms": min(row["sample_ms"] for row in rows),
+                       "last_sample_ms": max(row["sample_ms"] for row in rows)}]}
+
+
 class CausalResearchTests(unittest.TestCase):
     def test_future_observation_changes_cannot_rewrite_prefix_features(self):
         rows = rows_for_window(last_offset=60_000)
@@ -250,6 +256,35 @@ class CashReplayTests(unittest.TestCase):
         self.assertEqual(result["summary"]["proxy_entries"], 0)
         self.assertEqual(result["cash_ledger"], [])
 
+    def test_exit_quantity_must_match_changed_step_even_above_new_minimum(self):
+        rows = rows_for_window()
+        for row in rows:
+            row["microstructure"]["rules"]["min_order_notional"] = 4.5
+        rows[32]["microstructure"]["rules"]["order_size_step"] = 2.
+        decisions = decisions_for(rows)
+        self.assertEqual(research.minimum_shares(decisions[32], .59), 8.)
+        result = research.replay(decisions, fixed_model(), .01)
+        attempt = result["attempts"][0]
+        self.assertEqual(attempt["shares"], 9.)
+        self.assertEqual(attempt["status"], "exit_size_step_changed")
+        self.assertEqual(result["summary"]["closed_proxy_cycles"], 0)
+        self.assertAlmostEqual(result["summary"]["locked_cost_usd"], attempt["cost_usd"])
+
+    def test_stress_exit_price_must_meet_known_minimum_notional(self):
+        rows = rows_for_window()
+        for row in rows:
+            row["microstructure"]["rules"]["min_order_notional"] = 2.5
+        for side in ("up", "down"):
+            rows[32][side].update(bid=.51, ask=.52)
+        decisions = decisions_for(rows)
+        baseline = research.replay(decisions, fixed_model(), .01)
+        stressed = research.replay(decisions, fixed_model(), .01, extra_exit_ticks=2)
+        self.assertEqual(baseline["summary"]["closed_proxy_cycles"], 1)
+        self.assertEqual(stressed["attempts"][0]["shares"], 5.)
+        self.assertEqual(stressed["attempts"][0]["status"], "exit_minimum_changed")
+        self.assertEqual(stressed["summary"]["closed_proxy_cycles"], 0)
+        self.assertGreater(stressed["summary"]["locked_cost_usd"], 0)
+
     def test_changed_tick_cannot_accept_a_now_invalid_limit(self):
         decisions = decisions_for(rows_for_window())
         decisions[1]["raw"]["microstructure"]["rules"]["tick_size"] = .02
@@ -275,6 +310,19 @@ class CashReplayTests(unittest.TestCase):
 
 
 class ResearchPipelineTests(unittest.TestCase):
+    def test_protocol_contract_binds_policy_features_execution_and_source_files(self):
+        contract = research.protocol_contract()
+        self.assertEqual(contract["quality_policy"]["gold_min_contiguous_seconds"],
+                         data.QualityPolicy().gold_min_contiguous_seconds)
+        self.assertEqual(contract["features"], research.FEATURES)
+        self.assertEqual(contract["hold_ms"], research.HOLD_MS)
+        self.assertEqual(contract["maximum_positions"], 1)
+        self.assertEqual(contract["fill_model"], "taker_quote_proxy")
+        self.assertEqual(set(contract["implementation_sha256"]),
+                         {"quality_first_data.py", "quality_first_research.py"})
+        for name, expected in contract["implementation_sha256"].items():
+            self.assertEqual(expected, hashlib.sha256((ROOT / "analysis" / name).read_bytes()).hexdigest())
+
     def test_cli_reads_verified_archives_and_writes_integrity_bound_no_trade_model(self):
         # 200 synthetic observations exercise real I/O and orchestration, not model research.
         rows = [raw_row(market * 300_000, offset)
@@ -305,6 +353,9 @@ class ResearchPipelineTests(unittest.TestCase):
             self.assertEqual(frozen_hash, research.digest(frozen))
             self.assertEqual(frozen_hash, result["frozen_model_sha256"])
             self.assertEqual(frozen["source_hash"], result["source_hash"])
+            expected_protocol = research.protocol_contract()
+            expected_protocol["quality_policy"]["gold_min_contiguous_seconds"] = 2
+            self.assertEqual(frozen["protocol_sha256"], research.digest(expected_protocol))
             self.assertGreater(frozen["forward_min_window_start_ms"], frozen["consumed_through_ms"])
             self.assertGreater(frozen["forward_min_window_start_ms"], frozen["frozen_at_ms"])
             self.assertEqual(result["actual_fills"], 0)
@@ -316,10 +367,63 @@ class ResearchPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "integrity mismatch"):
                 research.run(source, root / "forward", frozen_model=output / "frozen_model.json")
 
+    def test_forward_refuses_policy_implementation_or_initial_cash_changes(self):
+        rows = [raw_row(market * 300_000, offset)
+                for market in range(100) for offset in (0, 1000)]
+        provenance = synthetic_provenance(rows)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, "load_verified_snapshots", return_value=(rows, provenance)):
+            root = Path(directory)
+            research.run(root / "input", root / "discovery")
+            model_path = root / "discovery" / "frozen_model.json"
+            frozen = json.loads(model_path.read_text())
+            baseline_contract = research.protocol_contract()
+            self.assertEqual(frozen["protocol_sha256"], research.digest(baseline_contract))
+            forward = research.run(root / "input", root / "forward", frozen_model=model_path)
+            self.assertEqual(forward["forward_episode_id"], frozen["sha256"])
+            self.assertFalse(forward["cumulative_across_runs"])
+            with self.assertRaisesRegex(ValueError, "initial cash changed"):
+                research.run(root / "input", root / "wrong_cash", initial_cash=11., frozen_model=model_path)
+            for change in ("policy", "features", "execution", "source"):
+                changed = copy.deepcopy(baseline_contract)
+                if change == "policy":
+                    changed["quality_policy"]["gold_min_contiguous_seconds"] += 1
+                elif change == "features":
+                    changed["features"]["book_residual"].append("unregistered_feature")
+                elif change == "execution":
+                    changed["cash_delay_ms"] += 1
+                else:
+                    changed["implementation_sha256"]["quality_first_data.py"] = "f" * 64
+                with self.subTest(change=change), patch.object(research, "protocol_contract", return_value=changed):
+                    with self.assertRaisesRegex(ValueError, "protocol or implementation changed"):
+                        research.run(root / "input", root / change, frozen_model=model_path)
+
+    def test_invalid_market_identity_stays_in_funnel_without_breaking_run_or_replay(self):
+        rows = [raw_row(market * 300_000, offset)
+                for market in range(100) for offset in (0, 1000)]
+        invalid = raw_row(30_000_000, 0)
+        invalid["slug"] = "invalid-market-identity"
+        invalid["microstructure"]["rules"]["slug"] = invalid["slug"]
+        rows.append(invalid)
+        dataset = data.build_quality_dataset(rows, required_features=())
+        bad_decision = dataset["decisions"][-1]
+        self.assertIsNone(bad_decision["window_start_ms"])
+        self.assertFalse(bad_decision["eligible"])
+        replay = research.replay([bad_decision], fixed_model(), .01)
+        self.assertEqual(replay["summary"]["attempts"], 0)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, "load_verified_snapshots", return_value=(rows, synthetic_provenance(rows))):
+            root = Path(directory)
+            result = research.run(root / "input", root / "output")
+            self.assertEqual(result["independent_market_windows"], 100)
+            self.assertEqual(result["quality_funnel"]["input_rows"], 201)
+            self.assertGreater(result["quality_funnel"]["layer_rejections"]["base_integrity"]
+                               .get("market_identity_invalid", 0), 0)
+
     def test_holdout_outcome_does_not_choose_or_refit_the_model(self):
         rows = [raw_row(market * 300_000, offset)
                 for market in range(100) for offset in (0, 1000)]
-        provenance = {"files": [{"path": "synthetic", "sha256": "0" * 64}]}
+        provenance = synthetic_provenance(rows)
         outputs = []
         for holdout_outcome in (-1000., 1000.):
             replay_calls = []

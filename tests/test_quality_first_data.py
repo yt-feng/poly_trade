@@ -11,7 +11,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 from quality_first_data import (CausalQualityEngine, QualityPolicy, build_quality_dataset,
                                 chronological_split, compact_snapshot, gold_training_rows,
-                                load_verified_snapshots, normalize_snapshot)
+                                load_verified_snapshots, mark_evaluation_scope, normalize_snapshot)
 
 
 START = 1_800_000_000_000
@@ -214,6 +214,8 @@ class ArchiveQualityTests(unittest.TestCase):
             self.assertEqual(len(loaded), 2)
             self.assertEqual(provenance["duplicate_rows"], 2)
             self.assertEqual([item["rows"] for item in provenance["files"]], [2, 2])
+            self.assertEqual(provenance["files"][0]["first_sample_ms"], START + 1000)
+            self.assertEqual(provenance["files"][0]["last_sample_ms"], START + 2000)
             self.assertEqual(provenance["memory_projection_version"], 1)
 
     def test_discarded_field_conflict_still_rejected(self):
@@ -250,6 +252,55 @@ class ArchiveQualityTests(unittest.TestCase):
             self.assertEqual(raw["quality"], compact["quality"])
             self.assertEqual(raw["min_order_size_unit"], compact["min_order_size_unit"])
             self.assertNotIn("related_15m", compact["raw"]["microstructure"])
+
+    def test_whole_file_bounds_exclude_only_partial_boundary_markets(self):
+        rows = [observation(second, window) for window in range(3) for second in range(300)
+                if START + 100_000 <= START + window * 300_000 + second * 1000 <= START + 800_000]
+        with tempfile.TemporaryDirectory() as root:
+            self.archive(root, "snapshots-1.jsonl.gz", rows)
+            loaded, provenance = load_verified_snapshots(root)
+            dataset = build_quality_dataset(loaded, required_features=())
+            original_gold = [row["training_gold"] for row in dataset["decisions"]]
+            returned = mark_evaluation_scope(dataset, provenance)
+            self.assertIs(returned, dataset)
+            self.assertEqual([window["evaluation_scope_included"] for window in dataset["windows"]], [False, True, False])
+            self.assertEqual(dataset["evaluation_scope"]["excluded_boundary_market_windows"], 2)
+            self.assertEqual(dataset["evaluation_scope"]["included_decisions"], 300)
+            self.assertEqual(original_gold, [row["training_gold"] for row in dataset["decisions"]])
+
+    def test_internal_missing_observations_never_cut_the_sampling_frame(self):
+        rows = [observation(second, window) for window in range(3) for second in range(300)
+                if not (window == 1 and 100 <= second < 200)]
+        with tempfile.TemporaryDirectory() as root:
+            self.archive(root, "snapshots-1.jsonl.gz", rows)
+            loaded, provenance = load_verified_snapshots(root)
+            dataset = mark_evaluation_scope(build_quality_dataset(loaded, required_features=()), provenance)
+            self.assertEqual(len(dataset["evaluation_scope"]["frames"]), 1)
+            self.assertEqual(dataset["evaluation_scope"]["included_market_windows"], 3)
+            self.assertTrue(all(row["evaluation_scope_included"] for row in dataset["decisions"]))
+            self.assertFalse(dataset["evaluation_scope"]["internal_gaps_split_frames"])
+
+    def test_adjacent_file_frames_merge_without_interpreting_internal_quality(self):
+        dataset = build_quality_dataset(full_window(), required_features=())
+        provenance = {"files": [
+            {"path": "first", "rows": 150, "first_sample_ms": START + 20, "last_sample_ms": START + 149_010},
+            {"path": "second", "rows": 150, "first_sample_ms": START + 150_020, "last_sample_ms": START + 299_990},
+        ]}
+        mark_evaluation_scope(dataset, provenance)
+        self.assertEqual(len(dataset["evaluation_scope"]["frames"]), 1)
+        self.assertEqual(dataset["evaluation_scope"]["included_market_windows"], 1)
+        self.assertEqual(dataset["evaluation_scope"]["frames"][0]["source_file_count"], 2)
+
+    def test_separated_archive_frames_do_not_bridge_unselected_capture_time(self):
+        dataset = build_quality_dataset(full_window(), required_features=())
+        provenance = {"files": [
+            {"path": "first", "rows": 100, "first_sample_ms": START, "last_sample_ms": START + 99_000},
+            {"path": "second", "rows": 100, "first_sample_ms": START + 200_000, "last_sample_ms": START + 299_000},
+        ]}
+        mark_evaluation_scope(dataset, provenance)
+        self.assertEqual(len(dataset["evaluation_scope"]["frames"]), 2)
+        self.assertEqual(dataset["evaluation_scope"]["included_market_windows"], 0)
+        self.assertTrue(all(row["training_gold"] for row in dataset["decisions"]))
 
 
 if __name__ == "__main__":

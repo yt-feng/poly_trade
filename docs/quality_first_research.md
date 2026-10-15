@@ -13,6 +13,11 @@ reusing cached public bytes. Preserve the acquisition plan, SHA256 identities,
 duplicate counts and sampling scope. Missing history is not filled or repaired.
 The loader retains a declared compact view after checking full-file integrity
 and full-row conflicts; it fails explicitly at its row budget.
+Evaluation scope is fixed by the selected archive frames: only whole markets
+inside those frames can open new simulated positions. Leading/trailing partial
+markets are counted as sampling-boundary exclusions. Missing observations
+inside a frame do not split it or remove a failed trade. Training can still use
+high-quality segments from a partial market.
 
 Normalize identity, clocks, fees and real two-sided quotes separately from
 candidate feature requirements. Fit only on uninterrupted high-quality segments
@@ -70,7 +75,10 @@ hash-bound `results/frozen_model.json`.
 
 The analysis CLI and runner accept `--frozen-model PATH`. They evaluate only
 whole markets after the frozen timestamp and consumed-data watermark and do
-not refit. A frozen file must be supplied through a private execution context;
+not refit. The frozen file binds the exact policy and implementation hashes;
+changed execution rules or starting cash require a new episode. Repeated
+evaluations replay one episode and must not be added together as new evidence.
+A frozen file must be supplied through a private execution context;
 never place it in public workflow inputs, source commits or plaintext artifacts.
 The manual workflow currently performs discovery and produces the frozen file;
 it does not automatically persist a confidential model across scheduled runs.

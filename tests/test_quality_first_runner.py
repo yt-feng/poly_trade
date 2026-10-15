@@ -51,6 +51,28 @@ class QualityFirstRunnerTests(unittest.TestCase):
         self.assertEqual(sum(i['bytes'] for i in items if i['selected']), 96)
         self.assertEqual(len([i for i in items if i['selected']]), 16)
 
+    def test_only_unselected_source_errors_move_to_retained_exclusion_provenance(self):
+        good, bad = item('2026-10-01', 0), item('2026-10-01', 1)
+        good['selected'] = True
+        bad['pre_error'] = 'missing checksum sidecar'
+        plan = {'items': [good, bad], 'max_releases': 16, 'max_bytes': 1024,
+                'releases': [{'tag': good['tag'], 'eligible_snapshot_label_archives': 2}]}
+        runner.record_unselected_source_issues(plan)
+        self.assertEqual(plan['excluded_source_issues'][0]['source_issue'], 'missing checksum sidecar')
+        self.assertEqual(plan['excluded_source_issues'][0]['name'], bad['name'])
+        self.assertIsNone(bad['pre_error'])
+        state = {good['tag'] + '/' + good['name']: {'status': 'verified', 'file': {'name': good['name'], 'bytes': good['bytes']}}}
+        manifest = runner.forward_acquire._manifest(plan, state, 0)
+        self.assertTrue(runner.forward_acquire.validate_manifest(manifest))
+        self.assertEqual(len(manifest['skipped']), 1)
+        # A defect on an actual selected item must still fail the same gate.
+        bad.update(selected=True, pre_error='selected checksum missing')
+        runner.record_unselected_source_issues(plan)
+        self.assertEqual(bad['pre_error'], 'selected checksum missing')
+        manifest = runner.forward_acquire._manifest(plan, state, 0)
+        self.assertFalse(runner.forward_acquire.validate_manifest(manifest))
+        self.assertEqual(manifest['errors'][0]['error'], 'selected checksum missing')
+
     def test_recipient_is_verified_before_any_work(self):
         encoded = base64.b64encode(research_vault.canonical(self.recipient)).decode()
         self.assertEqual(runner.load_recipient(encoded, self.rid), self.recipient)

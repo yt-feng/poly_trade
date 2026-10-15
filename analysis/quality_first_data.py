@@ -142,10 +142,17 @@ def load_verified_snapshots(root, max_rows=None):
     for path in sorted(root.rglob("snapshots-*.jsonl.gz")):
         archive, digest = _verified_rows(path)
         file_record = {"path": str(path.relative_to(root)), "sha256": digest,
-                       "bytes": path.stat().st_size, "rows": 0}
+                       "bytes": path.stat().st_size, "rows": 0,
+                       "first_sample_ms": None, "last_sample_ms": None}
         files.append(file_record)
         for row in archive:
             file_record["rows"] += 1
+            archive_ms = integer(row.get("sample_ms"))
+            if archive_ms is not None and archive_ms >= 0:
+                first = file_record["first_sample_ms"]
+                last = file_record["last_sample_ms"]
+                file_record["first_sample_ms"] = archive_ms if first is None else min(first, archive_ms)
+                file_record["last_sample_ms"] = archive_ms if last is None else max(last, archive_ms)
             if row.get("asset") != "btc":
                 ignored_assets += 1
                 continue
@@ -173,6 +180,66 @@ def load_verified_snapshots(root, max_rows=None):
     provenance["selection_sha256"] = hashlib.sha256(json.dumps(
         files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return rows, provenance
+
+
+def mark_evaluation_scope(dataset, provenance, max_frame_gap_ms=2500):
+    """Mark full markets inside preselected whole-file sampling frames.
+
+    A source file is one frame from its first through last sampled second,
+    irrespective of internal missing/invalid observations. Overlapping or
+    adjacent files form one frame. Partial boundary markets are outside the
+    evaluation sampling plan; internal gaps cannot remove a market or trade.
+    These are sampled-second bounds, not a claim of complete event capture.
+    Training gold segments are unaffected.
+    """
+    if type(max_frame_gap_ms) is not int or max_frame_gap_ms < 0:
+        raise ValueError("max_frame_gap_ms must be a nonnegative integer")
+    bounds = []
+    for source in provenance.get("files", []):
+        first, last = integer(source.get("first_sample_ms")), integer(source.get("last_sample_ms"))
+        if first is None and last is None and source.get("rows") == 0:
+            continue
+        if first is None or last is None or first < 0 or last < first:
+            raise ValueError("Source archive sampling bounds missing or invalid")
+        bounds.append({"first_sample_ms": first, "last_sample_ms": last,
+                       "source_files": [source.get("path")]})
+    if not bounds:
+        raise ValueError("No source archive sampling frames")
+    merged = []
+    for source in sorted(bounds, key=lambda item: (item["first_sample_ms"], item["last_sample_ms"])):
+        if merged and source["first_sample_ms"] - merged[-1]["last_sample_ms"] <= max_frame_gap_ms:
+            merged[-1]["last_sample_ms"] = max(merged[-1]["last_sample_ms"], source["last_sample_ms"])
+            merged[-1]["source_files"].extend(source["source_files"])
+        else:
+            merged.append(source)
+    for frame in merged:
+        frame["start_ms"] = frame["first_sample_ms"] // 1000 * 1000
+        frame["end_ms_exclusive"] = (frame["last_sample_ms"] // 1000 + 1) * 1000
+        frame["source_file_count"] = len(frame["source_files"])
+    assignments = {}
+    for window in dataset["windows"]:
+        start, end = window["window_start_ms"], window["window_end_ms"]
+        included = start is not None and end is not None and any(
+            frame["start_ms"] <= start and end <= frame["end_ms_exclusive"] for frame in merged)
+        assignments[window["slug"]] = bool(included)
+        window["evaluation_scope_included"] = bool(included)
+    for decision in dataset["decisions"]:
+        decision["evaluation_scope_included"] = assignments[decision["slug"]]
+    included_count = sum(assignments.values())
+    dataset["evaluation_scope"] = {
+        "version": 1,
+        "basis": "whole_preselected_archive_bounds_not_quality_or_outcomes",
+        "sampled_second_bounds": True,
+        "max_frame_gap_ms": max_frame_gap_ms,
+        "frames": merged,
+        "included_market_windows": included_count,
+        "excluded_boundary_market_windows": len(assignments) - included_count,
+        "included_decisions": sum(decision["evaluation_scope_included"] for decision in dataset["decisions"]),
+        "internal_gaps_split_frames": False,
+        "training_selection_unchanged": True,
+        "complete_exchange_event_capture": False,
+    }
+    return dataset
 
 
 def normalize_snapshot(raw, policy=None):

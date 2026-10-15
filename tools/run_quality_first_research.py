@@ -46,6 +46,23 @@ def spread_order(items):
     return result
 
 
+def record_unselected_source_issues(plan):
+    """Keep unusable non-candidates in provenance without failing selected data.
+
+    This is only for source metadata defects found before selection. Errors on
+    selected items, including transport/integrity failures, remain mandatory.
+    """
+    excluded = plan.setdefault('excluded_source_issues', [])
+    for item in plan['items']:
+        if item.get('pre_error') and not item.get('selected'):
+            excluded.append({'tag': item['tag'], 'name': item['name'],
+                             'bytes': item.get('bytes'), 'source_issue': item['pre_error'],
+                             'selected': False})
+            item['selection_exclusion_reason'] = 'source_metadata_unusable_before_selection'
+            item['pre_error'] = None
+    return plan
+
+
 def stratify_plan(plan, max_snapshot_archives=96):
     """Reserve a byte quota for every available UTC day before any download.
 
@@ -113,7 +130,7 @@ def stratify_plan(plan, max_snapshot_archives=96):
         'label_selection': 'same_release_and_day_nearest_segment_sequence; not causal_label_certification',
         'all_history_complete': False,
     }
-    return plan
+    return record_unselected_source_issues(plan)
 
 
 @contextmanager

@@ -1,6 +1,7 @@
 """Synthetic fixtures only. No live endpoints, actual addresses, or private logs."""
 import json
 from pathlib import Path
+import re
 import sys
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
@@ -139,12 +140,39 @@ class FeedContract(unittest.TestCase):
 class PublicationContracts(unittest.TestCase):
     def test_retired_publishers_have_no_execution_or_artifact_steps(self):
         root=Path(__file__).resolve().parents[1]/'.github/workflows'
-        files=['canary-research.yml','canary-forward.yml','polymarket-eda.yml','import-run-24869603988-and-analyze.yml','run-24869603988-analysis.yml']
+        files=['canary-forward.yml','polymarket-eda.yml','import-run-24869603988-and-analyze.yml','run-24869603988-analysis.yml']
         for name in files:
             text=(root/name).read_text()
             self.assertIn('PLAINTEXT_PUBLICATION_RETIRED',text)
             for banned in ['contents: write','upload-artifact','GITHUB_STEP_SUMMARY','git push','python analysis/']:
                 self.assertNotIn(banned,text)
+    def test_canary_research_only_calls_the_sealed_research_workflow(self):
+        root=Path(__file__).resolve().parents[1]/'.github/workflows'
+        wrapper=(root/'canary-research.yml').read_text()
+        uses=re.findall(r'(?m)^\s*(?:-\s*)?uses:\s*(.+?)\s*$',wrapper)
+        self.assertEqual(uses,['./.github/workflows/quality-first-research.yml'])
+        self.assertIsNone(re.search(r'(?m)^\s*(?:-\s*)?(?:run|steps):',wrapper))
+        for banned in ['contents: write','upload-artifact','GITHUB_STEP_SUMMARY','git push','python analysis/']:
+            self.assertNotIn(banned,wrapper)
+        workflow=(root/'quality-first-research.yml').read_text()
+        self.assertEqual(workflow.count('uses: actions/upload-artifact@'),1)
+        # There is one artifact path block, with an exact ciphertext/status allowlist.
+        blocks=list(re.finditer(r'(?m)^( *)path:\s*\|\s*\n',workflow))
+        self.assertEqual(len(blocks),1)
+        block=blocks[0]
+        indent=len(block.group(1))
+        paths=[]
+        for line in workflow[block.end():].splitlines():
+            if not line.strip():
+                continue
+            if len(line)-len(line.lstrip())<=indent:
+                break
+            paths.append(line.strip())
+        self.assertEqual(paths,['sealed-delivery/*.vault','sealed-delivery/status.json'])
+        self.assertIn('tools/run_quality_first_research.py',workflow)
+        for banned in ['contents: write','GITHUB_STEP_SUMMARY','git push','canary_results',
+                       'forward_results','analysis/canary_readiness.py','analysis/forward_roll_conflict.py']:
+            self.assertNotIn(banned,workflow)
     def test_collection_module_has_no_order_or_signing_dependency(self):
         text=(Path(__file__).resolve().parents[1]/'tools/sealed_public_feed.py').read_text()
         self.assertNotIn('import py_clob_client',text)

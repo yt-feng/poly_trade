@@ -17,7 +17,7 @@ from pathlib import Path
 import random
 import statistics
 
-from quality_first_data import QualityPolicy, build_quality_dataset, load_verified_snapshots
+from quality_first_data import QualityPolicy, build_quality_dataset, load_verified_snapshots, mark_evaluation_scope
 
 VERSION = 1
 HOLD_MS = 30_000
@@ -37,6 +37,16 @@ def canonical(value):
 
 def digest(value):
     return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def protocol_contract():
+    """Bind frozen evaluations to both policy and its exact implementation."""
+    here = Path(__file__).resolve()
+    return {"version": VERSION, "quality_policy": asdict(QualityPolicy()), "features": FEATURES,
+            "hold_ms": HOLD_MS, "thresholds": THRESHOLDS, "latencies_ms": [1000, 3000],
+            "cash_delay_ms": 1000, "maximum_positions": 1, "fill_model": "taker_quote_proxy",
+            "implementation_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                                      for p in (here, here.with_name("quality_first_data.py"))}}
 
 
 def number(value):
@@ -198,6 +208,8 @@ def minimum_shares(decision, price=None):
     unit = decision.get("min_order_size_unit")
     if unit != "shares" or minimum is None or minimum <= 0:
         return None
+    if price is not None and (not math.isfinite(price) or price <= 0):
+        return None
     constraints = decision.get("rules") or {}
     notional = number(constraints.get("min_order_notional"))
     if price is not None and notional is not None and notional > 0:
@@ -229,6 +241,9 @@ def replay(decisions, model, threshold, initial_cash=10., latency_ms=1000,
     blocks = Counter()
     for i, decision in enumerate(decisions):
         now = decision["sample_ms"]
+        if decision["window_start_ms"] is None or not decision.get("evaluation_scope_included", True):
+            blocks["outside_predefined_sampling_scope"] += 1
+            continue
         if decision["window_start_ms"] < begin_ms or (end_ms is not None and decision["window_start_ms"] + 300_000 > end_ms):
             continue
         if now < busy_until:
@@ -331,9 +346,9 @@ def replay(decisions, model, threshold, initial_cash=10., latency_ms=1000,
             item["status"] = "exit_path_gap"
             continue
         xbook = xrow[side]
-        exit_min = minimum_shares(decisions[out], xbook["bid"])
-        if exit_min is None or exit_min > shares + 1e-9:
-            item["status"] = "exit_minimum_changed"
+        exit_step = number(decisions[out].get("rules", {}).get("order_size_step"))
+        if exit_step is not None and abs(shares / exit_step - round(shares / exit_step)) > 1e-7:
+            item["status"] = "exit_size_step_changed"
             continue
         if (number(xbook.get("bid_size")) or 0) < shares:
             item["status"] = "exit_capacity_unobserved"
@@ -343,6 +358,10 @@ def replay(decisions, model, threshold, initial_cash=10., latency_ms=1000,
             item["status"] = "exit_tick_unknown"
             continue
         price = max(0., xbook["bid"] - extra_exit_ticks * xtick)
+        exit_min = minimum_shares(decisions[out], price)
+        if exit_min is None or exit_min > shares + 1e-9:
+            item["status"] = "exit_minimum_changed"
+            continue
         exit_fee = fee(xrow, price, shares)
         if exit_fee is None:
             item["status"] = "exit_fee_unknown"
@@ -379,7 +398,9 @@ def replay(decisions, model, threshold, initial_cash=10., latency_ms=1000,
                "attempts": len(attempts), "proxy_entries": len(entered), "closed_proxy_cycles": len(closed),
                "actual_fills": 0, "unresolved_positions": len(entered) - len(closed),
                "statuses": dict(Counter(a["status"] for a in attempts)), "decision_blocks": dict(blocks),
-               "utc_day_pnl_lower_bound": dict(sorted(days.items())), "daily_mean_lower95": daily_lower,
+               "utc_day_pnl_lower_bound": dict(sorted(days.items())), "exposure_day_mean_lower95": daily_lower,
+               "observed_clock_span_ms": max(0, observation_end - max(begin_ms, times[0] if times else 0)),
+               "continuous_calendar_coverage_established": False,
                "cash_target_reached_in_replay": cash >= 1000, "live_enabled": False,
                "cash_release_assumption_ms": cash_delay_ms, "maker_rebates_credited": 0}
     return {"summary": summary, "attempts": attempts, "cash_ledger": ledger}
@@ -415,8 +436,9 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None):
         raise ValueError("row budget exceeded; stratify whole source archives before loading")
     policy = QualityPolicy()
     dataset = build_quality_dataset(raw_rows, policy, required_features=())
+    mark_evaluation_scope(dataset, provenance)
     decisions = dataset["decisions"]
-    starts = sorted({d["window_start_ms"] for d in decisions})
+    starts = sorted({d["window_start_ms"] for d in decisions if d["window_start_ms"] is not None})
     if len(starts) < 10:
         raise ValueError("insufficient distinct market windows")
     provenance_hash = digest(provenance)
@@ -424,6 +446,7 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None):
     result = {"version": VERSION, "research_only": True, "live_enabled": False,
               "source_provenance": provenance, "source_hash": provenance_hash,
               "quality_policy": asdict(policy), "quality_funnel": dataset["funnel"],
+              "evaluation_scope": dataset["evaluation_scope"],
               "observed_first_ms": min(d["sample_ms"] for d in decisions),
               "observed_last_ms": max(d["sample_ms"] for d in decisions),
               "independent_market_windows": len(starts), "generated_ms": now_ms,
@@ -433,8 +456,14 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None):
         expected = frozen.pop("sha256")
         if digest(frozen) != expected or frozen.get("version") != VERSION:
             raise ValueError("frozen model integrity mismatch")
+        if frozen.get("protocol_sha256") != digest(protocol_contract()):
+            raise ValueError("frozen model protocol or implementation changed")
+        if initial_cash != frozen.get("initial_cash"):
+            raise ValueError("frozen initial cash changed")
         begin = frozen["forward_min_window_start_ms"]
-        result.update(sample_role="prospective_after_frozen_boundary", frozen_model_sha256=expected)
+        result.update(sample_role="prospective_after_frozen_boundary", frozen_model_sha256=expected,
+                      forward_episode_id=expected, cumulative_across_runs=False,
+                      evaluation_semantics="replay_of_one_frozen_episode; do_not_add_repeated_runs")
         result["forward"] = replay(decisions, frozen["model"], frozen["threshold"], initial_cash,
                                    begin_ms=begin)
         result["forward_stress"] = replay(decisions, frozen["model"], frozen["threshold"], initial_cash,
@@ -478,6 +507,7 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None):
                   "consumed_through_ms": result["observed_last_ms"],
                   "forward_min_window_start_ms": (max(now_ms, result["observed_last_ms"]) // 300_000 + 1) * 300_000,
                   "initial_cash": initial_cash, "live_enabled": False}
+        frozen["protocol_sha256"] = digest(protocol_contract())
         frozen["sha256"] = digest(frozen)
         result["frozen_model_sha256"] = frozen["sha256"]
     result["complete_set_diagnostic"] = complete_set_diagnostic(decisions, initial_cash)
