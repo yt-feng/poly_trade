@@ -1,14 +1,36 @@
 name: canary-readiness-research
 on:
   workflow_dispatch:
-  pull_request:
-    paths: ['.github/workflows/canary-research.yml']
+    inputs:
+      recipient_json_b64:
+        description: 'Verified X25519 PUBLIC recipient JSON, base64 encoded'
+        type: string
+        required: true
+      recipient_id:
+        description: 'Independently verified public recipient SHA256'
+        type: string
+        required: true
+      max_releases:
+        type: string
+        default: '64'
+      max_snapshot_archives:
+        type: string
+        default: '96'
+      max_bytes:
+        type: string
+        default: '1073741824'
+      initial_cash:
+        type: string
+        default: '10'
 permissions:
   contents: read
 jobs:
-  publication-hold:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: Report publication hold without evaluating or exposing research
-        run: echo 'PLAINTEXT_PUBLICATION_RETIRED. Public acquisition remains separate. Use a reviewed sealed-output path; no empirical evaluation ran.'
+  sealed-quality-first-research:
+    uses: ./.github/workflows/quality-first-research.yml
+    with:
+      recipient_json_b64: ${{ inputs.recipient_json_b64 }}
+      recipient_id: ${{ inputs.recipient_id }}
+      max_releases: ${{ inputs.max_releases }}
+      max_snapshot_archives: ${{ inputs.max_snapshot_archives }}
+      max_bytes: ${{ inputs.max_bytes }}
+      initial_cash: ${{ inputs.initial_cash }}

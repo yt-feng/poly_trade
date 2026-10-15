@@ -1,0 +1,127 @@
+name: quality-first-research
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/quality-first-research.yml'
+      - 'tools/run_quality_first_research.py'
+      - 'analysis/quality_first_*.py'
+      - 'tests/test_quality_first*.py'
+  workflow_dispatch:
+    inputs:
+      recipient_json_b64:
+        description: 'Base64 of an existing X25519 PUBLIC recipient JSON; never a private key'
+        type: string
+        required: true
+      recipient_id:
+        description: 'Independently checked public recipient SHA256 fingerprint'
+        type: string
+        required: true
+      max_releases:
+        description: 'Recent release discovery cap (16 to 96); complete shards sampled across UTC dates'
+        type: string
+        default: '64'
+      max_snapshot_archives:
+        description: 'Complete snapshot shard cap (8 to 512); equal per-day byte quotas'
+        type: string
+        default: '96'
+      max_bytes:
+        description: 'Download byte budget (64 MiB to 2 GiB)'
+        type: string
+        default: '1073741824'
+      initial_cash:
+        description: 'Research-only initial cash, USD (no funding or orders)'
+        type: string
+        default: '10'
+  workflow_call:
+    inputs:
+      recipient_json_b64:
+        type: string
+        required: true
+      recipient_id:
+        type: string
+        required: true
+      max_releases:
+        type: string
+        default: '64'
+      max_snapshot_archives:
+        type: string
+        default: '96'
+      max_bytes:
+        type: string
+        default: '1073741824'
+      initial_cash:
+        type: string
+        default: '10'
+permissions:
+  contents: read
+concurrency:
+  group: quality-first-research-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-vault.txt
+      - name: Synthetic research, selection and sealed-delivery contracts
+        run: python -m unittest discover -s tests -p 'test_quality_first*.py' -v
+  research:
+    if: github.event_name == 'workflow_dispatch'
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-vault.txt
+      - name: Restore only previously verified PUBLIC archive bytes
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/quality-first-public-archives
+          key: quality-first-public-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: quality-first-public-v1-${{ runner.os }}-
+      - name: Date-stratified public acquisition and sealed research
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_JSON_B64: ${{ inputs.recipient_json_b64 }}
+          RESEARCH_RECIPIENT_ID: ${{ inputs.recipient_id }}
+          MAX_RELEASES: ${{ inputs.max_releases }}
+          MAX_SNAPSHOT_ARCHIVES: ${{ inputs.max_snapshot_archives }}
+          MAX_BYTES: ${{ inputs.max_bytes }}
+          INITIAL_CASH: ${{ inputs.initial_cash }}
+        run: |
+          ulimit -v 3145728
+          python -u tools/run_quality_first_research.py \
+            --cache .cache/quality-first-public-archives \
+            --max-releases "$MAX_RELEASES" \
+            --max-snapshot-archives "$MAX_SNAPSHOT_ARCHIVES" \
+            --max-bytes "$MAX_BYTES" \
+            --initial-cash "$INITIAL_CASH" \
+            --output sealed-delivery
+      - name: Save only PUBLIC archive bytes for checksum-verified reuse
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/quality-first-public-archives
+          key: quality-first-public-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Deliver ciphertext and generic operational status only
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-first-sealed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            sealed-delivery/*.vault
+            sealed-delivery/status.json
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
