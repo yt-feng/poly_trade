@@ -5,11 +5,11 @@ on:
       recipient_json_b64:
         description: 'Verified X25519 PUBLIC recipient JSON, base64 encoded'
         type: string
-        required: true
+        required: false
       recipient_id:
         description: 'Independently verified public recipient SHA256'
         type: string
-        required: true
+        required: false
       max_releases:
         type: string
         default: '64'

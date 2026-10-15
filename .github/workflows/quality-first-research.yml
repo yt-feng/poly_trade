@@ -11,11 +11,11 @@ on:
       recipient_json_b64:
         description: 'Base64 of an existing X25519 PUBLIC recipient JSON; never a private key'
         type: string
-        required: true
+        required: false
       recipient_id:
         description: 'Independently checked public recipient SHA256 fingerprint'
         type: string
-        required: true
+        required: false
       max_releases:
         description: 'Recent release discovery cap (16 to 96); complete shards sampled across UTC dates'
         type: string
@@ -36,10 +36,10 @@ on:
     inputs:
       recipient_json_b64:
         type: string
-        required: true
+        required: false
       recipient_id:
         type: string
-        required: true
+        required: false
       max_releases:
         type: string
         default: '64'
@@ -93,8 +93,8 @@ jobs:
       - name: Date-stratified public acquisition and sealed research
         env:
           GH_TOKEN: ${{ github.token }}
-          RESEARCH_RECIPIENT_JSON_B64: ${{ inputs.recipient_json_b64 }}
-          RESEARCH_RECIPIENT_ID: ${{ inputs.recipient_id }}
+          RESEARCH_RECIPIENT_JSON_B64: ${{ inputs.recipient_json_b64 || vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          RESEARCH_RECIPIENT_ID: ${{ inputs.recipient_id || vars.QUALITY_FIRST_RECIPIENT_ID }}
           MAX_RELEASES: ${{ inputs.max_releases }}
           MAX_SNAPSHOT_ARCHIVES: ${{ inputs.max_snapshot_archives }}
           MAX_BYTES: ${{ inputs.max_bytes }}

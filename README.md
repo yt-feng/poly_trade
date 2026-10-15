@@ -4,8 +4,9 @@ Research and execution-planning tools for BTC Up/Down five-minute Polymarket mar
 
 ## Current research path
 
-Run **canary-readiness-research** in GitHub Actions with a verified X25519 public
-recipient JSON (base64) and its independently checked fingerprint. It calls the
+Run **canary-readiness-research** in GitHub Actions. It uses the repository's
+verified public-recipient variables, or an explicitly supplied X25519 public
+recipient JSON (base64) and independently checked fingerprint. It calls the
 **quality-first-research** workflow. The default research cash account is USD 10.
 No account credentials or order API are used by this workflow.
 

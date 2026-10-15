@@ -63,7 +63,9 @@ needed to reach it in an account. No test pass enables a live canary.
 ## Sealed delivery and frozen evaluation
 
 Provide an existing X25519 public recipient JSON as base64 and its independently
-verified fingerprint. The private identity stays with the recipient. Invalid
+verified fingerprint, or use the configured `QUALITY_FIRST_RECIPIENT_JSON_B64`
+and `QUALITY_FIRST_RECIPIENT_ID` repository variables. Those variables contain
+public encryption material only. The private identity stays with the recipient. Invalid
 recipient input fails before acquisition; sealing failure never falls back to
 plaintext. Public logs and artifacts contain only generic operational status and
 encrypted parts. The analysis subprocess does not inherit the GitHub token.
