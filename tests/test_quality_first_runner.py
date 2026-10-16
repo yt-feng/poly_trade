@@ -16,12 +16,24 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import run_quality_first_research as runner
 import research_vault
+import quality_first_research as research
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 
 def item(day, hour, size=10, prefix='snapshots'):
     return {'tag': 'capture-v2-1-1', 'name': f'{prefix}-{day}-{hour:02d}0000.jsonl.gz',
             'bytes': size, 'selected': False, 'pre_error': None}
+
+
+def timestamp(iso):
+    return int(runner.datetime.fromisoformat(iso).timestamp() * 1000)
+
+
+def challenger_fixture():
+    cutoff = timestamp('2026-10-15T11:55:00+00:00')
+    return research.research_challenger_payload(
+        {'family': 'spot_residual', 'fit_cutoff_ms': cutoff}, 'synthetic-source', cutoff,
+        10, timestamp('2026-10-15T12:03:00+00:00'))
 
 
 class QualityFirstRunnerTests(unittest.TestCase):
@@ -50,6 +62,70 @@ class QualityFirstRunnerTests(unittest.TestCase):
         self.assertEqual(plan['research_selection']['selected_snapshot_archives_by_day'], {'2026-10-01': 8, '2026-10-02': 0})
         self.assertEqual(sum(i['bytes'] for i in items if i['selected']), 96)
         self.assertEqual(len([i for i in items if i['selected']]), 16)
+
+    def test_frozen_episode_gets_two_days_192_complete_shards_in_same_byte_budget(self):
+        bounds = runner.frozen_episode_bounds(challenger_fixture(), 10)
+        def source():
+            items = [item(f'2026-10-{day:02d}', index, 4 * 1024**2)
+                     for day in range(5, 17) for index in range(96)]
+            items += [item(f'2026-10-{day:02d}', index, 1024, 'labels')
+                      for day in range(5, 17) for index in range(96)]
+            return {'items': items, 'max_bytes': 1024**3}
+        plan = runner.stratify_plan(source(), 192, bounds)
+        stats = plan['research_selection']
+        self.assertEqual(stats['selection'], 'frozen_episode_utc_days')
+        self.assertEqual(stats['selected_snapshot_archives_by_day'], {'2026-10-15': 96, '2026-10-16': 96})
+        self.assertEqual(stats['per_day_byte_quota'], 512 * 1024**2)
+        self.assertEqual(len(stats['eligible_source_utc_days']), 12)
+        self.assertEqual(stats['missing_utc_days'], [])
+        self.assertTrue(stats['partial_coverage'])
+        chosen = [entry for entry in plan['items'] if entry['selected']]
+        self.assertEqual(len(chosen), 384)  # Snapshot and paired label are indivisible.
+        self.assertEqual(plan['reserved_bytes'], 192 * (4 * 1024**2 + 1024))
+        self.assertLessEqual(plan['reserved_bytes'], plan['max_bytes'])
+        self.assertTrue(all('2026-10-15' in entry['name'] or '2026-10-16' in entry['name'] for entry in chosen))
+        # Discovery retains the original 96-shard spread across all 12 days.
+        discovery = runner.stratify_plan(source())['research_selection']
+        self.assertEqual(set(discovery['selected_snapshot_archives_by_day'].values()), {8})
+        self.assertEqual(discovery['observation_scope'], 'retrospective_recent_public_archives')
+        self.assertNotIn('selection', discovery)
+        # Explicit smaller caller limits are never enlarged by frozen mode.
+        limited = runner.stratify_plan(source(), 8, bounds)['research_selection']
+        self.assertEqual(limited['selected_snapshot_archives_by_day'], {'2026-10-15': 4, '2026-10-16': 4})
+
+    def test_frozen_episode_midnight_end_excludes_next_day_and_missing_day_keeps_quota(self):
+        begin = timestamp('2026-10-15T00:00:00+00:00')
+        end = timestamp('2026-10-16T00:00:00+00:00')
+        self.assertEqual(runner.frozen_episode_utc_days((begin, end)), ['2026-10-15'])
+        plan = runner.stratify_plan({'items': [item('2026-10-15', i) for i in range(8)]
+                                   + [item('2026-10-16', i) for i in range(8)], 'max_bytes': 160}, 16, (begin, end))
+        self.assertEqual(plan['research_selection']['available_utc_days'], ['2026-10-15'])
+        bounds = runner.frozen_episode_bounds(challenger_fixture(), 10)
+        partial = runner.stratify_plan({'items': [item('2026-10-15', i) for i in range(16)],
+                                       'max_bytes': 160}, 16, bounds)['research_selection']
+        self.assertEqual(partial['per_day_byte_quota'], 80)
+        self.assertEqual(partial['selected_snapshot_archives_by_day'], {'2026-10-15': 8, '2026-10-16': 0})
+        self.assertEqual(partial['missing_utc_days'], ['2026-10-16'])
+
+    def test_frozen_scope_requires_existing_engine_integrity_protocol_cash_and_24h_contract(self):
+        frozen = challenger_fixture()
+        self.assertEqual(runner.frozen_episode_bounds(frozen, 10),
+                         (frozen['forward_min_window_start_ms'], frozen['forward_max_window_end_ms']))
+        self.assertIn('sha256', frozen)  # Input identity is not mutated.
+        with self.assertRaisesRegex(ValueError, 'INTEGRITY'):
+            runner.frozen_episode_bounds(dict(frozen, sha256='0' * 64), 10)
+        with self.assertRaisesRegex(ValueError, 'CASH'):
+            runner.frozen_episode_bounds(frozen, 11)
+        for field, value, reason in [('protocol_sha256', '0' * 64, 'PROTOCOL'),
+                                      ('forward_max_window_end_ms', frozen['forward_max_window_end_ms'] + 1000, 'bounds')]:
+            changed = dict(frozen)
+            changed.pop('sha256'); changed.pop('episode_id')
+            changed[field] = value
+            changed['episode_id'] = research.digest(changed)
+            changed['sha256'] = research.digest(changed)
+            with self.assertRaisesRegex(ValueError, reason):
+                runner.frozen_episode_bounds(changed, 10)
+        self.assertIsNone(runner.frozen_episode_bounds({'kind': None}, 10))
 
     def test_only_unselected_source_errors_move_to_retained_exclusion_provenance(self):
         good, bad = item('2026-10-01', 0), item('2026-10-01', 1)
@@ -146,6 +222,37 @@ class QualityFirstRunnerTests(unittest.TestCase):
             payload = json.loads(research_vault.unseal(envelope, self.private))
             with tarfile.open(fileobj=io.BytesIO(base64.b64decode(payload['payload_base64'])), mode='r:gz') as archive:
                 self.assertIn(marker, archive.extractfile('diagnostics.txt').read().decode())
+
+    def test_no_episode_source_dates_fail_sealed_without_historical_fallback_or_research(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            frozen = root / 'frozen.json'
+            frozen.write_text(json.dumps(challenger_fixture()))
+            output = root / 'delivery'
+            args = argparse.Namespace(recipient_json_b64=base64.b64encode(research_vault.canonical(self.recipient)).decode(),
+                recipient_id=self.rid, output=str(output), cache=None, max_releases=64, max_bytes=1024**3,
+                max_snapshot_archives=192, initial_cash=10, timeout_seconds=10, frozen_model=frozen)
+            public = io.StringIO()
+            with patch.object(runner.forward_acquire, '_plan', return_value={
+                    'items': [item('2026-10-14', 0)], 'max_bytes': 1024**3}), \
+                 patch.object(runner.forward_acquire, 'request') as download, \
+                 patch.object(runner.subprocess, 'run') as child, contextlib.redirect_stdout(public):
+                self.assertEqual(runner.run(args), 2)
+            child.assert_not_called()
+            download.assert_not_called()
+            status = json.loads((output / 'status.json').read_text())
+            self.assertEqual(status['failed_stage'], 'acquisition')
+            self.assertFalse(status['strategy_evaluated'])
+            self.assertNotIn('2026-10', public.getvalue())
+            self.assertNotIn('AWAITING', public.getvalue())
+            payload = json.loads(research_vault.unseal(next(output.glob('*.vault')).read_bytes(), self.private))
+            with tarfile.open(fileobj=io.BytesIO(base64.b64decode(payload['payload_base64'])), mode='r:gz') as archive:
+                self.assertIn('AWAITING_FROZEN_EPISODE_SOURCE_DATES', archive.extractfile('diagnostics.txt').read().decode())
+                metadata = json.load(archive.extractfile('run.json'))
+                self.assertEqual(metadata['requested_utc_days'], ['2026-10-15', '2026-10-16'])
+                self.assertEqual(metadata['budgets']['max_snapshot_archives'], 192)
+                self.assertTrue(metadata['partial_coverage'])
+                self.assertNotIn('results/research.json', archive.getnames())
 
     def test_frozen_model_is_forwarded_privately_and_child_has_no_github_token(self):
         with tempfile.TemporaryDirectory() as directory:
