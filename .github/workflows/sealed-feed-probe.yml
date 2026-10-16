@@ -5,14 +5,22 @@ on:
       - '.github/workflows/sealed-feed-probe.yml'
       - '.github/workflows/sealed-journal-persist.yml'
       - 'tools/run_public_feed_probe.py'
+      - 'tools/public_market_constraints.py'
       - 'tools/sealed_public_feed.py'
       - 'tools/research_vault.py'
       - 'tools/run_quality_first_research.py'
       - 'tools/*quality_first_journal.py'
       - 'tests/test_public_feed_probe.py'
+      - 'tests/test_public_market_constraints.py'
       - 'tests/test_sealed_public_feed.py'
       - 'requirements-vault.txt'
   workflow_dispatch:
+    inputs:
+      probe_mode:
+        description: 'Fixed public availability or current BTC5m market constraint evidence'
+        type: choice
+        options: [availability, market-constraints]
+        default: availability
 permissions:
   contents: read
 concurrency:
@@ -33,6 +41,7 @@ jobs:
       - name: Synthetic feed, probe and sealed delivery contracts
         run: |
           python -m unittest discover -s tests -p 'test_public_feed_probe.py' -v
+          python -m unittest discover -s tests -p 'test_public_market_constraints.py' -v
           python -m unittest discover -s tests -p 'test_sealed_public_feed.py' -v
           python -m unittest discover -s tests -p 'test_persist_quality_first_journal.py' -v
   probe:
@@ -52,7 +61,8 @@ jobs:
         env:
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
-        run: python -u tools/run_public_feed_probe.py --output sealed-delivery
+          PROBE_MODE: ${{ inputs.probe_mode }}
+        run: python -u tools/run_public_feed_probe.py --output sealed-delivery --mode "$PROBE_MODE"
       - name: Deliver ciphertext and generic operational status only
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

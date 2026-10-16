@@ -46,7 +46,7 @@ class PublicFeedProbeTests(unittest.TestCase):
         with tarfile.open(fileobj=io.BytesIO(bundle), mode='r:gz') as archive:
             return {member.name: archive.extractfile(member).read() for member in archive.getmembers()}
 
-    def run_probe(self, fetcher, collect=None):
+    def run_probe(self, fetcher, collect=None, mode='availability'):
         with tempfile.TemporaryDirectory() as temporary, \
              patch.dict(os.environ, self.environment), patch.object(probe, 'public_get', side_effect=fetcher) as http:
             output = Path(temporary) / 'delivery'
@@ -54,9 +54,9 @@ class PublicFeedProbeTests(unittest.TestCase):
             with contextlib.redirect_stdout(public), contextlib.redirect_stderr(public):
                 if collect:
                     with patch.object(probe.sealed_public_feed, 'collect', side_effect=collect):
-                        code = probe.run(argparse.Namespace(output=output))
+                        code = probe.run(argparse.Namespace(output=output, mode=mode))
                 else:
-                    code = probe.run(argparse.Namespace(output=output))
+                    code = probe.run(argparse.Namespace(output=output, mode=mode))
             status = json.loads((output / 'status.json').read_text())
             inspected = journal.inspect_delivery(output, self.recipient_id)
             self.assertEqual(inspected['status'], status)
@@ -249,13 +249,121 @@ class PublicFeedProbeTests(unittest.TestCase):
         self.assertIn('needs: contract', workflow)
         self.assertIn('test_public_feed_probe.py', workflow)
         self.assertNotIn('schedule:', workflow)
-        self.assertNotIn('inputs:', workflow)
+        self.assertIn('probe_mode:', workflow)
+        self.assertIn('options: [availability, market-constraints]', workflow)
+        self.assertIn('default: availability', workflow)
+        self.assertNotIn('recipient_json_b64:', workflow)
+        self.assertNotIn('wallet:', workflow)
         self.assertNotIn('secrets.', workflow)
         self.assertNotIn('GH_TOKEN:', workflow)
         self.assertIn('vars.QUALITY_FIRST_RECIPIENT_JSON_B64', workflow)
         self.assertIn('quality-first-sealed-${{ github.run_id }}-${{ github.run_attempt }}', workflow)
         self.assertIn('quality-first-research, sealed-feed-probe]', publisher)
         self.assertIn('quality-first-sealed-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}', publisher)
+
+    def test_market_constraints_mode_is_bounded_and_seals_identity_bound_real_schema_fields(self):
+        from test_public_market_constraints import START, SLUG, CONDITION, TOKENS, trade, gamma, clob, book
+        responses = iter([(200, b'{"data":null}'), (200, page(more=True, cursor='next')),
+                          (200, page([trade()])), (200, json.dumps(gamma()).encode()),
+                          (200, json.dumps(clob()).encode()), (200, json.dumps(book()).encode()),
+                          (200, json.dumps(book(TOKENS[1])).encode()), (200, b'{"data":null}')])
+        with patch.object(probe.time, 'time_ns', return_value=(START + 20_000) * 1_000_000):
+            code, status, members, public, calls = self.run_probe(lambda *args: next(responses), mode='market-constraints')
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 8)
+        self.assertEqual([call.args[0] for call in calls],
+                         ['/v2/status', '/v2/trades', '/v2/trades', '/markets/slug/' + SLUG,
+                          '/clob-markets/' + CONDITION, '/book', '/book', '/v2/status'])
+        self.assertEqual([call.args[1] for call in calls[5:7]], [{'token_id': token} for token in TOKENS])
+        result = json.loads(members['results/market-constraints.json'])
+        self.assertEqual(result['selection']['status'], 'selected')
+        self.assertEqual(result['identity_conflicts'], [])
+        self.assertFalse(result['minimum_notional_verified'])
+        self.assertFalse(result['order_acceptance_observed'])
+        self.assertEqual(result['books']['Up']['minimum_order_size']['unit'], 'shares')
+        self.assertEqual(result['gamma']['binding']['token_field'], 'positionIds')
+        self.assertEqual(result['gamma']['order_min_size']['documented_unit'], 'USDC notional')
+        self.assertTrue(result['gamma']['order_min_size']['documented_unit_unresolved'])
+        observations = json.loads(members['results/http-observations.json'])['records']
+        self.assertEqual([row['host'] for row in observations],
+                         [probe.HOST] * 3 + [probe.GAMMA_HOST] + [probe.CLOB_HOST] * 3 + [probe.HOST])
+        self.assertFalse(status['strategy_evaluated'])
+        self.assertNotIn(SLUG, public)
+        self.assertNotIn(CONDITION, public)
+
+    def test_no_current_market_or_unknown_version_has_no_fallback_requests(self):
+        from test_public_market_constraints import START, trade, gamma
+        for current in (False, True):
+            responses = [(200, b'{"data":null}'), (200, page([trade()] if current else []))]
+            if current:
+                responses.append((200, json.dumps(gamma(version=None)).encode()))
+            responses.append((200, b'{"data":null}'))
+            with self.subTest(current=current), patch.object(probe.time, 'time_ns', return_value=(START + 20_000) * 1_000_000):
+                iterator = iter(responses)
+                code, _, members, _, calls = self.run_probe(lambda *args: next(iterator), mode='market-constraints')
+            self.assertEqual(code, 0)
+            self.assertEqual(len(calls), 4 if current else 3)
+            self.assertFalse(any(call.args[0].startswith('/clob-markets/') or call.args[0] == '/book' for call in calls))
+            result = json.loads(members['results/market-constraints.json'])
+            self.assertFalse(result['order_acceptance_observed'])
+            if current:
+                self.assertEqual(result['stopped_reason'], 'market_identity_or_source_unverified')
+            else:
+                self.assertEqual(result['selection']['status'], 'no_current_btc5m_in_observed_prefix')
+
+    def test_crossing_window_during_after_status_marks_constraints_historical(self):
+        from test_public_market_constraints import START, TOKENS, trade, gamma, clob, book
+        now = [START + 20_000]
+        responses = iter([(200, b'{"data":null}'), (200, page([trade()])),
+                          (200, json.dumps(gamma()).encode()), (200, json.dumps(clob()).encode()),
+                          (200, json.dumps(book()).encode()), (200, json.dumps(book(TOKENS[1])).encode()),
+                          (200, b'{"data":null}')])
+        count = 0
+        def fetch(*args):
+            nonlocal count
+            count += 1
+            if count == 7:
+                now[0] = START + 300_000
+            return next(responses)
+        with patch.object(probe.time, 'time_ns', side_effect=lambda: now[0] * 1_000_000):
+            code, _, members, _, _ = self.run_probe(fetch, mode='market-constraints')
+        self.assertEqual(code, 0)
+        result = json.loads(members['results/market-constraints.json'])
+        self.assertEqual(result['interpretation'], 'historical_evidence_only')
+        self.assertFalse(result['current_execution_constraints_certified'])
+
+    def test_static_three_host_routes_reject_injected_urls_and_availability_cannot_expand(self):
+        from test_public_market_constraints import SLUG, CONDITION, TOKENS
+        for endpoint, filters, host in [('/markets/slug/' + SLUG, {}, probe.GAMMA_HOST),
+                                         ('/clob-markets/' + CONDITION, {}, probe.CLOB_HOST),
+                                         ('/book', {'token_id': TOKENS[0]}, probe.CLOB_HOST)]:
+            self.assertEqual(probe.validate_http_request(endpoint, filters), host)
+            with self.assertRaisesRegex(ValueError, 'ENDPOINT_OUTSIDE_PROBE_MODE'):
+                probe.HTTPRecorder(fetcher=lambda *args: (200, b'{}'))(endpoint, filters)
+        for endpoint, filters in [('https://evil.invalid/v2/status', {}),
+                                 ('/markets/slug/' + SLUG + '/orders', {}),
+                                 ('/clob-markets/' + CONDITION + '?user=x', {}),
+                                 ('/book', {'token_id': TOKENS[0], 'user': 'x'})]:
+            with self.subTest(endpoint=endpoint), self.assertRaises(ValueError):
+                probe.validate_http_request(endpoint, filters)
+
+    def test_unknown_mode_is_rejected_before_recipient_or_network(self):
+        with patch.dict(os.environ, self.environment), patch.object(probe, 'public_get') as fetch:
+            with self.assertRaisesRegex(ValueError, 'UNKNOWN_PROBE_MODE'):
+                probe.run(argparse.Namespace(output='unused', mode='wallet-orders'))
+            fetch.assert_not_called()
+
+    def test_unverified_feed_clock_stops_before_any_market_request(self):
+        from test_public_market_constraints import START, trade_record
+        source = trade_record()
+        source.update(request_started_ms=START + 59_000, received_ms=START + 60_000, finished_ms=START + 61_000)
+        fetch = MagicMock()
+        recorder = probe.HTTPRecorder(fetcher=fetch, clock=lambda: START + 20_000, mode='market-constraints')
+        recorder.records.append(source)
+        result = probe.observe_market_constraints(recorder)
+        fetch.assert_not_called()
+        self.assertEqual(result['selection']['status'], 'receipt_clock_order_unverified')
+        self.assertEqual(result['interpretation'], 'receipt_clock_order_unverified')
 
 
 if __name__ == '__main__':
