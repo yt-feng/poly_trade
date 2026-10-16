@@ -2,6 +2,11 @@ name: canary-readiness-research
 on:
   workflow_dispatch:
     inputs:
+      research_mode:
+        description: 'Discovery, research-only challenger export, or frozen paper episode'
+        type: choice
+        options: [discovery, challenger, forward]
+        default: discovery
       recipient_json_b64:
         description: 'Verified X25519 PUBLIC recipient JSON, base64 encoded'
         type: string
@@ -27,7 +32,10 @@ permissions:
 jobs:
   sealed-quality-first-research:
     uses: ./.github/workflows/quality-first-research.yml
+    secrets:
+      QUALITY_FIRST_FROZEN_INPUT_B64: ${{ secrets.QUALITY_FIRST_FROZEN_INPUT_B64 }}
     with:
+      research_mode: ${{ inputs.research_mode }}
       recipient_json_b64: ${{ inputs.recipient_json_b64 }}
       recipient_id: ${{ inputs.recipient_id }}
       max_releases: ${{ inputs.max_releases }}

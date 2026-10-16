@@ -8,6 +8,7 @@ from research_vault import inspect_envelope
 
 
 def allowed_new_path(path):
+    original = path
     path = path.replace('\\', '/')
     p = PurePosixPath(path)
     if '..' in p.parts or p.is_absolute():
@@ -24,6 +25,8 @@ def allowed_new_path(path):
         return False
     if lower.startswith('research_vault/entries/') and not lower.endswith('.vault'):
         return False
+    if lower.startswith('research_vault/episodes/'):
+        return original == path and bool(re.fullmatch(r'research_vault/episodes/[0-9a-f]{64}/(?:part-[0-9]{4}\.vault|status\.json)', path))
     return True
 
 
@@ -34,6 +37,15 @@ def audit_paths(paths, root='.'):
             problems.append('PRIVATE_OR_PLAINTEXT_PATH')
             continue
         path = Path(root) / name
+        if str(name).startswith('research_vault/episodes/') and path.name == 'status.json':
+            try:
+                # Lazy import preserves tooling-only checks without reading a
+                # journal. Actual status publication requires its strict schema.
+                from persist_quality_first_journal import MAX_STATUS_BYTES, read_regular, validate_status
+                from research_vault import load_json_bytes
+                validate_status(load_json_bytes(read_regular(path, MAX_STATUS_BYTES), MAX_STATUS_BYTES))
+            except Exception:
+                problems.append('INVALID_EPISODE_STATUS')
         if path.exists() and str(name).endswith('.vault'):
             try:
                 if path.stat().st_size > 24 * 1024 * 1024:
