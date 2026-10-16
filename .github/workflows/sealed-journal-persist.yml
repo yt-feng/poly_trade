@@ -1,7 +1,7 @@
 name: sealed-journal-persist
 on:
   workflow_run:
-    workflows: [canary-readiness-research, quality-first-research, sealed-feed-probe]
+    workflows: [sealed-source-coverage, canary-readiness-research, quality-first-research, sealed-feed-probe]
     types: [completed]
     branches: [main]
 permissions:
