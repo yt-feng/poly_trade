@@ -17,7 +17,8 @@ from pathlib import Path
 import random
 import statistics
 
-from quality_first_data import QualityPolicy, build_quality_dataset, load_verified_snapshots, mark_evaluation_scope
+from quality_first_data import (QualityPolicy, build_quality_dataset, load_verified_snapshots,
+                                mark_evaluation_scope, summarize_quality_decisions)
 
 VERSION = 1
 HOLD_MS = 30_000
@@ -771,12 +772,26 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None, research_c
                                  and begin <= decision["window_start_ms"]
                                  and decision["window_start_ms"] + 300_000 <= end
                                  and begin <= decision["sample_ms"] < end]
+            # Keep the source-wide audit separate from the episode being replayed.
+            # Features retain their causal pre-episode history; only aggregates
+            # and retrospective training annotations are scoped here.
+            result["input_summary"] = {key: result[key] for key in (
+                "quality_funnel", "evaluation_scope", "observed_first_ms",
+                "observed_last_ms", "independent_market_windows")}
+            episode_dataset = summarize_quality_decisions(
+                [dict(d) for d in episode_decisions], policy, required_features=())
+            mark_evaluation_scope(episode_dataset, provenance)
+            result.update(quality_funnel=episode_dataset["funnel"],
+                          evaluation_scope=episode_dataset["evaluation_scope"],
+                          independent_market_windows=len({d["window_start_ms"] for d in episode_decisions}),
+                          observed_first_ms=min((d["sample_ms"] for d in episode_decisions), default=None),
+                          observed_last_ms=max((d["sample_ms"] for d in episode_decisions), default=None))
             diagnostic_decisions = episode_decisions
             result.update(sample_role="prospective_research_challenger", research_challenger=RESEARCH_CHALLENGER,
                           research_challenger_origin=frozen["origin"], promotion_eligible=False,
                           forward_min_window_start_ms=begin, forward_max_window_end_ms=end,
                           new_episode_observation_count=len(episode_decisions),
-                          evaluation_status=("awaiting_new_data" if result["observed_last_ms"] is None or result["observed_last_ms"] < begin else
+                          evaluation_status=("awaiting_new_data" if result["input_summary"]["observed_last_ms"] is None or result["input_summary"]["observed_last_ms"] < begin else
                                              "bounded_episode_replay" if episode_decisions else "no_observations_within_episode"),
                           episode_window_closed=now_ms >= end,
                           input_reaches_episode_end=result["observed_last_ms"] is not None and result["observed_last_ms"] >= end - 1000)

@@ -600,6 +600,84 @@ class ResearchChallengerTests(unittest.TestCase):
             for call in replay.call_args_list + [complete.call_args]:
                 self.assertEqual([row["sample_ms"] for row in call.args[0]], [begin])
 
+    def test_episode_statistics_exclude_outside_rows_and_end_is_half_open(self):
+        challenger = research.research_challenger_payload(self.model(), "source", 4_000_000, 10., 5_000_000)
+        begin, end = challenger["forward_min_window_start_ms"], challenger["forward_max_window_end_ms"]
+        cases = [
+            ([raw_row(0, 0)], [], "awaiting_new_data", False),
+            ([raw_row(end, 0)], [], "no_observations_within_episode", False),
+            ([raw_row(0, 0), raw_row(end, 0)], [], "no_observations_within_episode", False),
+            ([raw_row(begin, 0), raw_row(end, 0)], [begin], "bounded_episode_replay", False),
+            ([raw_row(0, 0), raw_row(begin, 0), raw_row(begin + 300_000, 0), raw_row(end, 0)],
+             [begin, begin + 300_000], "bounded_episode_replay", False),
+            ([raw_row(begin, -1), raw_row(begin, 0), raw_row(end - 300_000, 299_999), raw_row(end, 0)],
+             [begin, end - 1], "bounded_episode_replay", True),
+            ([raw_row(end - 300_000, 299_000)], [end - 1000], "bounded_episode_replay", True),
+            ([raw_row(end - 300_000, 298_999), raw_row(end, 0)],
+             [end - 1001], "bounded_episode_replay", False),
+        ]
+        for rows, expected_times, status, reaches_end in cases:
+            with self.subTest(times=[r["sample_ms"] for r in rows]), tempfile.TemporaryDirectory() as directory, \
+                 patch.object(research, "load_verified_snapshots", return_value=(rows, synthetic_provenance(rows))), \
+                 patch.object(research, "replay", wraps=research.replay) as replay:
+                root = Path(directory)
+                source = root / "challenger.json"
+                source.write_text(json.dumps(challenger))
+                result = research.run(root / "input", root / "output", frozen_model=source)
+                self.assertEqual(result, json.loads((root / "output/research.json").read_text()))
+                self.assertEqual(result["evaluation_status"], status)
+                self.assertEqual(result["new_episode_observation_count"], len(expected_times))
+                self.assertEqual(result["quality_funnel"]["input_rows"], len(expected_times))
+                self.assertEqual(result["quality_funnel"]["input_windows"], len(expected_times))
+                self.assertEqual(result["independent_market_windows"], len(expected_times))
+                self.assertEqual(result["observed_first_ms"], min(expected_times, default=None))
+                self.assertEqual(result["observed_last_ms"], max(expected_times, default=None))
+                self.assertEqual(result["input_reaches_episode_end"], reaches_end)
+                for call in replay.call_args_list:
+                    self.assertEqual([d["sample_ms"] for d in call.args[0]], expected_times)
+                full = result["input_summary"]
+                self.assertEqual(full["quality_funnel"]["input_rows"], len(rows))
+                self.assertEqual(full["independent_market_windows"], len({r["window_start_ms"] for r in rows}))
+                self.assertEqual(full["observed_first_ms"], rows[0]["sample_ms"])
+                self.assertEqual(full["observed_last_ms"], rows[-1]["sample_ms"])
+                scope = result["evaluation_scope"]
+                self.assertEqual(scope["included_market_windows"] + scope["excluded_boundary_market_windows"], len(expected_times))
+
+    def test_episode_summary_preserves_causal_warmup_and_layer_counts(self):
+        challenger = research.research_challenger_payload(self.model(), "source", 4_000_000, 10., 5_000_000)
+        begin, end = challenger["forward_min_window_start_ms"], challenger["forward_max_window_end_ms"]
+        rows = [raw_row(begin - 300_000, offset) for offset in range(295_000, 300_000, 1000)]
+        rows += [raw_row(begin, offset) for offset in range(0, 100_000, 1000)]
+        rows[-1]["poly_valid"] = False
+        rows += [raw_row(end, 0)]
+        full_dataset = data.build_quality_dataset(rows, required_features=())
+        original = copy.deepcopy(full_dataset)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, "load_verified_snapshots", return_value=(rows, synthetic_provenance(rows))), \
+             patch.object(research, "build_quality_dataset", return_value=full_dataset), \
+             patch.object(research, "replay", wraps=research.replay) as replay:
+            root = Path(directory)
+            source = root / "challenger.json"
+            source.write_text(json.dumps(challenger))
+            result = research.run(root / "input", root / "output", frozen_model=source)
+        selected = replay.call_args.args[0]
+        self.assertEqual(len(selected), 100)
+        self.assertIsNotNone(selected[0]["features"]["spot_return_5s_bps"])
+        self.assertIsNone(selected[0]["features"]["up_mid_change_5s"])
+        self.assertEqual(selected[0]["features"], original["decisions"][5]["features"])
+        for before, after in zip(original["decisions"], full_dataset["decisions"]):
+            self.assertEqual(before["training_gold"], after["training_gold"])
+            self.assertEqual(before["features"], after["features"])
+        funnel = result["quality_funnel"]
+        self.assertEqual(funnel["input_rows"], 100)
+        self.assertEqual(funnel["decision_eligible_rows"], 99)
+        self.assertEqual(funnel["gold_training_rows"], 99)
+        self.assertEqual(funnel["gold_training_segments"], 1)
+        self.assertEqual(funnel["layer_accepted_rows"]["execution_quality"], 99)
+        self.assertEqual(funnel["layer_rejections"]["execution_quality"],
+                         {reason: 1 for reason in original["decisions"][-2]["quality"]["execution_quality"]["reasons"]})
+        self.assertEqual(result["input_summary"]["quality_funnel"], original["funnel"])
+
     def test_invalid_or_unbounded_episode_cannot_be_resigned_into_validity(self):
         original = research.research_challenger_payload(self.model(), "source", 4_000_000, 10., 5_000_000)
         cases = []
