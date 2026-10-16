@@ -25,6 +25,7 @@ RELEASE_RE = re.compile(r'capture-v2-\d+-\d+')
 NAME_RE = re.compile(r'(?:snapshots|labels)-[0-9-]+\.jsonl\.gz')
 RESPONSE_CAP = 64 * 1024 * 1024
 REFUSALS = frozenset((401, 403, 418, 429, 451))
+ASSET_DUPLICATE_RETRY_LIMIT = 3
 
 
 class TransportError(RuntimeError):
@@ -187,7 +188,7 @@ def list_capture_releases(max_releases):
     return releases[:max_releases]
 
 
-def list_release_assets(release_id):
+def _list_release_assets_once(release_id):
     assets = []
     for page in range(1, 31):
         batch = get_json(f'{API}/releases/{release_id}/assets?per_page=100&page={page}')
@@ -197,6 +198,25 @@ def list_release_assets(release_id):
         if len(batch) < 100:
             return assets
     raise ValueError('ASSET_PAGINATION_LIMIT')
+
+
+def list_release_assets(release_id):
+    """Read one release catalog, retrying only a transient duplicate-name view.
+
+    GitHub release assets can be published while a capture run is appending
+    pages.  A page boundary can then expose the same asset twice during one
+    logical read.  A bounded fresh read can recover that transport/catalog
+    race; a stable duplicate still fails closed and is never silently
+    deduplicated.
+    """
+    for attempt in range(ASSET_DUPLICATE_RETRY_LIMIT):
+        assets = _list_release_assets_once(release_id)
+        names = [str(asset.get('name', '')) for asset in assets]
+        if len(names) == len(set(names)):
+            return assets
+        if attempt + 1 < ASSET_DUPLICATE_RETRY_LIMIT:
+            time.sleep(min(2.0, 0.5 * (attempt + 1)))
+    raise ValueError('DUPLICATE_ASSET_NAMES')
 
 
 def canonical(value):

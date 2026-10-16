@@ -123,6 +123,20 @@ class RequestTests(unittest.TestCase):
         with patch.object(f.urllib.request,'build_opener',return_value=op),patch.object(f.time,'sleep'):
             self.assertEqual(f.get_json(self.URL),[])
         self.assertEqual(op.open.call_count,2)
+
+    def test_transient_duplicate_asset_catalog_is_re_read(self):
+        asset={'name':'snapshots-000001.jsonl.gz','id':1}
+        with patch.object(f,'get_json',side_effect=[[asset,asset],[asset]]),patch.object(f.time,'sleep') as sleep:
+            self.assertEqual(f.list_release_assets(1),[asset])
+        self.assertEqual(sleep.call_count,1)
+
+    def test_stable_duplicate_asset_catalog_still_fails_closed(self):
+        asset={'name':'snapshots-000001.jsonl.gz','id':1}
+        with patch.object(f,'get_json',return_value=[asset,asset]) as get_json,patch.object(f.time,'sleep') as sleep:
+            with self.assertRaisesRegex(ValueError,'DUPLICATE_ASSET_NAMES'):
+                f.list_release_assets(1)
+        self.assertEqual(get_json.call_count,f.ASSET_DUPLICATE_RETRY_LIMIT)
+        self.assertEqual(sleep.call_count,f.ASSET_DUPLICATE_RETRY_LIMIT-1)
     def test_invalid_utf8_then_success(self):
         op=self.call([self.response(b'["\xff"]'),self.response(b'[]')])
         with patch.object(f.urllib.request,'build_opener',return_value=op),patch.object(f.time,'sleep'):
