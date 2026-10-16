@@ -76,7 +76,9 @@ def parse_page(body):
     require(type(paging.get('has_more')) is bool and 'next_cursor' in paging, 'INVALID_PAGINATION')
     more, cursor = paging['has_more'], paging['next_cursor']
     if more:
-        require(isinstance(cursor, str) and 0 < len(cursor) <= 8192 and len(doc['data']) > 0, 'INCONSISTENT_PAGINATION')
+        # An empty or short page can still advance through the remote scan.
+        # Only the explicit pagination envelope determines exhaustion.
+        require(isinstance(cursor, str) and 0 < len(cursor) <= 8192, 'INCONSISTENT_PAGINATION')
     else:
         require(cursor is None, 'INCONSISTENT_PAGINATION')
     return doc['data'], cursor, more

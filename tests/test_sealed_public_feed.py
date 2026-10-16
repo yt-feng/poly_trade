@@ -1,4 +1,6 @@
 """Synthetic fixtures only. No live endpoints, actual addresses, or private logs."""
+import base64
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -60,8 +62,8 @@ class FeedContract(unittest.TestCase):
         with self.assertRaises(ValueError): parse_page(page(more=True))
     def test_false_with_cursor_rejected(self):
         with self.assertRaises(ValueError): parse_page(page(cursor='next'))
-    def test_empty_with_more_rejected(self):
-        with self.assertRaises(ValueError): parse_page(page([], True, 'next'))
+    def test_empty_with_more_and_valid_cursor_continues(self):
+        self.assertEqual(parse_page(page([], True, 'next')), ([], 'next', True))
     def test_oversized_body_rejected(self):
         with self.assertRaises(ValueError): parse_page(b' '* (MAX_BODY + 1))
     def test_offset_forbidden(self):
@@ -93,12 +95,57 @@ class FeedContract(unittest.TestCase):
         self.assertEqual(calls[1], dict(calls[0], cursor='token'))
         self.assertEqual(r['completion'], 'CURSOR_EXHAUSTED_FOR_REQUEST')
         self.assertFalse(r['all_history_complete'])
+    def test_empty_and_short_intermediate_pages_follow_the_cursor_chain(self):
+        bodies = [page([], True, 'empty-next'),
+                  page([{'fixture': 'short'}], True, 'short-next'),
+                  page([{'fixture': 'one'}, {'fixture': 'two'}], True, 'full-next'),
+                  page([], False, None)]
+        calls = []
+        req = request(max_pages=5)
+        def fetch(endpoint, query):
+            calls.append((endpoint, query))
+            return 200, bodies[len(calls) - 1]
+        record = self.run_collect(req=req, fetcher=fetch)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual([query for _, query in calls], [
+            req['filters'], dict(req['filters'], cursor='empty-next'),
+            dict(req['filters'], cursor='short-next'), dict(req['filters'], cursor='full-next')])
+        self.assertTrue(all(endpoint == req['endpoint'] for endpoint, _ in calls))
+        self.assertNotIn('cursor', req['filters'])
+        self.assertEqual(record['completion'], 'CURSOR_EXHAUSTED_FOR_REQUEST')
+        self.assertFalse(record['all_history_complete'])
+        self.assertFalse(record['remote_truth_authenticated'])
+        self.assertEqual(len(record['observed_pages']), 4)
+        for index, observed in enumerate(record['observed_pages']):
+            self.assertEqual(base64.b64decode(observed['raw_utf8_b64']), bodies[index])
+            self.assertEqual(observed['response_sha256'], hashlib.sha256(bodies[index]).hexdigest())
+            self.assertEqual(observed['request_started_ms'], 101 + 2 * index)
+            self.assertEqual(observed['received_ms'], 102 + 2 * index)
     def test_repeated_cursor_stops(self):
-        r = self.run_collect(fetcher=lambda ep,q:(200,page(more=True,cursor='same')))
-        self.assertEqual(r['completion'], 'VALIDATION_OR_TRANSPORT_STOP')
+        for rows in ([], [{'fixture': True}]):
+            with self.subTest(rows=rows):
+                calls = []
+                def fetch(endpoint, query):
+                    calls.append(query)
+                    return 200, page(rows, True, 'same')
+                r = self.run_collect(req=request(max_pages=5), fetcher=fetch)
+                self.assertEqual(r['completion'], 'VALIDATION_OR_TRANSPORT_STOP')
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[1]['cursor'], 'same')
+                self.assertFalse(r['all_history_complete'])
     def test_budget_stop_not_complete(self):
-        r = self.run_collect(req=request(max_pages=1), fetcher=lambda ep,q:(200,page(more=True,cursor='next')))
-        self.assertEqual(r['completion'], 'BUDGET_STOP')
+        for rows in ([], [{'fixture': True}]):
+            with self.subTest(rows=rows):
+                calls = []
+                def fetch(endpoint, query):
+                    calls.append(query)
+                    return 200, page(rows, True, 'next-' + str(len(calls)))
+                r = self.run_collect(req=request(max_pages=2), fetcher=fetch)
+                self.assertEqual(r['completion'], 'BUDGET_STOP')
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[1]['cursor'], 'next-1')
+                self.assertEqual(len(r['observed_pages']), 2)
+                self.assertFalse(r['all_history_complete'])
     def test_rate_refusal_no_retry(self):
         calls=[]
         def fetch(ep,q): calls.append(q); return 429,b''
