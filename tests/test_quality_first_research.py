@@ -453,5 +453,184 @@ class ResearchPipelineTests(unittest.TestCase):
         self.assertEqual(outputs[0], outputs[1])
 
 
+class ResearchChallengerTests(unittest.TestCase):
+    def model(self, cutoff=1_000_000):
+        return {"family": "spot_residual", "coef": [.20] + [0.] * len(research.FEATURES["spot_residual"]),
+                "fit_cutoff_ms": cutoff}
+
+    def resign(self, payload):
+        payload = copy.deepcopy(payload)
+        payload.pop("sha256", None)
+        payload.pop("episode_id", None)
+        payload["episode_id"] = research.digest(payload)
+        payload["sha256"] = research.digest(payload)
+        return payload
+
+    def test_challenger_export_reuses_training_without_changing_no_trade_promotion(self):
+        rows = [raw_row(market * 300_000, offset)
+                for market in range(100) for offset in (0, 1000)]
+        def fitted(examples, family, cutoff):
+            return {"family": family, "coef": [0.] * (len(research.FEATURES[family]) + 1),
+                    "fit_cutoff_ms": cutoff}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, "load_verified_snapshots", return_value=(rows, synthetic_provenance(rows))), \
+             patch.object(research, "fit_ridge", side_effect=fitted) as fit:
+            root = Path(directory)
+            result = research.run(root / "input", root / "output", research_challenger="spot_residual")
+            frozen = json.loads((root / "output/frozen_model.json").read_text())
+            challenger = json.loads((root / "output/research_challenger.json").read_text())
+            self.assertEqual(fit.call_count, 2)
+            self.assertTrue(all(call.args[2] == result["split"]["train_end_ms"] for call in fit.call_args_list))
+            self.assertEqual(challenger["model"]["fit_cutoff_ms"], result["split"]["train_end_ms"])
+            self.assertEqual(result["selected_family"], "no_trade")
+            self.assertIsNone(frozen["model"])
+            self.assertEqual(challenger["threshold"], .02)
+            self.assertFalse(challenger["promotion_eligible"])
+            self.assertFalse(result["promotion"]["canary_eligible"])
+            self.assertEqual(challenger["forward_max_window_end_ms"] - challenger["forward_min_window_start_ms"], 86_400_000)
+            self.assertGreater(challenger["forward_min_window_start_ms"], challenger["frozen_at_ms"])
+            self.assertGreater(challenger["forward_min_window_start_ms"], challenger["consumed_through_ms"])
+            self.assertFalse(result["research_challenger_export"]["refit_for_export"])
+            self.assertFalse(result["research_challenger_export"]["holdout_used_for_export"])
+            unsigned = dict(challenger)
+            digest = unsigned.pop("sha256")
+            self.assertEqual(digest, research.digest(unsigned))
+            episode_id = unsigned.pop("episode_id")
+            self.assertEqual(episode_id, research.digest(unsigned))
+
+    def test_unavailable_fit_does_not_export_a_fake_challenger(self):
+        rows = [raw_row(market * 300_000, 0) for market in range(10)]
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, "load_verified_snapshots", return_value=(rows, synthetic_provenance(rows))):
+            root = Path(directory)
+            result = research.run(root / "input", root / "output", research_challenger="spot_residual")
+            self.assertEqual(result["research_challenger_export"]["status"], "model_unavailable")
+            self.assertFalse((root / "output/research_challenger.json").exists())
+            self.assertTrue((root / "output/frozen_model.json").exists())
+
+    def test_unknown_challenger_or_export_during_forward_is_rejected_before_data_access(self):
+        with patch.object(research, "load_verified_snapshots") as load:
+            with self.assertRaisesRegex(ValueError, "unknown research challenger"):
+                research.run(Path("unused"), Path("unused"), research_challenger="new_threshold_winner")
+            with self.assertRaisesRegex(ValueError, "cannot accompany frozen"):
+                research.run(Path("unused"), Path("unused"), frozen_model=Path("unused"), research_challenger="spot_residual")
+            load.assert_not_called()
+
+    def test_finished_episode_replay_filters_old_and_expired_markets_before_any_diagnostic(self):
+        challenger = research.research_challenger_payload(self.model(), "source", 2_000_000, 10., 3_000_000)
+        begin, end = challenger["forward_min_window_start_ms"], challenger["forward_max_window_end_ms"]
+        starts = [market * 300_000 for market in range(5)] + [begin + market * 300_000 for market in range(3)] + [end, end + 300_000]
+        rows = sum((rows_for_window(start) for start in starts), [])
+        calls = []
+        original_replay = research.replay
+        def recorded(decisions, *args, **kwargs):
+            calls.append((decisions, kwargs))
+            return original_replay(decisions, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, "load_verified_snapshots", return_value=(rows, synthetic_provenance(rows))), \
+             patch.object(research, "fit_ridge") as fit, \
+             patch.object(research, "replay", side_effect=recorded), \
+             patch.object(research, "complete_set_diagnostic", wraps=research.complete_set_diagnostic) as complete:
+            root = Path(directory)
+            source = root / "challenger.json"
+            source.write_text(json.dumps(challenger))
+            result = research.run(root / "input", root / "output", frozen_model=source)
+            fit.assert_not_called()
+            self.assertEqual(result["sample_role"], "prospective_research_challenger")
+            self.assertEqual(result["evaluation_status"], "bounded_episode_replay")
+            self.assertTrue(result["episode_window_closed"])
+            self.assertEqual(result["forward_episode_id"], challenger["episode_id"])
+            self.assertEqual(len(calls), 2)
+            for decisions, options in calls:
+                self.assertEqual(options["begin_ms"], begin)
+                self.assertEqual(options["end_ms"], end)
+                self.assertTrue(all(begin <= row["window_start_ms"] and row["window_end_ms"] <= end for row in decisions))
+                self.assertEqual(len({row["slug"] for row in decisions}), 3)
+            self.assertTrue(all(begin <= row["sample_ms"] < end for row in complete.call_args.args[0]))
+            self.assertFalse(result["promotion_eligible"])
+            self.assertEqual(result["actual_fills"], 0)
+            self.assertFalse(result["ten_fill_canary_achieved"])
+
+    def test_no_new_observations_are_reported_as_awaiting_not_success(self):
+        challenger = research.research_challenger_payload(self.model(), "source", 4_000_000, 10., 5_000_000)
+        # A frozen forward replay does not need the discovery split's 10 markets.
+        rows = [raw_row(0, 0)]
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, "load_verified_snapshots", return_value=(rows, synthetic_provenance(rows))), \
+             patch.object(research, "fit_ridge") as fit:
+            root = Path(directory)
+            source = root / "challenger.json"
+            source.write_text(json.dumps(challenger))
+            result = research.run(root / "input", root / "output", frozen_model=source)
+            self.assertEqual(result["evaluation_status"], "awaiting_new_data")
+            self.assertEqual(result["new_episode_observation_count"], 0)
+            self.assertEqual(result["forward"]["summary"]["proxy_entries"], 0)
+            self.assertEqual(result["complete_set_diagnostic"]["necessary_quote_conditions"], [])
+            fit.assert_not_called()
+
+    def test_no_btc_observations_are_awaiting_and_never_train(self):
+        challenger = research.research_challenger_payload(self.model(), "source", 4_000_000, 10., 5_000_000)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, "load_verified_snapshots", return_value=([], synthetic_provenance([raw_row(0, 0)]))), \
+             patch.object(research, "fit_ridge") as fit:
+            root = Path(directory)
+            source = root / "challenger.json"
+            source.write_text(json.dumps(challenger))
+            result = research.run(root / "input", root / "output", frozen_model=source)
+            self.assertEqual(result["evaluation_status"], "awaiting_new_data")
+            self.assertIsNone(result["observed_last_ms"])
+            self.assertEqual(result["forward"]["summary"]["proxy_entries"], 0)
+            self.assertFalse(result["input_reaches_episode_end"])
+            fit.assert_not_called()
+
+    def test_record_time_outside_episode_is_excluded_even_with_in_episode_market(self):
+        challenger = research.research_challenger_payload(self.model(), "source", 4_000_000, 10., 5_000_000)
+        begin, end = challenger["forward_min_window_start_ms"], challenger["forward_max_window_end_ms"]
+        rows = [raw_row(begin, -1000), raw_row(begin, 0), raw_row(begin, end - begin)]
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, "load_verified_snapshots", return_value=(rows, synthetic_provenance(rows))), \
+             patch.object(research, "replay", wraps=research.replay) as replay, \
+             patch.object(research, "complete_set_diagnostic", wraps=research.complete_set_diagnostic) as complete:
+            root = Path(directory)
+            source = root / "challenger.json"
+            source.write_text(json.dumps(challenger))
+            result = research.run(root / "input", root / "output", frozen_model=source)
+            self.assertEqual(result["new_episode_observation_count"], 1)
+            self.assertEqual(len(replay.call_args_list), 2)
+            for call in replay.call_args_list + [complete.call_args]:
+                self.assertEqual([row["sample_ms"] for row in call.args[0]], [begin])
+
+    def test_invalid_or_unbounded_episode_cannot_be_resigned_into_validity(self):
+        original = research.research_challenger_payload(self.model(), "source", 4_000_000, 10., 5_000_000)
+        cases = []
+        before_freeze = copy.deepcopy(original)
+        before_freeze["forward_min_window_start_ms"] = 4_800_000
+        cases.append(before_freeze)
+        unbounded = copy.deepcopy(original)
+        unbounded["forward_max_window_end_ms"] += 300_000
+        unbounded["expires_at_ms"] += 300_000
+        cases.append(unbounded)
+        mismatch = copy.deepcopy(original)
+        mismatch["expires_at_ms"] -= 1
+        cases.append(mismatch)
+        after_fit = copy.deepcopy(original)
+        after_fit["model"]["fit_cutoff_ms"] = after_fit["consumed_through_ms"] + 1
+        cases.append(after_fit)
+        negative_fit = copy.deepcopy(original)
+        negative_fit["model"]["fit_cutoff_ms"] = -1
+        cases.append(negative_fit)
+        unknown = copy.deepcopy(original)
+        unknown["model"]["family"] = "book_residual"
+        cases.append(unknown)
+        threshold = copy.deepcopy(original)
+        threshold["threshold"] = .01
+        cases.append(threshold)
+        for case in cases:
+            case = self.resign(case)
+            case.pop("sha256")
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                research.validate_research_challenger(case)
+
+
 if __name__ == "__main__":
     unittest.main()

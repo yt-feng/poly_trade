@@ -23,6 +23,8 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_research_vault.py' -v
           python -m unittest discover -s tests -p 'test_public_observation_contract.py' -v
+          python -m unittest discover -s tests -p 'test_persist_quality_first_journal.py' -v
+          python -m unittest discover -s tests -p 'test_quality_first_publisher.py' -v
           python -m py_compile tools/research_vault.py tools/research_journal_guard.py tools/public_observation_contract.py
       - name: Publication-path guard
         env:
@@ -41,6 +43,7 @@ jobs:
           import zipfile
           from pathlib import Path
           paths = ['tools/research_vault.py','tools/research_journal_guard.py','tools/public_observation_contract.py','tests/test_research_vault.py','tests/test_public_observation_contract.py','requirements-vault.txt','docs/research_vault.md','research_vault/POLICY.md','research_vault/journal_template.json','.github/workflows/research-vault-contract.yml']
+          paths += ['tools/persist_quality_first_journal.py','tools/publish_quality_first_journal.py','tests/test_persist_quality_first_journal.py','tests/test_quality_first_publisher.py']
           Path('vault_delivery').mkdir()
           with zipfile.ZipFile('vault_delivery/research_vault_tools.zip','w',compression=zipfile.ZIP_DEFLATED) as z:
               for p in paths:

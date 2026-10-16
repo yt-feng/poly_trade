@@ -29,6 +29,10 @@ FEATURES = {
 THRESHOLDS = (0.01, 0.02)
 MIN_TRAIN_MARKETS = 30
 MIN_VALIDATION_CYCLES = 10
+RESEARCH_CHALLENGER = "spot_residual"
+CHALLENGER_THRESHOLD = 0.02
+CHALLENGER_EPISODE_MS = 24 * 60 * 60 * 1000
+CHALLENGER_ORIGIN = "fixed_spot_residual_0_02_from_discovery_training_only"
 
 
 def canonical(value):
@@ -406,6 +410,112 @@ def replay(decisions, model, threshold, initial_cash=10., latency_ms=1000,
     return {"summary": summary, "attempts": attempts, "cash_ledger": ledger}
 
 
+def complete_set_check_attribution(candidate, check):
+    """Describe existing quote evidence without changing any acceptance gate.
+
+    A snapshot at a hypothetical arrival is not an exchange acknowledgement.
+    In particular, a recently refreshed quote can still predate that arrival.
+    Cost observations and failure of the post-arrival receipt gate are distinct
+    facts; neither reconstructs an unobserved atomic fill or exact quote lifetime.
+    This helper also accepts previously saved diagnostics without these fields.
+    """
+    decision = number(candidate.get("sample_ms"))
+    arrival, observed = number(check.get("arrival_ms")), number(check.get("observed_ms"))
+    shares, payout = number(candidate.get("shares_per_leg")), number(candidate.get("gross_redemption_value_usd"))
+    legs = check.get("legs") or {}
+    receipts = {side: number((legs.get(side) or {}).get("received_ms")) for side in ("up", "down")}
+    receipt_after_decision = {side: value > decision if value is not None and decision is not None else None
+                              for side, value in receipts.items()}
+    complete_receipts = all(value is not None for value in receipts.values())
+    offsets = [value - arrival for value in receipts.values() if value is not None and arrival is not None]
+    complete_offsets = complete_receipts and arrival is not None
+    asks = [number((legs.get(side) or {}).get("ask")) for side in ("up", "down")]
+    price_cost = shares * sum(asks) if shares is not None and all(value is not None for value in asks) else None
+    quoted_cost = number(check.get("quote_cost_usd"))
+    price_above = price_cost > payout if price_cost is not None and payout is not None else None
+    cost_above = quoted_cost > payout if quoted_cost is not None and payout is not None else None
+    cost_not_below = quoted_cost >= payout if quoted_cost is not None and payout is not None else None
+    observations = []
+    if observed is None:
+        observations.append("delayed_snapshot_unobserved")
+    if all(value is True for value in receipt_after_decision.values()):
+        observations.append("both_quote_receipts_advanced_after_decision")
+    if complete_offsets and max(offsets) < 0:
+        observations.append("both_refreshed_quotes_predate_hypothetical_arrival")
+    if price_above:
+        observations.append("observed_prices_alone_exceed_payout")
+    if cost_not_below:
+        observations.append("observed_quote_cost_not_below_payout_independent_of_receipt_gate")
+    if price_cost is not None and payout is not None and price_cost < payout and cost_not_below:
+        observations.append("observed_fees_eliminate_price_only_discount")
+    identity_conflict = any("identity" in reason for leg in legs.values() for reason in leg.get("reasons", []))
+    return {
+        "receipt_after_decision": receipt_after_decision,
+        "receipt_vs_arrival_bounds": {
+            "minimum_ms": min(offsets) if offsets else None,
+            "maximum_ms": max(offsets) if offsets else None,
+            "both_legs_observed": complete_offsets,
+            "sign_convention": "quote_received_ms_minus_hypothetical_arrival_ms",
+        },
+        "oldest_quote_age_at_observed_ms": max(observed - value for value in receipts.values())
+            if complete_receipts and observed is not None else None,
+        "quote_price_cost_usd": price_cost,
+        "quote_price_cost_above_payout": price_above,
+        "quote_total_cost_above_payout": cost_above,
+        "quote_total_cost_not_below_payout": cost_not_below,
+        "causal_classification": {
+            "evidence_type": "observational_attribution_of_existing_candidate",
+            "observed_facts": observations,
+            "market_identity_comparable": not identity_conflict and len(legs) == 2,
+            "arrival_execution_state": "unobserved_no_order_or_exchange_acknowledgement",
+            "quote_lifetime_identified": False,
+            "counterfactual_fill_identified": False,
+            "interpretation": "Receipt timing and observed cost are separate facts. The arrival instant and any sub-snapshot tradable lifetime remain unobserved.",
+        },
+    }
+
+
+def complete_set_root_cause_summary(diagnostic):
+    """Summarize a fixed candidate set; re-attribution adds no new evidence."""
+    candidates = diagnostic.get("necessary_quote_conditions") or []
+    observations, by_latency = Counter(), {}
+    for candidate in candidates:
+        for check in candidate.get("delayed_checks", []):
+            attribution = complete_set_check_attribution(candidate, check)
+            observations.update(attribution["causal_classification"]["observed_facts"])
+            key = str(check.get("latency_ms"))
+            group = by_latency.setdefault(key, {
+                "existing_candidate_checks": 0, "both_receipts_after_decision": 0,
+                "both_receipts_before_arrival": 0, "observed_prices_alone_above_payout": 0,
+                "observed_total_cost_not_below_payout": 0, "unknown_cost_checks": 0,
+                "identity_not_comparable": 0,
+            })
+            group["existing_candidate_checks"] += 1
+            group["both_receipts_after_decision"] += int(all(value is True for value in attribution["receipt_after_decision"].values()))
+            bounds = attribution["receipt_vs_arrival_bounds"]
+            group["both_receipts_before_arrival"] += int(bounds["both_legs_observed"] and bounds["maximum_ms"] < 0)
+            group["observed_prices_alone_above_payout"] += int(attribution["quote_price_cost_above_payout"] is True)
+            group["observed_total_cost_not_below_payout"] += int(attribution["quote_total_cost_not_below_payout"] is True)
+            group["unknown_cost_checks"] += int(attribution["quote_total_cost_not_below_payout"] is None)
+            group["identity_not_comparable"] += int(not attribution["causal_classification"]["market_identity_comparable"])
+    identities = [{"slug": candidate.get("slug"), "sample_ms": candidate.get("sample_ms")}
+                  for candidate in candidates]
+    return {
+        "version": 1,
+        "role": "existing_candidate_attribution_only",
+        "candidate_identity_sha256": digest(identities),
+        "existing_candidate_count": len(candidates),
+        "new_independent_observations": 0,
+        "selection_or_latency_gate_changed": False,
+        "by_latency_ms": by_latency,
+        "observed_fact_counts": dict(observations),
+        "arrival_execution_state": "unobserved_no_order_or_exchange_acknowledgement",
+        "exact_quote_lifetime_identified": False,
+        "actual_fills": 0,
+        "interpretation": "A cost failure can be observed independently of a receipt-time gate failure. Recomputing this summary on a saved report is not another experiment or a new validation sample.",
+    }
+
+
 def complete_set_diagnostic(decisions, initial_cash):
     """Falsify complete-set quote conditions after fixed receive-time delays.
 
@@ -555,14 +665,71 @@ def complete_set_diagnostic(decisions, initial_cash):
                 if stressed_cost > initial_cash:
                     stress["reasons"].append("stress_combined_cost_exceeds_cash")
                 stress["quotes_support_complete_set"] = not stress["reasons"]
-    return {"necessary_quote_conditions": rows, "actual_fills": 0,
+    for candidate in rows:
+        for check in candidate["delayed_checks"]:
+            check.update(complete_set_check_attribution(candidate, check))
+    result = {"necessary_quote_conditions": rows, "actual_fills": 0,
             "latencies_ms": list(latencies), "arrival_snapshot_tolerance_ms": 2500,
             "observation_rule": "first_snapshot_at_or_after_arrival; never_search_for_a_better_later_quote",
             "unmodelled": ["non_atomic_second_leg", "actual_order_acceptance_and_fills",
                            "merge_or_redemption_cost_and_cash_delay"]}
+    result["root_cause_summary"] = complete_set_root_cause_summary(result)
+    return result
 
 
-def run(input_root, output_root, initial_cash=10., frozen_model=None):
+def research_challenger_payload(model, source_hash, consumed_through_ms, initial_cash, frozen_at_ms):
+    """Freeze the declared research challenger, independently of validation rank."""
+    if model is None or model.get("family") != RESEARCH_CHALLENGER:
+        raise ValueError("research challenger model unavailable or unsupported")
+    begin = (max(frozen_at_ms, consumed_through_ms) // 300_000 + 1) * 300_000
+    payload = {
+        "version": VERSION, "kind": "research_challenger", "research_only": True,
+        "promotion_eligible": False, "live_enabled": False,
+        "origin": CHALLENGER_ORIGIN, "model": model, "threshold": CHALLENGER_THRESHOLD,
+        "source_hash": source_hash, "frozen_at_ms": frozen_at_ms,
+        "consumed_through_ms": consumed_through_ms, "initial_cash": initial_cash,
+        "forward_min_window_start_ms": begin,
+        "forward_max_window_end_ms": begin + CHALLENGER_EPISODE_MS,
+        "expires_at_ms": begin + CHALLENGER_EPISODE_MS,
+        "protocol_sha256": digest(protocol_contract()),
+        "selection_basis": "explicit_fixed_research_challenger; not_validation_or_holdout_promotion",
+        "actual_fills": 0,
+    }
+    payload["episode_id"] = digest(payload)
+    payload["sha256"] = digest(payload)
+    return payload
+
+
+def validate_research_challenger(frozen):
+    """Validate fixed episode bounds, not wall-clock permission to replay them."""
+    identity = dict(frozen)
+    episode_id = identity.pop("episode_id", None)
+    if episode_id != digest(identity):
+        raise ValueError("research challenger episode identity mismatch")
+    model = frozen.get("model") or {}
+    if (frozen.get("kind") != "research_challenger" or frozen.get("research_only") is not True
+            or frozen.get("promotion_eligible") is not False or frozen.get("live_enabled") is not False
+            or frozen.get("origin") != CHALLENGER_ORIGIN or model.get("family") != RESEARCH_CHALLENGER
+            or frozen.get("threshold") != CHALLENGER_THRESHOLD):
+        raise ValueError("unsupported research challenger contract")
+    fields = ("frozen_at_ms", "consumed_through_ms", "forward_min_window_start_ms",
+              "forward_max_window_end_ms", "expires_at_ms")
+    if any(type(frozen.get(field)) is not int or frozen[field] < 0 for field in fields):
+        raise ValueError("invalid research challenger episode bounds")
+    begin, end = frozen["forward_min_window_start_ms"], frozen["forward_max_window_end_ms"]
+    fit_cutoff = model.get("fit_cutoff_ms")
+    if (begin % 300_000 or begin <= max(frozen["frozen_at_ms"], frozen["consumed_through_ms"])
+            or end - begin != CHALLENGER_EPISODE_MS or frozen["expires_at_ms"] != end
+            or type(fit_cutoff) is not int or not 0 <= fit_cutoff <= frozen["consumed_through_ms"]):
+        raise ValueError("invalid research challenger episode bounds")
+    return begin, end
+
+
+def run(input_root, output_root, initial_cash=10., frozen_model=None, research_challenger=None):
+    if research_challenger not in (None, RESEARCH_CHALLENGER):
+        raise ValueError("unknown research challenger")
+    if research_challenger is not None and frozen_model is not None:
+        raise ValueError("research challenger export cannot accompany frozen evaluation")
     raw_rows, provenance = load_verified_snapshots(input_root, max_rows=200_000)
     if len(raw_rows) > 200_000:
         raise ValueError("row budget exceeded; stratify whole source archives before loading")
@@ -571,7 +738,7 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None):
     mark_evaluation_scope(dataset, provenance)
     decisions = dataset["decisions"]
     starts = sorted({d["window_start_ms"] for d in decisions if d["window_start_ms"] is not None})
-    if len(starts) < 10:
+    if not frozen_model and len(starts) < 10:
         raise ValueError("insufficient distinct market windows")
     provenance_hash = digest(provenance)
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -579,10 +746,12 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None):
               "source_provenance": provenance, "source_hash": provenance_hash,
               "quality_policy": asdict(policy), "quality_funnel": dataset["funnel"],
               "evaluation_scope": dataset["evaluation_scope"],
-              "observed_first_ms": min(d["sample_ms"] for d in decisions),
-              "observed_last_ms": max(d["sample_ms"] for d in decisions),
+              "observed_first_ms": min((d["sample_ms"] for d in decisions), default=None),
+              "observed_last_ms": max((d["sample_ms"] for d in decisions), default=None),
               "independent_market_windows": len(starts), "generated_ms": now_ms,
               "actual_fills": 0, "ten_fill_canary_achieved": False}
+    challenger = None
+    diagnostic_decisions = decisions
     if frozen_model:
         frozen = json.loads(Path(frozen_model).read_text())
         expected = frozen.pop("sha256")
@@ -592,14 +761,35 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None):
             raise ValueError("frozen model protocol or implementation changed")
         if initial_cash != frozen.get("initial_cash"):
             raise ValueError("frozen initial cash changed")
+        if frozen.get("kind") not in (None, "research_challenger"):
+            raise ValueError("unknown frozen model kind")
         begin = frozen["forward_min_window_start_ms"]
-        result.update(sample_role="prospective_after_frozen_boundary", frozen_model_sha256=expected,
-                      forward_episode_id=expected, cumulative_across_runs=False,
+        end = None
+        if frozen.get("kind") == "research_challenger":
+            begin, end = validate_research_challenger(frozen)
+            episode_decisions = [decision for decision in decisions if decision["window_start_ms"] is not None
+                                 and begin <= decision["window_start_ms"]
+                                 and decision["window_start_ms"] + 300_000 <= end
+                                 and begin <= decision["sample_ms"] < end]
+            diagnostic_decisions = episode_decisions
+            result.update(sample_role="prospective_research_challenger", research_challenger=RESEARCH_CHALLENGER,
+                          research_challenger_origin=frozen["origin"], promotion_eligible=False,
+                          forward_min_window_start_ms=begin, forward_max_window_end_ms=end,
+                          new_episode_observation_count=len(episode_decisions),
+                          evaluation_status=("awaiting_new_data" if result["observed_last_ms"] is None or result["observed_last_ms"] < begin else
+                                             "bounded_episode_replay" if episode_decisions else "no_observations_within_episode"),
+                          episode_window_closed=now_ms >= end,
+                          input_reaches_episode_end=result["observed_last_ms"] is not None and result["observed_last_ms"] >= end - 1000)
+        else:
+            episode_decisions = decisions
+            result["sample_role"] = "prospective_after_frozen_boundary"
+        result.update(frozen_model_sha256=expected,
+                      forward_episode_id=frozen.get("episode_id", expected), cumulative_across_runs=False,
                       evaluation_semantics="replay_of_one_frozen_episode; do_not_add_repeated_runs")
-        result["forward"] = replay(decisions, frozen["model"], frozen["threshold"], initial_cash,
-                                   begin_ms=begin)
-        result["forward_stress"] = replay(decisions, frozen["model"], frozen["threshold"], initial_cash,
-                                          latency_ms=3000, extra_exit_ticks=1, begin_ms=begin)
+        result["forward"] = replay(episode_decisions, frozen["model"], frozen["threshold"], initial_cash,
+                                   begin_ms=begin, end_ms=end)
+        result["forward_stress"] = replay(episode_decisions, frozen["model"], frozen["threshold"], initial_cash,
+                                          latency_ms=3000, extra_exit_ticks=1, begin_ms=begin, end_ms=end)
     else:
         train_end = starts[int(len(starts) * .6)]
         validation_end = starts[int(len(starts) * .8)]
@@ -642,7 +832,22 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None):
         frozen["protocol_sha256"] = digest(protocol_contract())
         frozen["sha256"] = digest(frozen)
         result["frozen_model_sha256"] = frozen["sha256"]
-    result["complete_set_diagnostic"] = complete_set_diagnostic(decisions, initial_cash)
+        if research_challenger is not None:
+            challenger_model = models[research_challenger]
+            result["research_challenger_export"] = {
+                "family": research_challenger, "threshold": CHALLENGER_THRESHOLD,
+                "status": "exported" if challenger_model is not None else "model_unavailable",
+                "research_only": True, "promotion_eligible": False,
+                "refit_for_export": False, "holdout_used_for_export": False,
+            }
+            if challenger_model is not None:
+                challenger = research_challenger_payload(challenger_model, provenance_hash,
+                    result["observed_last_ms"], initial_cash, int(datetime.now(timezone.utc).timestamp() * 1000))
+                result["research_challenger_export"].update(
+                    episode_id=challenger["episode_id"], sha256=challenger["sha256"],
+                    forward_min_window_start_ms=challenger["forward_min_window_start_ms"],
+                    forward_max_window_end_ms=challenger["forward_max_window_end_ms"])
+    result["complete_set_diagnostic"] = complete_set_diagnostic(diagnostic_decisions, initial_cash)
     result["promotion"] = {"canary_eligible": False,
                            "reasons": ["quote_proxies_are_not_private_fills", "prospective_evidence_required",
                                        "execution_and_cash_receipt_reconciliation_required"]}
@@ -650,6 +855,8 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None):
     (output_root / "research.json").write_bytes(canonical(result))
     if not frozen_model:
         (output_root / "frozen_model.json").write_bytes(canonical(frozen))
+    if challenger is not None:
+        (output_root / "research_challenger.json").write_bytes(canonical(challenger))
     return result
 
 
@@ -659,8 +866,10 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--initial-cash", type=float, default=10.)
     parser.add_argument("--frozen-model", type=Path)
+    parser.add_argument("--research-challenger", choices=(RESEARCH_CHALLENGER,),
+                        help="Export the fixed, unpromoted 24-hour research challenger separately")
     args = parser.parse_args()
-    run(args.input, args.output, args.initial_cash, args.frozen_model)
+    run(args.input, args.output, args.initial_cash, args.frozen_model, args.research_challenger)
     # No results, parameters, or empirical counts in public Actions stdout.
     print("QUALITY_FIRST_RESEARCH_FINISHED; LIVE_ENABLED=false; RESULTS_REQUIRE_SEALING=true")
 

@@ -249,6 +249,9 @@ def run(args):
         raise ValueError('ACQUISITION_BUDGET')
     if not 0 < args.initial_cash <= 100 or not 1 <= args.timeout_seconds <= 3600:
         raise ValueError('RESEARCH_BUDGET')
+    challenger = getattr(args, 'research_challenger', None)
+    if challenger not in (None, 'spot_residual') or (challenger and getattr(args, 'frozen_model', None)):
+        raise ValueError('RESEARCH_MODE_CONFLICT')
     output.mkdir(parents=True, mode=0o700)
     status = {'version': 1, 'status': 'failed', 'stage': 'acquisition', 'strategy_evaluated': False,
               'live_orders_enabled': False, 'plaintext_published': False}
@@ -264,6 +267,7 @@ def run(args):
                         'max_snapshot_archives': args.max_snapshot_archives, 'initial_cash': args.initial_cash,
                         'timeout_seconds': args.timeout_seconds},
             'source_sha256': {},
+            'requested_research_challenger': challenger,
         }
         for path in [Path(__file__), ROOT / 'analysis/forward_acquire.py', ROOT / 'analysis/quality_first_research.py', ROOT / 'analysis/quality_first_data.py']:
             if path.is_file():
@@ -291,6 +295,8 @@ def run(args):
                 ]
                 if getattr(args, 'frozen_model', None) is not None:
                     command += ['--frozen-model', str(private / 'frozen_input.json')]
+                if challenger:
+                    command += ['--research-challenger', challenger]
                 with (private / 'analysis-output.txt').open('w') as log:
                     completed = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout_seconds, check=False,
                        env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8', 'PYTHONUNBUFFERED': '1'})
@@ -325,6 +331,7 @@ def main():
     parser.add_argument('--max-snapshot-archives', type=int, default=96)
     parser.add_argument('--initial-cash', type=float, default=10)
     parser.add_argument('--frozen-model', type=Path, help='Existing local frozen model; copied only into the temporary sealed work bundle')
+    parser.add_argument('--research-challenger', choices=['spot_residual'], help='Export a fixed research-only challenger; does not promote a strategy')
     parser.add_argument('--timeout-seconds', type=int, default=1800)
     args = parser.parse_args()
     os.umask(0o077)
