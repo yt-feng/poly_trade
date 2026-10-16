@@ -63,13 +63,40 @@ def record_unselected_source_issues(plan):
     return plan
 
 
-def stratify_plan(plan, max_snapshot_archives=96):
-    """Reserve a byte quota for every available UTC day before any download.
+def frozen_episode_bounds(frozen, initial_cash):
+    """Reuse the frozen protocol's validation before narrowing acquisition."""
+    if frozen.get('kind') != 'research_challenger':
+        return None
+    import quality_first_research as research
+    payload = dict(frozen)
+    expected = payload.pop('sha256', None)
+    if research.digest(payload) != expected or payload.get('version') != research.VERSION:
+        raise ValueError('FROZEN_MODEL_INTEGRITY_MISMATCH')
+    if payload.get('protocol_sha256') != research.digest(research.protocol_contract()):
+        raise ValueError('FROZEN_MODEL_PROTOCOL_CHANGED')
+    if initial_cash != payload.get('initial_cash'):
+        raise ValueError('FROZEN_INITIAL_CASH_CHANGED')
+    return research.validate_research_challenger(payload)
+
+
+def frozen_episode_utc_days(bounds):
+    begin, end = bounds
+    if (type(begin) is not int or type(end) is not int or begin < 0
+            or end - begin != 24 * 60 * 60 * 1000):
+        raise ValueError('INVALID_FROZEN_EPISODE_BOUNDS')
+    # Subtract before conversion: a midnight end does not include the next day.
+    return sorted({datetime.fromtimestamp(value // 1000, timezone.utc).date().isoformat()
+                   for value in (begin, end - 1)})
+
+
+def stratify_plan(plan, max_snapshot_archives=96, episode_bounds=None):
+    """Reserve each source day, or each frozen episode day, before download.
 
     Complete snapshot shards are units. Nearby same-release/day label shards
     are co-sampled when present; their identity/timing is not certified here.
     Unequal or incomplete days remain visible in the manifest;
     this does not fill missing history or assert prospective observations.
+    Frozen date scope includes a quota for missing days and never falls back.
     """
     if not 8 <= max_snapshot_archives <= 512:
         raise ValueError('INVALID_SNAPSHOT_ARCHIVE_LIMIT')
@@ -91,10 +118,34 @@ def stratify_plan(plan, max_snapshot_archives=96):
                 label = min(nearby, key=lambda other: abs(int(other['name'].rsplit('-', 1)[1].split('.')[0]) - sequence))
                 unit.append(label)
             by_day.setdefault(match[1], []).append(unit)
-    if not by_day:
-        raise ValueError('NO_DATED_SNAPSHOT_SHARDS')
-    days = sorted(by_day)
-    queues = {day: spread_order(sorted(by_day[day], key=lambda unit: (release_dates.get(unit[0]['tag'], ''), unit[0]['tag'], unit[0]['name']))) for day in days}
+    source_days = sorted(by_day)
+    scope = {}
+    if episode_bounds is not None:
+        days = frozen_episode_utc_days(episode_bounds)
+        by_day = {day: units for day, units in by_day.items() if day in days}
+        scope = {
+            'selection': 'frozen_episode_utc_days',
+            'observation_scope': 'frozen_episode_utc_day_archives',
+            'forward_min_window_start_ms': episode_bounds[0],
+            'forward_max_window_end_ms': episode_bounds[1],
+            'requested_utc_days': days,
+            'eligible_source_utc_days': source_days,
+            'missing_utc_days': sorted(set(days) - set(by_day)),
+            'partial_coverage': True,
+            'coverage_basis': 'archive_filename_utc_dates_only; not_complete_episode_observations',
+        }
+        for item in plan['items']:
+            match = DAY_NAME.fullmatch(item['name'].replace('labels-', 'snapshots-', 1))
+            if match and match[1] not in days:
+                item['selection_exclusion_reason'] = 'outside_frozen_episode_utc_days'
+        if not by_day:
+            raise ValueError('AWAITING_FROZEN_EPISODE_SOURCE_DATES: requested=' + ','.join(days)
+                             + '; eligible_source=' + ','.join(source_days))
+    else:
+        if not by_day:
+            raise ValueError('NO_DATED_SNAPSHOT_SHARDS')
+        days = source_days
+    queues = {day: spread_order(sorted(by_day.get(day, []), key=lambda unit: (release_dates.get(unit[0]['tag'], ''), unit[0]['tag'], unit[0]['name']))) for day in days}
     quota = plan['max_bytes'] // len(days)
     used = dict.fromkeys(days, 0)
     selected = dict.fromkeys(days, 0)
@@ -123,18 +174,19 @@ def stratify_plan(plan, max_snapshot_archives=96):
         'observation_scope': 'retrospective_recent_public_archives',
         'prospective_evidence': False,
         'max_snapshot_archives': max_snapshot_archives,
-        'available_utc_days': days,
+        'available_utc_days': sorted(by_day),
         'per_day_byte_quota': quota,
         'selected_snapshot_archives_by_day': selected,
         'selected_bytes_by_day': used,
         'label_selection': 'same_release_and_day_nearest_segment_sequence; not causal_label_certification',
         'all_history_complete': False,
+        **scope,
     }
     return record_unselected_source_issues(plan)
 
 
 @contextmanager
-def acquisition_adapters(cache_dir, max_snapshot_archives):
+def acquisition_adapters(cache_dir, max_snapshot_archives, episode_bounds=None):
     """Reuse only locally rehashed bytes that match a freshly fetched sidecar."""
     original_plan, original_request = forward_acquire._plan, forward_acquire.request
     expected = {}
@@ -145,7 +197,7 @@ def acquisition_adapters(cache_dir, max_snapshot_archives):
         cache.mkdir(parents=True, exist_ok=True)
 
     def plan(*args, **kwargs):
-        return stratify_plan(original_plan(*args, **kwargs), max_snapshot_archives)
+        return stratify_plan(original_plan(*args, **kwargs), max_snapshot_archives, episode_bounds)
 
     def request(url, **kwargs):
         archive = url.endswith('.jsonl.gz')
@@ -275,13 +327,23 @@ def run(args):
         (private / 'run.json').write_text(json.dumps(metadata, sort_keys=True, indent=2))
         with (private / 'diagnostics.txt').open('w') as diagnostics, redirect_stdout(diagnostics), redirect_stderr(diagnostics):
             try:
+                episode_bounds = None
                 if getattr(args, 'frozen_model', None) is not None:
                     frozen_input = research_vault.read_bounded(args.frozen_model, 4 * 1024 * 1024)
                     frozen = research_vault.load_json_bytes(frozen_input, 4 * 1024 * 1024)
                     if not {'model', 'sha256', 'forward_min_window_start_ms'} <= set(frozen):
                         raise ValueError('FROZEN_MODEL_SCHEMA')
                     research_vault.write_new(private / 'frozen_input.json', frozen_input)
-                with acquisition_adapters(args.cache, args.max_snapshot_archives):
+                    episode_bounds = frozen_episode_bounds(frozen, args.initial_cash)
+                    if episode_bounds is not None:
+                        metadata.update(selection='frozen_episode_utc_days',
+                                        observation_scope='frozen_episode_utc_day_archives',
+                                        forward_min_window_start_ms=episode_bounds[0],
+                                        forward_max_window_end_ms=episode_bounds[1],
+                                        requested_utc_days=frozen_episode_utc_days(episode_bounds),
+                                        partial_coverage=True)
+                        (private / 'run.json').write_text(json.dumps(metadata, sort_keys=True, indent=2))
+                with acquisition_adapters(args.cache, args.max_snapshot_archives, episode_bounds):
                     manifest = forward_acquire.acquire(private / 'acquisition', args.max_releases, args.max_bytes)
                     if manifest.get('errors') and not manifest.get('acquisition_halted') and any(e.get('retryable') for e in manifest['errors']):
                         manifest = forward_acquire.acquire(private / 'acquisition', args.max_releases, args.max_bytes, resume=True)
