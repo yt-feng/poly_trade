@@ -24,12 +24,17 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import research_vault
 import run_quality_first_research as delivery
 import sealed_public_feed
+import public_market_constraints as constraints
 
 HOST = 'https://data-api.polymarket.com'
+GAMMA_HOST = 'https://gamma-api.polymarket.com'
+CLOB_HOST = 'https://clob.polymarket.com'
 STATUS_ENDPOINT = '/v2/status'
 TRADES_ENDPOINT = '/v2/trades'
 BODY_LIMIT = 1024 * 1024
 MAX_REQUESTS = 4
+MODES = ('availability', 'market-constraints')
+MODE_REQUEST_BUDGET = {'availability': MAX_REQUESTS, 'market-constraints': 8}
 REQUEST_TIMEOUT_SECONDS = 8
 FIXED_REQUEST = {'endpoint': TRADES_ENDPOINT,
                  'filters': {'limit': 100, 'taker_only': True}, 'max_pages': 2}
@@ -42,7 +47,16 @@ class NoRedirect(HTTPRedirectHandler):
 
 def validate_http_request(endpoint, filters):
     if endpoint == STATUS_ENDPOINT and filters == {}:
-        return
+        return HOST
+    if isinstance(endpoint, str) and endpoint.startswith('/markets/slug/') and filters == {}:
+        constraints.slug_start_ms(endpoint[len('/markets/slug/'):])
+        return GAMMA_HOST
+    if isinstance(endpoint, str) and endpoint.startswith('/clob-markets/') and filters == {}:
+        constraints.condition_id(endpoint[len('/clob-markets/'):])
+        return CLOB_HOST
+    if endpoint == '/book' and isinstance(filters, dict) and set(filters) == {'token_id'}:
+        constraints.token_id(filters['token_id'])
+        return CLOB_HOST
     if (endpoint != TRADES_ENDPOINT or not isinstance(filters, dict)
             or set(filters) not in ({'limit', 'taker_only'}, {'limit', 'taker_only', 'cursor'})
             or type(filters.get('limit')) is not int or filters['limit'] != 100
@@ -50,15 +64,16 @@ def validate_http_request(endpoint, filters):
         raise ValueError('FIXED_PUBLIC_REQUEST_REQUIRED')
     if 'cursor' in filters and (not isinstance(filters['cursor'], str) or not 0 < len(filters['cursor']) <= 8192):
         raise ValueError('FIXED_PUBLIC_REQUEST_REQUIRED')
+    return HOST
 
 
 def public_get(endpoint, filters):
     """Bounded standard urllib transport; keep normal environment and TLS."""
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise ValueError('GITHUB_ACTIONS_REQUIRED')
-    validate_http_request(endpoint, filters)
+    host = validate_http_request(endpoint, filters)
     query = {key: str(value).lower() if type(value) is bool else value for key, value in filters.items()}
-    url = HOST + endpoint + ('?' + urlencode(query) if query else '')
+    url = host + endpoint + ('?' + urlencode(query) if query else '')
     request = Request(url, headers={'Accept': 'application/json',
                                     'User-Agent': 'sealed-public-feed-probe/1'}, method='GET')
     # Default handlers preserve ordinary environment networking. Only redirects
@@ -106,18 +121,23 @@ def utc(milliseconds):
 
 class HTTPRecorder:
     """Record every attempted status/feed request only for the outer vault."""
-    def __init__(self, fetcher=None, clock=None, monotonic=None):
+    def __init__(self, fetcher=None, clock=None, monotonic=None, mode='availability'):
+        if mode not in MODES:
+            raise ValueError('UNKNOWN_PROBE_MODE')
+        self.mode = mode
         self.fetcher = fetcher or public_get
         self.clock = clock or (lambda: time.time_ns() // 1_000_000)
         self.monotonic = monotonic or time.monotonic_ns
         self.records = []
 
     def __call__(self, endpoint, filters):
-        validate_http_request(endpoint, filters)
-        if len(self.records) >= MAX_REQUESTS:
+        host = validate_http_request(endpoint, filters)
+        if self.mode == 'availability' and host != HOST:
+            raise ValueError('ENDPOINT_OUTSIDE_PROBE_MODE')
+        if len(self.records) >= MODE_REQUEST_BUDGET[self.mode]:
             raise ValueError('REQUEST_BUDGET_EXCEEDED')
         started, monotonic_start = self.clock(), self.monotonic()
-        record = {'endpoint': endpoint, 'query': dict(filters),
+        record = {'host': host, 'endpoint': endpoint, 'query': dict(filters),
                   'request_started_ms': started, 'request_started_utc': utc(started),
                   'received_ms': None, 'received_utc': None, 'http_status': None,
                   'raw_body_base64': None, 'retained_body_sha256': None,
@@ -156,9 +176,40 @@ def observe_status(recorder):
         pass
 
 
+def observe_market_constraints(recorder):
+    """Inspect one current identity from the already-recorded trade prefix."""
+    selection = constraints.select_current_market(recorder.records, recorder.clock())
+    indices, stopped = {}, None
+    if selection['status'] == 'selected':
+        try:
+            indices['gamma'] = len(recorder.records)
+            recorder('/markets/slug/' + selection['slug'], {})
+            gamma = constraints.record_document(recorder.records[indices['gamma']])
+            binding = constraints.gamma_binding(gamma, selection)
+            indices['clob'] = len(recorder.records)
+            recorder('/clob-markets/' + selection['condition_id'], {})
+            clob = constraints.record_document(recorder.records[indices['clob']])
+            constraints.validate_clob_binding(clob, binding)
+            indices['books'] = {}
+            for token in binding['token_ids']:
+                indices['books'][token] = len(recorder.records)
+                try:
+                    recorder('/book', {'token_id': token})
+                except ValueError:
+                    # Preserve an unavailable side without silently substituting
+                    # another token or suppressing evidence for the other side.
+                    pass
+        except (ValueError, TypeError, KeyError):
+            stopped = 'market_identity_or_source_unverified'
+    return constraints.assessment(selection, indices, recorder.records, recorder.clock(), stopped)
+
+
 def run(args):
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise ValueError('GITHUB_ACTIONS_REQUIRED')
+    mode = getattr(args, 'mode', 'availability')
+    if mode not in MODES:
+        raise ValueError('UNKNOWN_PROBE_MODE')
     recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID')
     recipient = delivery.load_recipient(os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64'), recipient_id)
     output = Path(args.output)
@@ -171,19 +222,21 @@ def run(args):
         private = Path(temporary)
         results = private / 'results'
         results.mkdir()
-        metadata = {'version': 1, 'scope': 'public_feed_availability_evidence_only',
+        metadata = {'version': 1, 'mode': mode,
+                    'scope': 'public_market_constraint_evidence_only' if mode == 'market-constraints' else 'public_feed_availability_evidence_only',
                     'created_utc': datetime.now(timezone.utc).isoformat(),
                     'source_commit': os.environ.get('GITHUB_SHA'), 'run_id': os.environ.get('GITHUB_RUN_ID'),
                     'status_schema_assessed': False, 'freshness_assessed': False,
                     'all_history_complete': False, 'strategy_evaluated': False,
                     'receipt_semantics': 'bounded_body_read_returned; not_exchange_event_time',
-                    'budgets': {'max_requests': MAX_REQUESTS, 'body_bytes_per_request': BODY_LIMIT,
+                    'budgets': {'max_requests': MODE_REQUEST_BUDGET[mode], 'body_bytes_per_request': BODY_LIMIT,
                                 'request_timeout_seconds': REQUEST_TIMEOUT_SECONDS},
                     'request': FIXED_REQUEST, 'collection_exception_code': None,
                     'source_sha256': {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                                       for path in (Path(__file__), Path(sealed_public_feed.__file__),
-                                                   Path(research_vault.__file__), Path(delivery.__file__))}}
-        recorder = HTTPRecorder()
+                                                   Path(research_vault.__file__), Path(delivery.__file__), Path(constraints.__file__))}}
+        recorder = HTTPRecorder(mode=mode)
+        market_assessment = None
         with (private / 'diagnostics.txt').open('w') as diagnostics, redirect_stdout(diagnostics), redirect_stderr(diagnostics):
             observe_status(recorder)
             try:
@@ -193,11 +246,18 @@ def run(args):
                 if inspected['recipient_id'] != recipient_id:
                     raise ValueError('INNER_RECIPIENT_MISMATCH')
                 research_vault.write_new(results / 'public-feed.vault', envelope)
+                if mode == 'market-constraints':
+                    market_assessment = observe_market_constraints(recorder)
             except Exception as exc:
                 metadata['collection_exception_code'] = exception_code(exc)
                 status.update(status='failed', failed_stage='acquisition')
             finally:
                 observe_status(recorder)
+        if market_assessment is not None:
+            market_assessment = constraints.assessment(market_assessment['selection'],
+                market_assessment['source_request_indices'], recorder.records, recorder.clock(),
+                market_assessment['stopped_reason'])
+            (results / 'market-constraints.json').write_bytes(research_vault.canonical(market_assessment))
         (private / 'run.json').write_bytes(research_vault.canonical(metadata))
         (results / 'http-observations.json').write_bytes(research_vault.canonical({
             'version': 1, 'records': recorder.records, 'status_schema_assessed': False,
@@ -211,6 +271,7 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', default='sealed-delivery')
+    parser.add_argument('--mode', choices=MODES, default='availability')
     args = parser.parse_args()
     os.umask(0o077)
     try:
