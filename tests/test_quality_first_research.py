@@ -553,7 +553,8 @@ class ResearchChallengerTests(unittest.TestCase):
 
     def test_no_new_observations_are_reported_as_awaiting_not_success(self):
         challenger = research.research_challenger_payload(self.model(), "source", 4_000_000, 10., 5_000_000)
-        rows = [raw_row(market * 300_000, 0) for market in range(10)]
+        # A frozen forward replay does not need the discovery split's 10 markets.
+        rows = [raw_row(0, 0)]
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(research, "load_verified_snapshots", return_value=(rows, synthetic_provenance(rows))), \
              patch.object(research, "fit_ridge") as fit:
@@ -566,6 +567,38 @@ class ResearchChallengerTests(unittest.TestCase):
             self.assertEqual(result["forward"]["summary"]["proxy_entries"], 0)
             self.assertEqual(result["complete_set_diagnostic"]["necessary_quote_conditions"], [])
             fit.assert_not_called()
+
+    def test_no_btc_observations_are_awaiting_and_never_train(self):
+        challenger = research.research_challenger_payload(self.model(), "source", 4_000_000, 10., 5_000_000)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, "load_verified_snapshots", return_value=([], synthetic_provenance([raw_row(0, 0)]))), \
+             patch.object(research, "fit_ridge") as fit:
+            root = Path(directory)
+            source = root / "challenger.json"
+            source.write_text(json.dumps(challenger))
+            result = research.run(root / "input", root / "output", frozen_model=source)
+            self.assertEqual(result["evaluation_status"], "awaiting_new_data")
+            self.assertIsNone(result["observed_last_ms"])
+            self.assertEqual(result["forward"]["summary"]["proxy_entries"], 0)
+            self.assertFalse(result["input_reaches_episode_end"])
+            fit.assert_not_called()
+
+    def test_record_time_outside_episode_is_excluded_even_with_in_episode_market(self):
+        challenger = research.research_challenger_payload(self.model(), "source", 4_000_000, 10., 5_000_000)
+        begin, end = challenger["forward_min_window_start_ms"], challenger["forward_max_window_end_ms"]
+        rows = [raw_row(begin, -1000), raw_row(begin, 0), raw_row(begin, end - begin)]
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, "load_verified_snapshots", return_value=(rows, synthetic_provenance(rows))), \
+             patch.object(research, "replay", wraps=research.replay) as replay, \
+             patch.object(research, "complete_set_diagnostic", wraps=research.complete_set_diagnostic) as complete:
+            root = Path(directory)
+            source = root / "challenger.json"
+            source.write_text(json.dumps(challenger))
+            result = research.run(root / "input", root / "output", frozen_model=source)
+            self.assertEqual(result["new_episode_observation_count"], 1)
+            self.assertEqual(len(replay.call_args_list), 2)
+            for call in replay.call_args_list + [complete.call_args]:
+                self.assertEqual([row["sample_ms"] for row in call.args[0]], [begin])
 
     def test_invalid_or_unbounded_episode_cannot_be_resigned_into_validity(self):
         original = research.research_challenger_payload(self.model(), "source", 4_000_000, 10., 5_000_000)
@@ -583,6 +616,9 @@ class ResearchChallengerTests(unittest.TestCase):
         after_fit = copy.deepcopy(original)
         after_fit["model"]["fit_cutoff_ms"] = after_fit["consumed_through_ms"] + 1
         cases.append(after_fit)
+        negative_fit = copy.deepcopy(original)
+        negative_fit["model"]["fit_cutoff_ms"] = -1
+        cases.append(negative_fit)
         unknown = copy.deepcopy(original)
         unknown["model"]["family"] = "book_residual"
         cases.append(unknown)

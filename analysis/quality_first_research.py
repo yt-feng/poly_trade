@@ -720,7 +720,7 @@ def validate_research_challenger(frozen):
     fit_cutoff = model.get("fit_cutoff_ms")
     if (begin % 300_000 or begin <= max(frozen["frozen_at_ms"], frozen["consumed_through_ms"])
             or end - begin != CHALLENGER_EPISODE_MS or frozen["expires_at_ms"] != end
-            or type(fit_cutoff) is not int or fit_cutoff > frozen["consumed_through_ms"]):
+            or type(fit_cutoff) is not int or not 0 <= fit_cutoff <= frozen["consumed_through_ms"]):
         raise ValueError("invalid research challenger episode bounds")
     return begin, end
 
@@ -738,7 +738,7 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None, research_c
     mark_evaluation_scope(dataset, provenance)
     decisions = dataset["decisions"]
     starts = sorted({d["window_start_ms"] for d in decisions if d["window_start_ms"] is not None})
-    if len(starts) < 10:
+    if not frozen_model and len(starts) < 10:
         raise ValueError("insufficient distinct market windows")
     provenance_hash = digest(provenance)
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -746,8 +746,8 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None, research_c
               "source_provenance": provenance, "source_hash": provenance_hash,
               "quality_policy": asdict(policy), "quality_funnel": dataset["funnel"],
               "evaluation_scope": dataset["evaluation_scope"],
-              "observed_first_ms": min(d["sample_ms"] for d in decisions),
-              "observed_last_ms": max(d["sample_ms"] for d in decisions),
+              "observed_first_ms": min((d["sample_ms"] for d in decisions), default=None),
+              "observed_last_ms": max((d["sample_ms"] for d in decisions), default=None),
               "independent_market_windows": len(starts), "generated_ms": now_ms,
               "actual_fills": 0, "ten_fill_canary_achieved": False}
     challenger = None
@@ -769,16 +769,17 @@ def run(input_root, output_root, initial_cash=10., frozen_model=None, research_c
             begin, end = validate_research_challenger(frozen)
             episode_decisions = [decision for decision in decisions if decision["window_start_ms"] is not None
                                  and begin <= decision["window_start_ms"]
-                                 and decision["window_start_ms"] + 300_000 <= end]
+                                 and decision["window_start_ms"] + 300_000 <= end
+                                 and begin <= decision["sample_ms"] < end]
             diagnostic_decisions = episode_decisions
             result.update(sample_role="prospective_research_challenger", research_challenger=RESEARCH_CHALLENGER,
                           research_challenger_origin=frozen["origin"], promotion_eligible=False,
                           forward_min_window_start_ms=begin, forward_max_window_end_ms=end,
                           new_episode_observation_count=len(episode_decisions),
-                          evaluation_status=("awaiting_new_data" if result["observed_last_ms"] < begin else
+                          evaluation_status=("awaiting_new_data" if result["observed_last_ms"] is None or result["observed_last_ms"] < begin else
                                              "bounded_episode_replay" if episode_decisions else "no_observations_within_episode"),
                           episode_window_closed=now_ms >= end,
-                          input_reaches_episode_end=result["observed_last_ms"] >= end - 1000)
+                          input_reaches_episode_end=result["observed_last_ms"] is not None and result["observed_last_ms"] >= end - 1000)
         else:
             episode_decisions = decisions
             result["sample_role"] = "prospective_after_frozen_boundary"
