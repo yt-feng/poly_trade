@@ -83,11 +83,16 @@ not refit. The frozen file binds the exact policy and implementation hashes;
 changed execution rules or starting cash require a new episode. Repeated
 evaluations replay one episode and must not be added together as new evidence.
 A bounded challenger's top-level quality funnel, window counts and observed
-time range describe only the episode's eligible market windows and samples in
+time range describe only fully contained market windows and their samples in
 `[begin, end)`. `input_summary` retains the corresponding full-input audit.
 Causal features keep their preceding history. `input_reaches_episode_end`
 requires an in-episode observation in its final second; it does not establish
 continuous coverage or strategy usability.
+The runner validates `research.json` before reporting strategy evaluation.
+Waiting and zero-observation episodes produce `complete` delivery status with
+`strategy_evaluated=false`; unknown or inconsistent result metadata fails the
+research stage. A bounded replay with observations is evaluated even when it
+produces no trade attempts or actual fills.
 A frozen file must be supplied through a private execution context;
 never place it in public workflow inputs, source commits or plaintext artifacts.
 The manual workflow currently performs discovery and produces the frozen file;
