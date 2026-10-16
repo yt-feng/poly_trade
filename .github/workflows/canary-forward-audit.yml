@@ -96,27 +96,27 @@ jobs:
           if not m.get('releases') or m.get('acquisition_halted',False):
               raise SystemExit('No safe release identity available for raw sample; collection withheld.')
           PY
-          python -u analysis/acquire_event_evidence.py --manifest forward_inputs/acquisition_manifest.json --output forward_inputs/event_evidence
+          python -u analysis/acquire_event_evidence.py \
+            --manifest forward_inputs/acquisition_manifest.json \
+            --output forward_inputs/event_evidence \
+            > forward_inputs/event_evidence_stdout.txt 2>&1
       - name: Independent public outcome backfill
         if: ${{ !cancelled() && steps.regression.outcome == 'success' }}
         id: outcomes
-        run: python -u analysis/public_outcome_audit.py --output forward_inputs/outcome_evidence --hours 48
+        run: >-
+          python -u analysis/public_outcome_audit.py
+          --output forward_inputs/outcome_evidence
+          --hours 48
+          > forward_inputs/outcome_evidence_stdout.txt 2>&1
       - name: Save available public evidence even when a component fails
         uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.regression.outcome == 'success' }}
         with:
           name: canary-forward-${{ github.run_id }}-${{ github.run_attempt }}
+          # Raw archives, event evidence and outcome backfills stay private;
+          # sealed research is the only encrypted delivery path.
           path: |
-            forward_inputs/
-            analysis/forward_acquire.py
-            analysis/acquire_event_evidence.py
-            analysis/public_outcome_audit.py
-            analysis/canary*.py
-            tests/test_canary*.py
-            tests/test_forward_acquisition_recovery.py
-            tests/test_event_evidence.py
-            tests/test_public_outcome_audit.py
-            config/canary*.json
+            forward_inputs/deployment_status.json
           retention-days: 14
-          compression-level: 1
+          compression-level: 0
           if-no-files-found: error
