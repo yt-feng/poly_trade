@@ -27,7 +27,7 @@ import all_monthly_clob_systematic_research_v2 as base
 FILL_RATIO = 0.25
 SETTLEMENT_PLUS_RELEASE = 900.0
 BLOCK_SIZES = (16, 16, 16, 16, 15)
-GRID_THRESHOLDS = (0.70, 0.75, 0.80, 0.85, 0.90)
+GRID_THRESHOLDS = (0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90)
 GRID_PRICE_CAPS = (0.50, 0.55, 0.60, 0.65, 0.70)
 GRID_SPREAD_CAPS = (0.04, 0.06)
 
