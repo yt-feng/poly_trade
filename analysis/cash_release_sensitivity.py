@@ -34,6 +34,9 @@ def simulate_cash_locked(
     cash_release_delay_seconds: float,
     cooldown_events: int = study.COOLDOWN_EVENTS,
     capture_logs: bool = True,
+    fee_mode: str = "polymarket_taker",
+    fee_rate: float = 0.07,
+    fee_exponent: float = 1.0,
 ) -> tuple[pd.DataFrame, dict]:
     d = df.sort_values("first_quote_ts").reset_index(drop=True)
     side = d[f"{strategy}_side"].fillna("skip").astype(str).to_numpy()
@@ -118,7 +121,7 @@ def simulate_cash_locked(
         if not math.isfinite(cost) or cost < float(min_cost) or fill_price[i] <= 0:
             continue
         shares = cost / fill_price[i]
-        fee = study.trade_fee_usd(shares, fill_price[i], "polymarket_taker", 0.07, 1.0)
+        fee = study.trade_fee_usd(shares, fill_price[i], fee_mode, fee_rate, fee_exponent)
         reserved = cost + fee
         if reserved > cash + 1e-12:
             blocked_cash += 1
@@ -169,6 +172,9 @@ def simulate_cash_locked(
         "strategy": strategy,
         "cash_release_delay_seconds": float(cash_release_delay_seconds),
         "cooldown_events": int(cooldown_events),
+        "fee_mode": fee_mode,
+        "fee_rate": float(fee_rate),
+        "fee_exponent": float(fee_exponent),
         "trades": len(realized),
         "ending_cash": float(cash),
         "net_return": float(cash / bankroll0 - 1.0),

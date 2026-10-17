@@ -60,6 +60,21 @@ class CashReleaseSensitivityTests(unittest.TestCase):
         )
         self.assertEqual(metrics["trades"], 0)
 
+    def test_maker_contract_has_zero_execution_fee(self):
+        _, metrics = simulate_cash_locked(
+            self.frame(),
+            "classic_early_drop_down_mean_positive",
+            ExecutionConfig(),
+            10.0,
+            5.0,
+            600.0,
+            fee_mode="polymarket_taker",
+            fee_rate=0.0,
+        )
+        self.assertEqual(metrics["fee_mode"], "polymarket_taker")
+        self.assertEqual(metrics["fee_rate"], 0.0)
+        self.assertEqual(metrics["trades"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

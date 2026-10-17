@@ -69,10 +69,16 @@ def attach_maker_snapshots(features: pd.DataFrame, quotes: pd.DataFrame, delays,
                 if pd.notna(signal_ts) and pd.notna(maker_price):
                     fill_cut = pd.Timestamp(signal_ts) + pd.Timedelta(seconds=4)
                     after = g[ts >= fill_cut]
-                    after = after[pd.to_numeric(after[f"sell_{token}_cents"], errors="coerce").notna()]
+                    # A resting bid can only be treated as a trade-through
+                    # proxy when a later observed ask crosses it by at least
+                    # one cent.  A later bid moving down is not evidence that
+                    # our bid was filled and was the old, overly permissive
+                    # touch test.
+                    after = after[pd.to_numeric(after[f"buy_{token}_cents"], errors="coerce").notna()]
                     if pd.notna(close_ts):
                         after = after[after["ts_utc"] <= close_ts]
-                    if not after.empty and (pd.to_numeric(after[f"sell_{token}_cents"], errors="coerce") / 100.0 <= maker_price + 1e-12).any():
+                    maker_cents = pd.to_numeric(signal_row.get(f"sell_{token}_cents"), errors="coerce")
+                    if not after.empty and (pd.to_numeric(after[f"buy_{token}_cents"], errors="coerce") <= maker_cents - 1.0 + 1e-12).any():
                         touch = 1
                 rec.update({
                     f"{prefix}_price": maker_price,
