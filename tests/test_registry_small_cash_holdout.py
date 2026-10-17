@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
+from registry_block_stability_holdout import SELECTION_BLOCK_SIZES, selection_blocks
 from registry_small_cash_holdout import BLOCK_SIZES, REGISTRY_NAMES, holdout_blocks
 
 
@@ -17,6 +18,12 @@ class RegistrySmallCashHoldoutTests(unittest.TestCase):
     def test_registry_is_fixed_and_unique(self):
         self.assertGreaterEqual(len(REGISTRY_NAMES), 20)
         self.assertEqual(len(REGISTRY_NAMES), len(set(REGISTRY_NAMES)))
+
+    def test_selection_stability_partition_is_five_four_run_blocks(self):
+        runs = [f"run-{i:02d}" for i in range(sum(SELECTION_BLOCK_SIZES))]
+        blocks = selection_blocks(runs)
+        self.assertEqual([len(block) for block in blocks], list(SELECTION_BLOCK_SIZES))
+        self.assertEqual([value for block in blocks for value in block], runs)
 
 
 if __name__ == "__main__":
