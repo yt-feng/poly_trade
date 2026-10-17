@@ -166,6 +166,9 @@ def evaluate(source_root: Path, output: Path) -> dict[str, object]:
     features, _coverage, runs = study.prepare_data(source_root)
     if len(runs) != 83:
         raise RuntimeError("SOURCE_SNAPSHOT_RUN_COUNT_MISMATCH")
+    # Keep the time-series comparison on the exact feature construction used
+    # by H44; the path candidate only consumes already-present v1 fields.
+    features = research.add_research_features(features)
     frames = candidate_frames(features)
     test_runs = runs[4:]
     selection_runs, holdout_runs = test_runs[:20], test_runs[20:]
