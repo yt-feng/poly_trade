@@ -120,6 +120,7 @@ jobs:
           repository: yt-feng/poly
           path: source_poly
           fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
 
       - uses: actions/setup-python@v5
         with:
@@ -131,6 +132,7 @@ jobs:
       - name: Run frozen old-data comparison and seal it in the runner
         env:
           PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
         run: |
@@ -139,6 +141,7 @@ jobs:
           mkdir -m 700 "$PRIVATE_DIR"
           python -u analysis/causal_path_book_pressure_alignment.py \
             --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
             --output "$PRIVATE_DIR/results" \
             > "$PRIVATE_DIR/analysis-output.txt"
           python - "$PRIVATE_DIR" <<'PY'

@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import subprocess
 
 import numpy as np
 import pandas as pd
@@ -51,8 +52,19 @@ def variant_frame(features: pd.DataFrame, variant: str) -> pd.DataFrame:
     return out
 
 
-def evaluate(source_root: Path, output: Path) -> dict[str, object]:
+EXPECTED_COMPLETE_RUNS = 83
+
+
+def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, object]:
+    repo_root = source_root.resolve().parents[1]
+    observed_commit = subprocess.check_output(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"], text=True
+    ).strip()
+    if observed_commit != source_commit:
+        raise RuntimeError("SOURCE_SNAPSHOT_COMMIT_MISMATCH")
     features, _coverage, runs = study.prepare_data(source_root)
+    if len(runs) != EXPECTED_COMPLETE_RUNS:
+        raise RuntimeError("SOURCE_SNAPSHOT_RUN_COUNT_MISMATCH")
     test_runs = runs[4:]
     selection_runs = test_runs[:20]
     holdout_runs = test_runs[20:]
@@ -114,6 +126,8 @@ def evaluate(source_root: Path, output: Path) -> dict[str, object]:
     meta = {
         "format": "old-data-causal-path-book-pressure-alignment-v1",
         "source_root": str(source_root),
+        "source_repo_commit": source_commit,
+        "expected_complete_runs": EXPECTED_COMPLETE_RUNS,
         "complete_runs": len(runs),
         "feature_rows": len(features),
         "selection_runs": len(selection_runs),
@@ -153,8 +167,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--source-commit", required=True)
     args = parser.parse_args()
-    print(json.dumps(evaluate(args.source_root, args.output), ensure_ascii=False, sort_keys=True))
+    print(json.dumps(evaluate(args.source_root, args.output, args.source_commit), ensure_ascii=False, sort_keys=True))
 
 
 if __name__ == "__main__":
