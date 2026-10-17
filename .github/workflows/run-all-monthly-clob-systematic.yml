@@ -493,6 +493,9 @@ jobs:
               raise SystemExit('recipient unavailable')
           recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
           research_vault.validate_recipient(recipient, recipient_id)
+          committed = research_vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          if recipient_id != committed['recipient_id'] or recipient != committed:
+              raise SystemExit('recipient variable does not match committed recipient')
           payload = {
               'format': 'old-data-causal-path-efficiency-threshold-grid-sealed-v1',
               'analysis_output': (private / 'analysis-output.txt').read_text(),
