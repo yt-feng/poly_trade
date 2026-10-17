@@ -19,7 +19,17 @@ from typing import Any, Iterable
 
 
 ORDER_STATUSES = frozenset(
-    {"LIVE", "INVALID", "CANCELED_MARKET_RESOLVED", "CANCELED", "MATCHED"}
+    {
+        "LIVE",
+        "INVALID",
+        "CANCELED_MARKET_RESOLVED",
+        "CANCELED",
+        "MATCHED",
+        # Current authenticated user-stream payloads also expose these
+        # non-terminal order states.
+        "DELAYED",
+        "UNMATCHED",
+    }
 )
 TERMINAL_ORDER_STATUSES = frozenset(
     {"INVALID", "CANCELED_MARKET_RESOLVED", "CANCELED", "MATCHED"}
