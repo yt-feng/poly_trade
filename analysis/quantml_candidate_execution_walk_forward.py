@@ -167,12 +167,16 @@ def attach_execution_snapshots(
         if g.empty:
             continue
         ts = pd.to_datetime(g["ts_utc"], utc=True, errors="coerce")
-        ts_ns = ts.astype("int64").to_numpy()
         first_ts = ts.iloc[0]
         rec: Dict[str, object] = {"market_id": market_id}
         for minute in minute_list:
             signal_cut = first_ts + pd.Timedelta(minutes=minute)
-            sig_pos = int(np.searchsorted(ts_ns, signal_cut.value, side="right") - 1)
+            # Use pandas' timezone-aware search rather than mixing integer time
+            # units.  ``Series.astype("int64")`` changed from nanoseconds to
+            # microseconds in pandas 3, while ``Timestamp.value`` remains
+            # nanoseconds; comparing those arrays sends every lookup to the
+            # last quote and silently removes all fills.
+            sig_pos = int(ts.searchsorted(signal_cut, side="right") - 1)
             signal_row = None if sig_pos < 0 else g.iloc[sig_pos]
             signal_ts = pd.NaT if signal_row is None else signal_row.get("ts_utc", pd.NaT)
             for side in ("buy_up", "buy_down"):
@@ -181,7 +185,7 @@ def attach_execution_snapshots(
                     fill_row = None
                     if pd.notna(signal_ts):
                         fill_cut = pd.Timestamp(signal_ts) + pd.Timedelta(seconds=delay)
-                        fill_pos = int(np.searchsorted(ts_ns, fill_cut.value, side="left"))
+                        fill_pos = int(ts.searchsorted(fill_cut, side="left"))
                         if fill_pos < len(g):
                             fill_row = g.iloc[fill_pos]
                     fill = snapshot_values(fill_row, side)
