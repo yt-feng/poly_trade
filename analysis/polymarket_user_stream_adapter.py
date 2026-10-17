@@ -76,7 +76,18 @@ def _canonical_payload(event_type: str, payload: dict[str, Any]) -> dict[str, An
 
 
 def _dedupe_key(event_type: str, payload: dict[str, Any]) -> str:
-    return f"{event_type}:{_text(payload.get('id'))}"
+    status = _text(
+        payload.get("status")
+        or payload.get("orderEventType")
+        or payload.get("order_event_type")
+    ).upper()
+    revision = _text(
+        payload.get("updatedAt")
+        or payload.get("updated_at")
+        or payload.get("last_update")
+        or payload.get("timestamp")
+    )
+    return f"{event_type}:{_text(payload.get('id'))}:{status}:{revision}"
 
 
 def adapt_user_stream_frame(
@@ -89,9 +100,11 @@ def adapt_user_stream_frame(
     """Adapt one captured authenticated user-stream frame.
 
     ``seen_event_ids`` is an optional caller-owned set.  A valid frame's
-    ``type:id`` key is added to that set before adaptation, so retrying the
-    same delivery cannot append a second receipt event.  The function is
-    deterministic and does not mutate the payload.
+    ``type:id:status:revision`` key is added to that set before adaptation, so
+    retrying the same delivery cannot append a second receipt event while a
+    later status update for the same trade (for example MATCHED -> CONFIRMED)
+    remains eligible for validation.  The function is deterministic and does
+    not mutate the payload.
     """
     result = _empty_result()
     if not isinstance(frame, dict):

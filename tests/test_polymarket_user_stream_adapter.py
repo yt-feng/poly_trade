@@ -69,7 +69,7 @@ class PolymarketUserStreamAdapter(unittest.TestCase):
         result = adapt_user_stream_frame(self.order_frame(), expected=self.expected)
         self.assertEqual(result["issues"], [])
         self.assertEqual(result["raw_event_type"], "order")
-        self.assertEqual(result["dedupe_key"], "order:order-1")
+        self.assertEqual(result["dedupe_key"], "order:order-1:LIVE:1782753357257")
         self.assertEqual([event["kind"] for event in result["events"]], ["entry_order_accepted"])
 
     def test_documented_trade_wire_shape_emits_confirmed_fill(self):
@@ -89,7 +89,25 @@ class PolymarketUserStreamAdapter(unittest.TestCase):
         self.assertEqual(len(first["events"]), 1)
         self.assertEqual(second["events"], [])
         self.assertTrue(second["duplicate"])
-        self.assertEqual(seen, {"trade:trade-1"})
+        self.assertEqual(seen, {"trade:trade-1:TRADE_STATUS_CONFIRMED:2026-06-29T17:15:58.257000Z"})
+
+    def test_status_progression_for_one_trade_reaches_confirmation(self):
+        seen = set()
+        matched = adapt_user_stream_frame(
+            self.trade_frame("TRADE_STATUS_MATCHED"),
+            expected=self.expected,
+            seen_event_ids=seen,
+        )
+        confirmed = self.trade_frame("TRADE_STATUS_CONFIRMED")
+        confirmed["payload"]["updatedAt"] = "2026-06-29T17:16:00.257000Z"
+        confirmed_result = adapt_user_stream_frame(
+            confirmed,
+            expected=self.expected,
+            seen_event_ids=seen,
+        )
+        self.assertIn("TRADE_NOT_CONFIRMED", {issue["code"] for issue in matched["issues"]})
+        self.assertEqual([event["kind"] for event in confirmed_result["events"]], ["entry_fill"])
+        self.assertFalse(confirmed_result["duplicate"])
 
     def test_stream_slice_collapses_duplicates_and_preserves_issues(self):
         result = adapt_user_stream_frames(
