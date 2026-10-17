@@ -38,6 +38,14 @@ def test_unconfirmed_event_breaks_the_chain():
     assert result["failure_reason"] == "unconfirmed_fill"
 
 
+def test_paper_upper_bound_never_becomes_canary_evidence():
+    result = evaluate_compound_chain(
+        [event(i) for i in range(10)], evidence_mode="paper_upper_bound"
+    )
+    assert result["paper_replay_passed"] is True
+    assert result["gate_passed"] is False
+
+
 def test_overlapping_entries_use_one_cash_ledger_and_are_compounding():
     first = event(0)
     second = event(1)

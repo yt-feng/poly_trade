@@ -28,6 +28,7 @@ def evaluate_compound_chain(
     initial_cash: Any = "10",
     minimum_order: Any = "5",
     required_fills: int = 10,
+    evidence_mode: str = "authenticated",
 ) -> dict[str, Any]:
     """Evaluate a single no-reset sequence of settled account events.
 
@@ -40,6 +41,8 @@ def evaluate_compound_chain(
     """
     if required_fills <= 0:
         raise ValueError("required_fills must be positive")
+    if evidence_mode not in {"authenticated", "paper_upper_bound"}:
+        raise ValueError("unsupported evidence_mode")
     cash = _money(initial_cash, "initial_cash")
     start_cash = cash
     floor = _money(minimum_order, "minimum_order")
@@ -56,7 +59,9 @@ def evaluate_compound_chain(
         if not isinstance(event, dict):
             failure_reason = "invalid_event"
             break
-        if str(event.get("status", "")).lower() != "confirmed":
+        status = str(event.get("status", "")).lower()
+        accepted_statuses = {"confirmed"} if evidence_mode == "authenticated" else {"confirmed", "paper"}
+        if status not in accepted_statuses:
             failure_reason = "unconfirmed_fill"
             break
         try:
@@ -102,8 +107,10 @@ def evaluate_compound_chain(
     fills = len(rows)
     if failure_reason is None and fills < required_fills:
         failure_reason = "fewer_than_required_consecutive_fills"
+    paper_replay_passed = failure_reason is None and fills >= required_fills and cash >= start_cash
     if failure_reason is None and cash < start_cash:
         failure_reason = "compound_chain_not_growth_positive"
+    canary_gate_passed = paper_replay_passed and evidence_mode == "authenticated"
     return {
         "required_fills": int(required_fills),
         "fills": fills,
@@ -111,7 +118,9 @@ def evaluate_compound_chain(
         "ending_cash": str(cash),
         "net_pnl": str(cash - start_cash),
         "minimum_cash": str(minimum_cash),
-        "gate_passed": failure_reason is None,
+        "evidence_mode": evidence_mode,
+        "paper_replay_passed": paper_replay_passed,
+        "gate_passed": canary_gate_passed,
         "failure_reason": failure_reason,
         "ledger": rows,
     }
