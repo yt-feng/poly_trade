@@ -32,6 +32,20 @@ def main() -> None:
     features = make_variant(features)
     folds = study.make_run_folds(runs)
     config = study.ExecutionConfig()
+    _, global_metrics = study.simulate(
+        features,
+        "micro_price65",
+        config,
+        10.0,
+        5.0,
+        capture_logs=False,
+        fee_mode="polymarket_taker",
+        fee_rate=0.07,
+        fee_exponent=1.0,
+        min_cost_policy="raise_to_min",
+        min_order_mode="notional",
+        min_order_shares=5.0,
+    )
     bankroll = 10.0
     rows = []
     for fold in folds:
@@ -82,7 +96,7 @@ def main() -> None:
     pd.DataFrame(blocks).to_csv(out.with_name(out.stem + "_blocks.csv"), index=False)
     print(result.tail(10).to_string(index=False))
     print(pd.DataFrame(blocks).to_string(index=False))
-    print({"folds": len(result), "ending_bankroll": float(result["ending_bankroll"].iloc[-1]), "trades": int(result["trades"].sum())})
+    print({"folds": len(result), "rolling_ending_bankroll": float(result["ending_bankroll"].iloc[-1]), "rolling_trades": int(result["trades"].sum()), "global_continuous_ending_bankroll": global_metrics["ending_bankroll"], "global_continuous_trades": global_metrics["trades"], "global_continuous_drawdown": global_metrics["max_drawdown"]})
 
 
 if __name__ == "__main__":
