@@ -135,6 +135,56 @@ class LiveOrderPlan:
         }
 
 
+@dataclass(frozen=True)
+class LiveSellPlan:
+    """Plan-only sell boundary; it never submits or cancels an order."""
+
+    local_order_id: str
+    slug: str
+    side: str
+    token_id: str
+    shares: str
+    limit_price: str
+    tick_size: str
+    min_order_size: str
+    blocked_reason: str = ""
+
+    def event_fields(self) -> Dict[str, Any]:
+        return {
+            "live_sell_local_id": self.local_order_id,
+            "slug": self.slug,
+            "side": self.side,
+            "token_id": self.token_id,
+            "live_sell_shares": self.shares,
+            "live_sell_limit_price": self.limit_price,
+            "live_tick_size": self.tick_size,
+            "live_min_order_size": self.min_order_size,
+            "status": "planned" if not self.blocked_reason else self.blocked_reason,
+            "orders_submitted": False,
+        }
+
+
+@dataclass(frozen=True)
+class LiveRedeemPlan:
+    """Plan-only redeem boundary; official resolution and cash receipts stay external."""
+
+    local_redeem_id: str
+    condition_id: str
+    token_ids: str
+    shares: str
+    blocked_reason: str = ""
+
+    def event_fields(self) -> Dict[str, Any]:
+        return {
+            "live_redeem_local_id": self.local_redeem_id,
+            "condition_id": self.condition_id,
+            "token_ids": self.token_ids,
+            "live_redeem_shares": self.shares,
+            "status": "planned" if not self.blocked_reason else self.blocked_reason,
+            "orders_submitted": False,
+        }
+
+
 def build_buy_market_plan(
     *,
     local_order_id: str,
@@ -175,6 +225,65 @@ def build_buy_market_plan(
         net_shares_after_fee=money_text(net_shares_after_fee),
         tick_size=str(Decimal(str(tick_size))),
         min_order_size=money_text(min_size),
+        blocked_reason=blocked,
+    )
+
+
+def build_sell_limit_plan(
+    *,
+    local_order_id: str,
+    slug: str,
+    side: str,
+    token_id: str,
+    shares: float,
+    limit_price: float,
+    tick_size: float,
+    min_order_size: float,
+) -> LiveSellPlan:
+    """Build a sell plan for receipt validation without exposing submission."""
+    size = Decimal(str(shares))
+    minimum = Decimal(str(min_order_size)) if min_order_size and min_order_size > 0 else Decimal("0")
+    price = price_text(Decimal(str(limit_price)), tick_size)
+    blocked = ""
+    if size <= 0:
+        blocked = "blocked_zero_sell_size"
+    elif minimum > 0 and size < minimum:
+        blocked = "blocked_sell_min_order_size"
+    return LiveSellPlan(
+        local_order_id=local_order_id,
+        slug=slug,
+        side=side,
+        token_id=token_id,
+        shares=money_text(size),
+        limit_price=price,
+        tick_size=str(Decimal(str(tick_size))),
+        min_order_size=money_text(minimum),
+        blocked_reason=blocked,
+    )
+
+
+def build_redeem_plan(
+    *,
+    local_redeem_id: str,
+    condition_id: str,
+    token_ids: list[str],
+    shares: float,
+    official_resolution_ref: str = "",
+) -> LiveRedeemPlan:
+    """Build a redeem plan only after an external official resolution reference exists."""
+    size = Decimal(str(shares))
+    blocked = ""
+    if not condition_id.strip() or not token_ids:
+        blocked = "blocked_missing_resolution_identity"
+    elif not official_resolution_ref.strip():
+        blocked = "blocked_missing_official_resolution_receipt"
+    elif size <= 0:
+        blocked = "blocked_zero_redeem_size"
+    return LiveRedeemPlan(
+        local_redeem_id=local_redeem_id,
+        condition_id=condition_id,
+        token_ids=",".join(str(x) for x in token_ids),
+        shares=money_text(size),
         blocked_reason=blocked,
     )
 
