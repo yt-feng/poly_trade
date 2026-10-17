@@ -121,6 +121,30 @@ def window_metrics(event_returns: np.ndarray, trade_flags: np.ndarray) -> Dict[s
     }
 
 
+def trade_fee_usd(
+    shares: float,
+    price: float,
+    fee_mode: str = "flat_per_share",
+    fee_rate: float = FEE,
+    fee_exponent: float = 1.0,
+) -> float:
+    """Return the fee for one taker trade under the selected fee contract."""
+    if not math.isfinite(float(shares)) or float(shares) < 0:
+        raise ValueError("shares must be finite and non-negative")
+    if not math.isfinite(float(price)) or not 0.0 < float(price) < 1.0:
+        raise ValueError("price must be finite and between zero and one")
+    if not math.isfinite(float(fee_rate)) or float(fee_rate) < 0:
+        raise ValueError("fee_rate must be finite and non-negative")
+    if not math.isfinite(float(fee_exponent)) or float(fee_exponent) <= 0:
+        raise ValueError("fee_exponent must be finite and positive")
+    if fee_mode == "flat_per_share":
+        return float(shares) * float(fee_rate)
+    if fee_mode == "polymarket_taker":
+        # Polymarket crypto taker schedule: C * rate * p^exponent * (1-p).
+        return round(float(shares) * float(fee_rate) * (float(price) ** float(fee_exponent)) * (1.0 - float(price)), 5)
+    raise ValueError(f"unsupported fee_mode: {fee_mode}")
+
+
 def simulate(
     df: pd.DataFrame,
     strategy: str,
@@ -206,10 +230,7 @@ def simulate(
             continue
         shares = cost / fill_price[i]
         gross_pnl = shares * ((outcome[i] if side[i] == "buy_up" else 1.0 - outcome[i]) - fill_price[i])
-        if fee_mode == "polymarket_taker":
-            fee_usd = round(shares * float(fee_rate) * (fill_price[i] ** float(fee_exponent)) * (1.0 - fill_price[i]), 5)
-        else:
-            fee_usd = shares * float(fee_rate)
+        fee_usd = trade_fee_usd(shares, fill_price[i], fee_mode, float(fee_rate), float(fee_exponent))
         pnl = gross_pnl - fee_usd
         before = bankroll
         bankroll += pnl
