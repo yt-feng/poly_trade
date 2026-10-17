@@ -2,8 +2,9 @@
 
 The normal replay immediately adds realized PnL to bankroll.  This diagnostic
 keeps entry cost and fee locked until a five-minute market settles plus an
-explicit cash-release delay.  It therefore measures whether a $10 account can
-reuse a $5 minimum order without assuming instant settlement.
+explicit cash-release delay.  It therefore measures whether a small account
+can reuse an order subject to both a notional floor and the exchange's
+minimum share count without assuming instant settlement.
 """
 from __future__ import annotations
 
@@ -37,7 +38,10 @@ def simulate_cash_locked(
     fee_mode: str = "polymarket_taker",
     fee_rate: float = 0.07,
     fee_exponent: float = 1.0,
+    min_order_shares: float = 5.0,
 ) -> tuple[pd.DataFrame, dict]:
+    if not math.isfinite(float(min_order_shares)) or float(min_order_shares) < 0:
+        raise ValueError("min_order_shares must be finite and non-negative")
     d = df.sort_values("first_quote_ts").reset_index(drop=True)
     side = d[f"{strategy}_side"].fillna("skip").astype(str).to_numpy()
     minute = d[f"{strategy}_minute"].to_numpy(dtype=int)
@@ -113,7 +117,7 @@ def simulate_cash_locked(
         capacity = float(quote_size[i]) * study.FILL_RATIO * float(fill_price[i])
         target_cost = cash * max(fraction[i], 0.0)
         cost = min(target_cost, cash, capacity)
-        required_cost = max(float(min_cost), 5.0 * float(fill_price[i]))
+        required_cost = max(float(min_cost), float(min_order_shares) * float(fill_price[i]))
         if cash < required_cost or capacity < required_cost:
             blocked_cash += 1
             continue
@@ -175,6 +179,8 @@ def simulate_cash_locked(
         "fee_mode": fee_mode,
         "fee_rate": float(fee_rate),
         "fee_exponent": float(fee_exponent),
+        "min_order_notional": float(min_cost),
+        "min_order_shares": float(min_order_shares),
         "trades": len(realized),
         "ending_cash": float(cash),
         "net_return": float(cash / bankroll0 - 1.0),

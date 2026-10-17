@@ -56,7 +56,7 @@ class CashReleaseSensitivityTests(unittest.TestCase):
             ExecutionConfig(min_depth=300.0),
             10.0,
             5.0,
-            0.0,
+            600.0,
         )
         self.assertEqual(metrics["trades"], 0)
 
@@ -74,6 +74,22 @@ class CashReleaseSensitivityTests(unittest.TestCase):
         self.assertEqual(metrics["fee_mode"], "polymarket_taker")
         self.assertEqual(metrics["fee_rate"], 0.0)
         self.assertEqual(metrics["trades"], 2)
+
+    def test_share_floor_is_explicit_and_can_consume_the_small_ledger(self):
+        _, metrics = simulate_cash_locked(
+            self.frame(),
+            "classic_early_drop_down_mean_positive",
+            ExecutionConfig(),
+            10.0,
+            5.0,
+            600.0,
+            fee_mode="polymarket_taker",
+            fee_rate=0.0,
+            min_order_shares=19.0,
+        )
+        self.assertEqual(metrics["min_order_notional"], 5.0)
+        self.assertEqual(metrics["min_order_shares"], 19.0)
+        self.assertEqual(metrics["trades"], 1)
 
 
 if __name__ == "__main__":
