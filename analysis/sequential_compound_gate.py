@@ -97,7 +97,7 @@ def evaluate_compound_chain(
                 "cash_before_entry": str(cash_before),
                 "reserved": str(reserved),
                 "payout": str(payout),
-                "cash_after_settlement": str(cash),
+                "cash_after_entry": str(cash),
             }
         )
 
