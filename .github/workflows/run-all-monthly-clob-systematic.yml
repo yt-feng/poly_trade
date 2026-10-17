@@ -2,6 +2,12 @@ name: Build all monthly_runs CLOB systematic research
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run the standard report or the sealed old-data book-pressure audit'
+        type: choice
+        options: [systematic, book_pressure]
+        default: systematic
   push:
     branches:
       - main
@@ -17,6 +23,7 @@ permissions:
 
 jobs:
   build-all-monthly-clob-systematic:
+    if: github.event_name != 'workflow_dispatch' || inputs.mode != 'book_pressure'
     runs-on: ubuntu-latest
 
     steps:
@@ -96,3 +103,82 @@ jobs:
           else
             echo 'No output changes to commit.'
           fi
+
+  book-pressure-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'book_pressure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run frozen old-data comparison and seal it in the runner
+        env:
+          PYTHONUNBUFFERED: '1'
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-book-pressure"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/causal_path_book_pressure_alignment.py \
+            --source-root source_poly/data/monthly_runs \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-data-causal-book-pressure-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-book-pressure" sealed-delivery
