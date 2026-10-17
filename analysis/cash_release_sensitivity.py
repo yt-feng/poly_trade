@@ -32,6 +32,7 @@ def simulate_cash_locked(
     bankroll0: float,
     min_cost: float,
     cash_release_delay_seconds: float,
+    cooldown_events: int = study.COOLDOWN_EVENTS,
     capture_logs: bool = True,
 ) -> tuple[pd.DataFrame, dict]:
     d = df.sort_values("first_quote_ts").reset_index(drop=True)
@@ -131,7 +132,7 @@ def simulate_cash_locked(
         if pnl < 0:
             loss_streak += 1
             if loss_streak >= study.COOLDOWN_AFTER_LOSSES:
-                cooldown = study.COOLDOWN_EVENTS
+                cooldown = int(cooldown_events)
                 loss_streak = 0
         else:
             loss_streak = 0
@@ -161,6 +162,7 @@ def simulate_cash_locked(
     return pd.DataFrame(logs), {
         "strategy": strategy,
         "cash_release_delay_seconds": float(cash_release_delay_seconds),
+        "cooldown_events": int(cooldown_events),
         "trades": len(realized),
         "ending_cash": float(cash),
         "net_return": float(cash / bankroll0 - 1.0),
