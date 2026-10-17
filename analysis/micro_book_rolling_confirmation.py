@@ -27,6 +27,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--min-cost", type=float, default=5.0)
+    parser.add_argument("--min-order-mode", choices=("notional", "shares", "both"), default="notional")
+    parser.add_argument("--min-order-shares", type=float, default=5.0)
     args = parser.parse_args()
     features, runs = prepare(Path(args.source_root), ["micro_book_consensus_up"])
     features = make_variant(features)
@@ -37,14 +40,14 @@ def main() -> None:
         "micro_price65",
         config,
         10.0,
-        5.0,
+        args.min_cost,
         capture_logs=False,
         fee_mode="polymarket_taker",
         fee_rate=0.07,
         fee_exponent=1.0,
         min_cost_policy="raise_to_min",
-        min_order_mode="notional",
-        min_order_shares=5.0,
+        min_order_mode=args.min_order_mode,
+        min_order_shares=args.min_order_shares,
     )
     bankroll = 10.0
     rows = []
@@ -55,14 +58,14 @@ def main() -> None:
             "micro_price65",
             config,
             bankroll,
-            5.0,
+            args.min_cost,
             capture_logs=False,
             fee_mode="polymarket_taker",
             fee_rate=0.07,
             fee_exponent=1.0,
             min_cost_policy="raise_to_min",
-            min_order_mode="notional",
-            min_order_shares=5.0,
+            min_order_mode=args.min_order_mode,
+            min_order_shares=args.min_order_shares,
         )
         rows.append({
             "fold_id": fold["fold_id"],
