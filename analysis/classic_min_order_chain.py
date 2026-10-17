@@ -13,10 +13,10 @@ import monthly_runs_quant_research_framework as qrf
 import v1_execution_walk_forward as study
 from quantml_candidate_execution_walk_forward import attach_execution_snapshots
 
-CANDIDATES = ("classic_early_drop_down", "classic_extremeup_fade_down")
+CANDIDATES = tuple(spec.name for spec in qrf.strategy_registry())
 
 
-def prepare(source_root: Path):
+def prepare(source_root: Path, selected):
     raw, coverage = base.read_all_monthly_runs(source_root)
     coverage = coverage.sort_values("run_name").reset_index(drop=True)
     maximum = int(coverage["file_count"].max())
@@ -30,7 +30,7 @@ def prepare(source_root: Path):
     features = qrf.add_research_features(features)
     features = attach_execution_snapshots(features, quotes, delays=(4,), minutes=(1, 2, 4))
     features = features[pd.notna(features["outcome_up"])].sort_values("first_quote_ts").reset_index(drop=True)
-    for strategy in CANDIDATES:
+    for strategy in selected:
         choices = features.apply(lambda row, name=strategy: qrf.choose_trade(row, name), axis=1)
         features[f"{strategy}_side"] = choices.map(lambda x: x[0])
         features[f"{strategy}_minute"] = choices.map(lambda x: x[1]).astype(int)
@@ -46,12 +46,17 @@ def main() -> None:
     parser.add_argument("--bankroll0", type=float, default=10.0)
     parser.add_argument("--min-cost", type=float, default=5.0)
     parser.add_argument("--fee", type=float, default=0.07)
+    parser.add_argument("--candidates", default=",")
     args = parser.parse_args()
-    features, runs = prepare(Path(args.source_root))
+    selected = [x.strip() for x in args.candidates.split(",") if x.strip()] if args.candidates.strip(",") else list(CANDIDATES)
+    unknown = sorted(set(selected) - set(CANDIDATES))
+    if unknown:
+        raise SystemExit(f"unknown candidates: {unknown}")
+    features, runs = prepare(Path(args.source_root), selected)
     folds = study.make_run_folds(runs)
     config = study.ExecutionConfig()
     rows = []
-    for strategy in CANDIDATES:
+    for strategy in selected:
         bankroll = float(args.bankroll0)
         for fold in folds:
             frame = features[features["run_name"] == fold["test_run"]].copy()
