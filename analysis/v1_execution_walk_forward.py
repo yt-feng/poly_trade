@@ -227,6 +227,7 @@ def simulate(
     peak = bankroll
     max_drawdown = 0.0
     event_returns = np.zeros(len(d), dtype=float)
+    pnl_values = np.zeros(len(d), dtype=float)
     trade_flags = np.zeros(len(d), dtype=int)
     logs: List[Dict[str, object]] = []
     recent_trades: List[int] = []
@@ -269,6 +270,7 @@ def simulate(
         bankroll += pnl
         event_return = pnl / before if before > 0 else 0.0
         event_returns[i] = event_return
+        pnl_values[i] = pnl
         trade_flags[i] = 1
         recent_trades.append(i)
         peak = max(peak, bankroll)
@@ -308,7 +310,7 @@ def simulate(
                 }
             )
 
-    pnl_series = pd.Series([row["pnl_usd"] for row in logs], dtype=float) if capture_logs else pd.Series(bankroll0 * event_returns[trade_flags == 1], dtype=float)
+    pnl_series = pd.Series([row["pnl_usd"] for row in logs], dtype=float) if capture_logs else pd.Series(pnl_values[trade_flags == 1], dtype=float)
     wins = float(pnl_series[pnl_series > 0].sum()) if not pnl_series.empty else 0.0
     losses = float(pnl_series[pnl_series < 0].sum()) if not pnl_series.empty else 0.0
     metrics: Dict[str, object] = {

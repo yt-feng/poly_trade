@@ -91,6 +91,28 @@ class MinimumOrderModeTests(unittest.TestCase):
         self.assertEqual(global_metrics["trades"], 10)
         self.assertEqual(separate_trades, 11)
 
+    def test_profit_factor_is_identical_with_or_without_trade_logs(self):
+        first = one_signal(fraction=0.10).copy()
+        second = one_signal(fraction=0.10).copy()
+        second["first_quote_ts"] = pd.Timestamp("2026-01-01T00:01:00Z")
+        second["market_id"] = "synthetic::two"
+        second["outcome_up"] = 0.0
+        frame = pd.concat([first, second], ignore_index=True)
+        _, with_logs = simulate(
+            frame, "v1_conservative_mix", ExecutionConfig(), 10.0, 0.0,
+            capture_logs=True, fee_mode="polymarket_taker", fee_rate=0.07,
+            min_cost_policy="raise_to_min", min_order_mode="notional",
+            min_order_shares=5.0,
+        )
+        _, without_logs = simulate(
+            frame, "v1_conservative_mix", ExecutionConfig(), 10.0, 0.0,
+            capture_logs=False, fee_mode="polymarket_taker", fee_rate=0.07,
+            min_cost_policy="raise_to_min", min_order_mode="notional",
+            min_order_shares=5.0,
+        )
+        self.assertEqual(with_logs["trades"], 2)
+        self.assertAlmostEqual(with_logs["profit_factor"], without_logs["profit_factor"], places=12)
+
 
 if __name__ == "__main__":
     unittest.main()
