@@ -657,6 +657,7 @@ jobs:
           mkdir -m 700 "$PRIVATE_DIR"
           python -u analysis/compound_old_clean_replay.py \
             --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
             --output "$PRIVATE_DIR/results" \
             > "$PRIVATE_DIR/analysis-output.txt"
           python - "$PRIVATE_DIR" <<'PY'
