@@ -1,0 +1,47 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
+
+from sequential_compound_gate import evaluate_compound_chain
+
+
+def event(i: int, *, status: str = "confirmed", cost: str = "5", payout: str = "5.50"):
+    return {
+        "status": status,
+        "entry_ts": str(i * 100),
+        "cash_available_ts": str(i * 100 + 10),
+        "entry_cost": cost,
+        "fee": "0",
+        "payout": payout,
+    }
+
+
+def test_ten_fills_are_one_growth_positive_reusable_cash_chain():
+    result = evaluate_compound_chain([event(i) for i in range(10)])
+    assert result["gate_passed"] is True
+    assert result["fills"] == 10
+    assert result["ending_cash"] == "15.00"
+
+
+def test_chain_does_not_reset_cash_between_independent_trials():
+    events = [event(0), event(1, cost="5", payout="0")]
+    result = evaluate_compound_chain(events, required_fills=2)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "compound_chain_not_growth_positive"
+
+
+def test_unconfirmed_event_breaks_the_chain():
+    result = evaluate_compound_chain([event(0), event(1, status="paper")])
+    assert result["gate_passed"] is False
+    assert result["fills"] == 1
+    assert result["failure_reason"] == "unconfirmed_fill"
+
+
+def test_next_entry_before_cash_release_is_not_compounding():
+    first = event(0)
+    second = event(1)
+    second["entry_ts"] = "5"
+    result = evaluate_compound_chain([first, second], required_fills=2)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "cash_not_reusable_before_next_entry"
