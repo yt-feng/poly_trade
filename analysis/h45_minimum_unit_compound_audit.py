@@ -97,11 +97,14 @@ def paper_events(logs: pd.DataFrame) -> list[dict[str, str]]:
 def chain_metrics(logs: pd.DataFrame) -> dict[str, object]:
     events = paper_events(logs)
     chain = evaluate_compound_chain(
-        events, initial_cash=str(INITIAL_CASH), minimum_order="0",
+        # The pure ledger validator requires a positive floor.  The simulator
+        # enforces the actual share floor; this tiny placeholder represents
+        # "no additional dollar notional floor" without changing any event.
+        events, initial_cash=str(INITIAL_CASH), minimum_order="0.0000001",
         required_fills=10, evidence_mode="paper_upper_bound",
     )
     prefix = evaluate_compound_chain(
-        events[:10], initial_cash=str(INITIAL_CASH), minimum_order="0",
+        events[:10], initial_cash=str(INITIAL_CASH), minimum_order="0.0000001",
         required_fills=10, evidence_mode="paper_upper_bound",
     )
     return {
