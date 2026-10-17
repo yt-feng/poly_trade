@@ -14,9 +14,14 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
+
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
 
 import v1_execution_walk_forward as study
 from cash_release_sensitivity import simulate_cash_locked
