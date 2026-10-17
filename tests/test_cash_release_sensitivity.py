@@ -49,6 +49,17 @@ class CashReleaseSensitivityTests(unittest.TestCase):
         self.assertEqual(len(immediate), 2)
         self.assertEqual(len(delayed), 1)
 
+    def test_execution_envelope_can_block_insufficient_depth(self):
+        _, metrics = simulate_cash_locked(
+            self.frame(),
+            "classic_early_drop_down_mean_positive",
+            ExecutionConfig(min_depth=300.0),
+            10.0,
+            5.0,
+            0.0,
+        )
+        self.assertEqual(metrics["trades"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
