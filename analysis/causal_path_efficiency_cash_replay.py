@@ -31,7 +31,24 @@ CANDIDATES = (
     "v1_adaptive_mix__path_efficiency_ge_050",
     "v1_conservative_mix__path_efficiency_ge_050",
 )
-BLOCK_SIZES = (16, 16, 16, 16, 15)
+SELECTION_BLOCK_SIZES = (5, 5, 5, 5)
+HOLDOUT_BLOCK_SIZES = (12, 12, 12, 12, 11)
+# Compatibility alias for callers that only need the independent holdout shape.
+BLOCK_SIZES = HOLDOUT_BLOCK_SIZES
+
+
+def chronological_blocks(runs: list[str], sizes: tuple[int, ...]) -> list[list[str]]:
+    """Partition exactly the supplied split without importing earlier runs."""
+    if sum(sizes) != len(runs):
+        raise ValueError("BLOCK_SIZES_MUST_COVER_RUNS_EXACTLY")
+    blocks: list[list[str]] = []
+    cursor = 0
+    for size in sizes:
+        blocks.append(runs[cursor : cursor + size])
+        cursor += size
+    if len({item for block in blocks for item in block}) != len(runs):
+        raise ValueError("BLOCKS_MUST_NOT_OVERLAP")
+    return blocks
 
 
 def evaluate(source_root: Path, output: Path, slippages: tuple[float, ...]) -> dict[str, object]:
@@ -39,11 +56,8 @@ def evaluate(source_root: Path, output: Path, slippages: tuple[float, ...]) -> d
     test_runs = runs[4:]
     selection_runs = test_runs[:20]
     holdout_runs = test_runs[20:]
-    blocks: list[list[str]] = []
-    cursor = 0
-    for size in BLOCK_SIZES:
-        blocks.append(test_runs[cursor:cursor + size])
-        cursor += size
+    selection_blocks = chronological_blocks(selection_runs, SELECTION_BLOCK_SIZES)
+    holdout_blocks = chronological_blocks(holdout_runs, HOLDOUT_BLOCK_SIZES)
 
     rows: list[dict[str, object]] = []
     logs: list[pd.DataFrame] = []
@@ -62,14 +76,22 @@ def evaluate(source_root: Path, output: Path, slippages: tuple[float, ...]) -> d
 
         for slippage in slippages:
             config = study.ExecutionConfig(fixed_slippage=slippage)
-            for block_index, names in enumerate(blocks, 1):
+            for block_index, names in enumerate(selection_blocks, 1):
                 trade_log, metrics = simulate_cash_locked(
                     gated[gated["run_name"].isin(names)], strategy, config, 10.0, 5.0,
                     600.0, cooldown_events=0, capture_logs=True,
                 )
-                rows.append({"candidate": candidate, "split": f"block{block_index}", "slippage": slippage, **metrics})
+                rows.append({"candidate": candidate, "split": f"selection_block{block_index}", "slippage": slippage, **metrics})
                 if not trade_log.empty:
-                    trade_log = trade_log.copy(); trade_log["candidate"] = candidate; trade_log["split"] = f"block{block_index}"; logs.append(trade_log)
+                    trade_log = trade_log.copy(); trade_log["candidate"] = candidate; trade_log["split"] = f"selection_block{block_index}"; logs.append(trade_log)
+            for block_index, names in enumerate(holdout_blocks, 1):
+                trade_log, metrics = simulate_cash_locked(
+                    gated[gated["run_name"].isin(names)], strategy, config, 10.0, 5.0,
+                    600.0, cooldown_events=0, capture_logs=True,
+                )
+                rows.append({"candidate": candidate, "split": f"holdout_block{block_index}", "slippage": slippage, **metrics})
+                if not trade_log.empty:
+                    trade_log = trade_log.copy(); trade_log["candidate"] = candidate; trade_log["split"] = f"holdout_block{block_index}"; logs.append(trade_log)
             trade_log, metrics = simulate_cash_locked(
                 gated[gated["run_name"].isin(test_runs)], strategy, config, 10.0, 5.0,
                 600.0, cooldown_events=0, capture_logs=True,
@@ -83,10 +105,10 @@ def evaluate(source_root: Path, output: Path, slippages: tuple[float, ...]) -> d
     selected_candidate = str(selection.sort_values(["ending_cash", "trades"], ascending=[False, False]).iloc[0]["candidate"])
     selected_rows = result[result["candidate"].eq(selected_candidate)].copy()
     holdout = selected_rows[selected_rows["split"].eq("holdout59")]
-    blocks_selected = selected_rows[selected_rows["split"].str.startswith("block")]
+    blocks_selected = selected_rows[selected_rows["split"].str.startswith("holdout_block")]
     gate = bool(
         int(holdout["trades"].iloc[0]) >= 10
-        and len(blocks_selected) == len(BLOCK_SIZES) * len(slippages)
+        and len(blocks_selected) == len(HOLDOUT_BLOCK_SIZES) * len(slippages)
         and bool((blocks_selected["ending_cash"] >= 5.0).all())
         and bool((blocks_selected["net_return"] >= 0.0).all())
     )
@@ -105,7 +127,9 @@ def evaluate(source_root: Path, output: Path, slippages: tuple[float, ...]) -> d
         "protocol": {"initial_cash": 10.0, "min_cost": 5.0, "fee_rate": 0.07,
                      "settlement_seconds": 300.0, "cash_release_delay_seconds": 600.0,
                      "slippages": list(slippages), "fill_ratio": 0.25, "cooldown_events": 0},
-        "promotion_rule": "selected holdout must have >=10 trades and all five blocks must end >=$5 with nonnegative PnL at both slippages",
+        "promotion_rule": "selected holdout must have >=10 trades and all five holdout-only blocks must end >=$5 with nonnegative PnL at both slippages",
+        "selection_block_sizes": list(SELECTION_BLOCK_SIZES),
+        "holdout_block_sizes": list(HOLDOUT_BLOCK_SIZES),
         "selected_gate_passed": gate, "new_data_collected": False, "live_orders_enabled": False,
         "actual_fills": 0, "verified_canary_fills": 0,
     }
