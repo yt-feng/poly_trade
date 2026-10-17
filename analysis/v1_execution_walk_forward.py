@@ -55,15 +55,21 @@ def complete_runs(coverage: pd.DataFrame) -> List[str]:
     return coverage.loc[coverage["file_count"] == maximum, "run_name"].astype(str).tolist()
 
 
-def make_run_folds(runs: List[str], minimum_train_runs: int = 3) -> List[Dict[str, object]]:
+def make_run_folds(
+    runs: List[str], minimum_train_runs: int = 3, validation_window: int = 1
+) -> List[Dict[str, object]]:
+    if type(validation_window) is not int or validation_window < 1:
+        raise ValueError("validation_window must be a positive integer")
+    first_validation_index = minimum_train_runs + validation_window - 1
     return [
         {
             "fold_id": fold_id,
-            "train_runs": runs[:i],
+            "train_runs": runs[: i - validation_window + 1],
+            "validation_runs": runs[i - validation_window + 1 : i + 1],
             "validation_run": runs[i],
             "test_run": runs[i + 1],
         }
-        for fold_id, i in enumerate(range(minimum_train_runs, len(runs) - 1), start=1)
+        for fold_id, i in enumerate(range(first_validation_index, len(runs) - 1), start=1)
     ]
 
 

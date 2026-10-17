@@ -28,14 +28,15 @@ def main() -> None:
     parser.add_argument("--fee", type=float, default=0.07)
     parser.add_argument("--min-order-mode", choices=("notional", "shares", "both"), default="notional")
     parser.add_argument("--min-order-shares", type=float, default=5.0)
+    parser.add_argument("--validation-window", type=int, choices=(1, 3), default=1)
     args = parser.parse_args()
     features, runs = prepare(Path(args.source_root), list(CANDIDATES))
-    folds = study.make_run_folds(runs)
+    folds = study.make_run_folds(runs, validation_window=args.validation_window)
     config = study.ExecutionConfig()
     rows = []
     bankroll = float(args.bankroll0)
     for fold in folds:
-        validation = features[features["run_name"] == fold["validation_run"]].copy()
+        validation = features[features["run_name"].isin(fold["validation_runs"])].copy()
         test = features[features["run_name"] == fold["test_run"]].copy()
         val_metrics = []
         for candidate in CANDIDATES:
@@ -74,6 +75,8 @@ def main() -> None:
         rows.append({
             "fold_id": fold["fold_id"],
             "validation_run": fold["validation_run"],
+            "validation_runs": ",".join(fold["validation_runs"]),
+            "validation_window": args.validation_window,
             "test_run": fold["test_run"],
             "selected_candidate": selected,
             "validation_score": selected_val["validation_score"],
@@ -104,7 +107,7 @@ def main() -> None:
     summary.to_csv(summary_path, index=False)
     selections = result["selected_candidate"].value_counts().rename_axis("candidate").reset_index(name="selected_folds")
     selections.to_csv(out.with_name(out.stem + "_selection_counts.csv"), index=False)
-    print(json.dumps({"complete_runs": len(runs), "fold_count": len(folds), "bankroll0": args.bankroll0, "min_cost": args.min_cost, "fee": args.fee, "min_order_mode": args.min_order_mode, "min_order_shares": args.min_order_shares}, indent=2))
+    print(json.dumps({"complete_runs": len(runs), "fold_count": len(folds), "bankroll0": args.bankroll0, "min_cost": args.min_cost, "fee": args.fee, "min_order_mode": args.min_order_mode, "min_order_shares": args.min_order_shares, "validation_window": args.validation_window}, indent=2))
     print(summary.to_string(index=False))
     print(selections.to_string(index=False))
 
