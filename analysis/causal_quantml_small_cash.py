@@ -29,7 +29,9 @@ from cash_release_sensitivity import simulate_cash_locked
 
 EXPECTED_COMPLETE_RUNS = 83
 SELECTION_RUNS = 20
-BLOCK_SIZES = (16, 16, 16, 16, 15)
+# The 59-run holdout is partitioned into five chronological blocks.  The
+# earlier draft used the 79-run sizes and accidentally included selection20.
+BLOCK_SIZES = (12, 12, 12, 12, 11)
 SLIPPAGES = (0.005, 0.010, 0.015)
 STRATEGY = "quantml_size_imbalance_uncertainty"
 
@@ -64,6 +66,8 @@ def apply_thresholds(
 
 
 def _blocks(test_runs: list[str]) -> list[list[str]]:
+    if len(test_runs) != sum(BLOCK_SIZES):
+        raise ValueError("BLOCK_INPUT_MUST_BE_HOLDOUT59")
     result: list[list[str]] = []
     cursor = 0
     for size in BLOCK_SIZES:
@@ -111,7 +115,9 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, o
                 capture_logs=False,
             )
             rows.append({"variant": STRATEGY, "split": split, "slippage": slippage, **metrics})
-    blocks = _blocks(test_runs)
+    # Stress blocks are strictly the holdout window.  Selection20 is used to
+    # set the fixed quantiles and must not be counted as out-of-sample stress.
+    blocks = _blocks(holdout_runs)
     for block_index, names in enumerate(blocks, start=1):
         for slippage in SLIPPAGES:
             _, metrics = simulate_cash_locked(
@@ -145,6 +151,7 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, o
         "selection_runs": len(selection_runs),
         "holdout_runs": len(holdout_runs),
         "block_sizes": list(BLOCK_SIZES),
+        "block_scope": "holdout59_only",
         "hypothesis": "Two-minute size imbalance is more useful when the market-implied probability is uncertain; fixed high/low tails choose Up/Down.",
         "factor": "size_imbalance_updown_2m * (1 - 2*abs(mid_up_prob_2m - 0.5))",
         "thresholds": {"selection_quantiles": [0.20, 0.80], "low": low, "high": high},
