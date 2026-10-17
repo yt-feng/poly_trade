@@ -105,6 +105,10 @@ def _trade_canonical(payload: dict[str, Any]) -> dict[str, Any]:
         "side": _text(_pick(payload, "side")).upper(),
         "size": _text(_pick(payload, "size")),
         "status": _text(_pick(payload, "status")).upper(),
+        "trader_side": _text(_pick(payload, "trader_side", "traderSide")).upper(),
+        "fee_rate_bps": _text(_pick(payload, "fee_rate_bps", "feeRateBps")),
+        "maker_address": _text(_pick(payload, "maker_address", "makerAddress")),
+        "trade_owner": _text(_pick(payload, "trade_owner", "tradeOwner")),
         "transaction_hash": _text(
             _pick(payload, "transaction_hash", "transactionHash", "transaction_ref")
         ),
@@ -213,7 +217,8 @@ def _maker_order_ids(values: Iterable[Any]) -> set[str]:
 
 
 def adapt_trade(
-    payload: dict[str, Any], *, expected: dict[str, Any], order_id: str | None = None
+    payload: dict[str, Any], *, expected: dict[str, Any], order_id: str | None = None,
+    required_trader_side: str | None = None,
 ) -> dict[str, Any]:
     """Validate one authenticated account trade and emit a confirmed fill only."""
     result: dict[str, Any] = {"events": [], "issues": [], "trade": None}
@@ -231,6 +236,27 @@ def adapt_trade(
         issues.append(_issue("MISSING_TRADE_ID", "trade id is required"))
     if trade["side"] != "BUY":
         issues.append(_issue("UNSUPPORTED_TRADE_SIDE", "entry adapter only accepts BUY trades", side=trade["side"]))
+    required_side = _text(required_trader_side).upper()
+    if required_side and required_side not in {"MAKER", "TAKER"}:
+        issues.append(_issue("INVALID_REQUIRED_TRADER_SIDE", "required trader side must be MAKER or TAKER"))
+    elif required_side:
+        if trade["trader_side"] != required_side:
+            issues.append(
+                _issue(
+                    "TRADER_SIDE_MISMATCH",
+                    "authenticated trade does not have the required maker/taker role",
+                    expected=required_side,
+                    actual=trade["trader_side"],
+                )
+            )
+        if required_side == "MAKER" and trade["fee_rate_bps"] not in {"0", "0.0", "0.00"}:
+            issues.append(
+                _issue(
+                    "MAKER_FEE_NOT_ZERO",
+                    "maker evidence must carry a zero fee rate",
+                    fee_rate_bps=trade["fee_rate_bps"],
+                )
+            )
     if not trade["taker_order_id"]:
         issues.append(_issue("MISSING_TAKER_ORDER_ID", "authenticated trade must include taker_order_id"))
     try:
@@ -275,6 +301,11 @@ def adapt_trade(
             "transaction_ref": trade["transaction_hash"],
             "gross_filled_shares": trade["size"],
             "net_position_delta_shares": trade["size"],
+            "trader_side": trade["trader_side"],
+            "fee_rate_bps": trade["fee_rate_bps"],
+            "maker_address": trade["maker_address"],
+            "match_time": trade["match_time"],
+            "last_update": trade["last_update"],
             "evidence_source": "authenticated_clob_trade",
         }
     )
@@ -286,6 +317,7 @@ def adapt_account_snapshot(
     order: dict[str, Any] | None,
     trades: Iterable[dict[str, Any]],
     expected: dict[str, Any],
+    required_trader_side: str | None = None,
 ) -> dict[str, Any]:
     """Adapt an authenticated order plus account trades deterministically.
 
@@ -304,7 +336,12 @@ def adapt_account_snapshot(
     for issue in issues:
         seen_issue_keys.add(json_key(issue))
     for payload in trades:
-        trade_result = adapt_trade(payload, expected=expected, order_id=observed_order_id or None)
+        trade_result = adapt_trade(
+            payload,
+            expected=expected,
+            order_id=observed_order_id or None,
+            required_trader_side=required_trader_side,
+        )
         for issue in trade_result["issues"]:
             key = json_key(issue)
             if key not in seen_issue_keys:

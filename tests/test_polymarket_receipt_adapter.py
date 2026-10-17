@@ -41,6 +41,10 @@ class PolymarketReceiptAdapter(unittest.TestCase):
             "side": "BUY",
             "size": "5",
             "status": status,
+            "trader_side": "TAKER",
+            "fee_rate_bps": "7",
+            "maker_address": "maker-1",
+            "trade_owner": "account-1",
             "match_time": "1700000000",
             "last_update": "1700000001",
             "transaction_hash": tx,
@@ -126,6 +130,36 @@ class PolymarketReceiptAdapter(unittest.TestCase):
         self.assertEqual(state["entry_trade_ids"], ["trade-1"])
         self.assertEqual(state["position_net_shares"], "5")
         self.assertFalse(state["cash_reusable"])
+
+    def test_maker_receipt_requires_role_and_zero_fee_evidence(self):
+        maker = self.trade()
+        maker.update(trader_side="MAKER", fee_rate_bps="0")
+        result = adapt_account_snapshot(
+            order=self.order("MATCHED"),
+            trades=[maker],
+            expected=self.expected,
+            required_trader_side="MAKER",
+        )
+        self.assertEqual(result["issues"], [])
+        fill = result["events"][-1]
+        self.assertEqual(fill["trader_side"], "MAKER")
+        self.assertEqual(fill["fee_rate_bps"], "0")
+
+    def test_maker_requirement_rejects_taker_trade(self):
+        result = adapt_trade(
+            self.trade(), expected=self.expected, required_trader_side="MAKER"
+        )
+        self.assertEqual(result["events"], [])
+        self.assertIn("TRADER_SIDE_MISMATCH", {issue["code"] for issue in result["issues"]})
+
+    def test_maker_requirement_rejects_nonzero_fee(self):
+        maker = self.trade()
+        maker.update(trader_side="MAKER", fee_rate_bps="7")
+        result = adapt_trade(
+            maker, expected=self.expected, required_trader_side="MAKER"
+        )
+        self.assertEqual(result["events"], [])
+        self.assertIn("MAKER_FEE_NOT_ZERO", {issue["code"] for issue in result["issues"]})
 
 
 if __name__ == "__main__":
