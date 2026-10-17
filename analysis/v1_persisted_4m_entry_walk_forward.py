@@ -30,7 +30,15 @@ def apply_persisted_entry(frame: pd.DataFrame, strategy: str) -> pd.DataFrame:
     return out
 
 
-def run(features: pd.DataFrame, folds: List[Dict[str, object]], bankroll0: float, min_cost: float):
+def run(
+    features: pd.DataFrame,
+    folds: List[Dict[str, object]],
+    bankroll0: float,
+    min_cost: float,
+    fee_mode: str,
+    fee_rate: float,
+    fee_exponent: float,
+):
     config = study.ExecutionConfig()
     rows: List[Dict[str, object]] = []
     logs: List[pd.DataFrame] = []
@@ -44,7 +52,15 @@ def run(features: pd.DataFrame, folds: List[Dict[str, object]], bankroll0: float
             for split_name, frame, run_label in splits:
                 filtered = apply_persisted_entry(frame, strategy)
                 trade_log, metrics = study.simulate(
-                    filtered, strategy, config, bankroll0, min_cost, capture_logs=True
+                    filtered,
+                    strategy,
+                    config,
+                    bankroll0,
+                    min_cost,
+                    capture_logs=True,
+                    fee_mode=fee_mode,
+                    fee_rate=fee_rate,
+                    fee_exponent=fee_exponent,
                 )
                 metrics.update({
                     "candidate": f"{strategy}__persisted_4m_entry",
@@ -90,13 +106,23 @@ def main() -> None:
     parser.add_argument("--bankroll0", type=float, default=10.0)
     parser.add_argument("--min-cost", type=float, default=0.10)
     parser.add_argument("--fee", type=float, default=study.FEE)
+    parser.add_argument("--fee-mode", choices=("flat_per_share", "polymarket_taker"), default="flat_per_share")
+    parser.add_argument("--fee-exponent", type=float, default=1.0)
     args = parser.parse_args()
     if args.bankroll0 <= 0 or args.min_cost < 0 or args.fee < 0:
         raise SystemExit("bankroll0 must be positive, min-cost and fee must be non-negative")
     study.FEE = float(args.fee)
     features, coverage, runs = study.prepare_data(Path(args.source_root))
     folds = study.make_run_folds(runs)
-    metrics, logs = run(features, folds, args.bankroll0, args.min_cost)
+    metrics, logs = run(
+        features,
+        folds,
+        args.bankroll0,
+        args.min_cost,
+        args.fee_mode,
+        args.fee,
+        args.fee_exponent,
+    )
     summary = aggregate(metrics)
     out = Path(args.report_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -115,6 +141,8 @@ def main() -> None:
         "execution_config": study.asdict(study.ExecutionConfig()),
         "rule": "two-minute buy_down signals are entered at four minutes only when btc_move_4m < 0; otherwise skipped",
         "fee": args.fee,
+        "fee_mode": args.fee_mode,
+        "fee_exponent": args.fee_exponent,
     }
     (out / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(meta, indent=2, ensure_ascii=False))

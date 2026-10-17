@@ -128,7 +128,18 @@ def simulate(
     bankroll0: float,
     min_cost: float,
     capture_logs: bool = False,
+    fee_mode: str = "flat_per_share",
+    fee_rate: float | None = None,
+    fee_exponent: float = 1.0,
 ) -> Tuple[pd.DataFrame, Dict[str, object]]:
+    if fee_mode not in {"flat_per_share", "polymarket_taker"}:
+        raise ValueError(f"unsupported fee_mode: {fee_mode}")
+    if fee_rate is None:
+        fee_rate = FEE
+    if not math.isfinite(float(fee_rate)) or float(fee_rate) < 0:
+        raise ValueError("fee_rate must be finite and non-negative")
+    if not math.isfinite(float(fee_exponent)) or float(fee_exponent) <= 0:
+        raise ValueError("fee_exponent must be finite and positive")
     d = df.sort_values("first_quote_ts").reset_index(drop=True)
     side = d[f"{strategy}_side"].fillna("skip").astype(str).to_numpy()
     minute = d[f"{strategy}_minute"].to_numpy(dtype=int)
@@ -193,8 +204,13 @@ def simulate(
         cost = min(bankroll * max(fraction[i], 0.0), bankroll, capacity)
         if not math.isfinite(cost) or cost < min_cost or fill_price[i] <= 0:
             continue
-        pnl_per_share = (outcome[i] if side[i] == "buy_up" else 1.0 - outcome[i]) - fill_price[i] - FEE
-        pnl = (cost / fill_price[i]) * pnl_per_share
+        shares = cost / fill_price[i]
+        gross_pnl = shares * ((outcome[i] if side[i] == "buy_up" else 1.0 - outcome[i]) - fill_price[i])
+        if fee_mode == "polymarket_taker":
+            fee_usd = round(shares * float(fee_rate) * (fill_price[i] ** float(fee_exponent)) * (1.0 - fill_price[i]), 5)
+        else:
+            fee_usd = shares * float(fee_rate)
+        pnl = gross_pnl - fee_usd
         before = bankroll
         bankroll += pnl
         event_return = pnl / before if before > 0 else 0.0
@@ -231,6 +247,7 @@ def simulate(
                     "adverse_slippage": adverse[i],
                     "target_cost": before * fraction[i],
                     "filled_cost": cost,
+                    "fee_usd": fee_usd,
                     "pnl_usd": pnl,
                     "event_return": event_return,
                     "bankroll_after": bankroll,
@@ -252,6 +269,9 @@ def simulate(
         "profit_factor": float(wins / abs(losses)) if losses else np.nan,
         "fill_rate_vs_signals": float(eligible.sum() / signal.sum()) if signal.any() else np.nan,
         "trade_rate_vs_signals": float(trade_flags.sum() / signal.sum()) if signal.any() else np.nan,
+        "fee_mode": fee_mode,
+        "fee_rate": float(fee_rate),
+        "fee_exponent": float(fee_exponent),
         **asdict(config),
         **window_metrics(event_returns, trade_flags),
     }
