@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -97,9 +98,20 @@ def main() -> None:
             "max_drawdown": float(block["max_drawdown"].max()),
         })
     pd.DataFrame(blocks).to_csv(out.with_name(out.stem + "_blocks.csv"), index=False)
+    global_summary = {
+        "ending_bankroll": float(global_metrics["ending_bankroll"]),
+        "trades": int(global_metrics["trades"]),
+        "max_drawdown": float(global_metrics["max_drawdown"]),
+        "profit_factor": float(global_metrics["profit_factor"]),
+        "win_rate": float(global_metrics["win_rate"]),
+        "min_cost": args.min_cost,
+        "min_order_mode": args.min_order_mode,
+        "min_order_shares": args.min_order_shares,
+    }
+    out.with_name(out.stem + "_global.json").write_text(json.dumps(global_summary, sort_keys=True, indent=2) + "\n")
     print(result.tail(10).to_string(index=False))
     print(pd.DataFrame(blocks).to_string(index=False))
-    print({"folds": len(result), "rolling_ending_bankroll": float(result["ending_bankroll"].iloc[-1]), "rolling_trades": int(result["trades"].sum()), "global_continuous_ending_bankroll": global_metrics["ending_bankroll"], "global_continuous_trades": global_metrics["trades"], "global_continuous_drawdown": global_metrics["max_drawdown"]})
+    print({"folds": len(result), "rolling_ending_bankroll": float(result["ending_bankroll"].iloc[-1]), "rolling_trades": int(result["trades"].sum()), "global_continuous_ending_bankroll": global_metrics["ending_bankroll"], "global_continuous_trades": global_metrics["trades"], "global_continuous_drawdown": global_metrics["max_drawdown"], "global_profit_factor": global_metrics["profit_factor"], "global_win_rate": global_metrics["win_rate"]})
 
 
 if __name__ == "__main__":
