@@ -38,6 +38,7 @@ def run(
     fee_mode: str,
     fee_rate: float,
     fee_exponent: float,
+    min_cost_policy: str,
 ):
     config = study.ExecutionConfig()
     rows: List[Dict[str, object]] = []
@@ -61,6 +62,7 @@ def run(
                     fee_mode=fee_mode,
                     fee_rate=fee_rate,
                     fee_exponent=fee_exponent,
+                    min_cost_policy=min_cost_policy,
                 )
                 metrics.update({
                     "candidate": f"{strategy}__persisted_4m_entry",
@@ -108,6 +110,7 @@ def main() -> None:
     parser.add_argument("--fee", type=float, default=study.FEE)
     parser.add_argument("--fee-mode", choices=("flat_per_share", "polymarket_taker"), default="flat_per_share")
     parser.add_argument("--fee-exponent", type=float, default=1.0)
+    parser.add_argument("--min-cost-policy", choices=("reject", "raise_to_min"), default="reject")
     args = parser.parse_args()
     if args.bankroll0 <= 0 or args.min_cost < 0 or args.fee < 0:
         raise SystemExit("bankroll0 must be positive, min-cost and fee must be non-negative")
@@ -122,6 +125,7 @@ def main() -> None:
         args.fee_mode,
         args.fee,
         args.fee_exponent,
+        args.min_cost_policy,
     )
     summary = aggregate(metrics)
     out = Path(args.report_dir)
@@ -143,6 +147,7 @@ def main() -> None:
         "fee": args.fee,
         "fee_mode": args.fee_mode,
         "fee_exponent": args.fee_exponent,
+        "min_cost_policy": args.min_cost_policy,
     }
     (out / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(meta, indent=2, ensure_ascii=False))

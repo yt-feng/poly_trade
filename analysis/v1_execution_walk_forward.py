@@ -155,6 +155,7 @@ def simulate(
     fee_mode: str = "flat_per_share",
     fee_rate: float | None = None,
     fee_exponent: float = 1.0,
+    min_cost_policy: str = "reject",
 ) -> Tuple[pd.DataFrame, Dict[str, object]]:
     if fee_mode not in {"flat_per_share", "polymarket_taker"}:
         raise ValueError(f"unsupported fee_mode: {fee_mode}")
@@ -164,6 +165,8 @@ def simulate(
         raise ValueError("fee_rate must be finite and non-negative")
     if not math.isfinite(float(fee_exponent)) or float(fee_exponent) <= 0:
         raise ValueError("fee_exponent must be finite and positive")
+    if min_cost_policy not in {"reject", "raise_to_min"}:
+        raise ValueError(f"unsupported min_cost_policy: {min_cost_policy}")
     d = df.sort_values("first_quote_ts").reset_index(drop=True)
     side = d[f"{strategy}_side"].fillna("skip").astype(str).to_numpy()
     minute = d[f"{strategy}_minute"].to_numpy(dtype=int)
@@ -225,12 +228,22 @@ def simulate(
         if len(recent_trades) >= MAX_TRADES_PER_WINDOW or not eligible[i] or bankroll <= 0:
             continue
         capacity = float(quote_size[i]) * FILL_RATIO * float(fill_price[i])
-        cost = min(bankroll * max(fraction[i], 0.0), bankroll, capacity)
+        target_cost = bankroll * max(fraction[i], 0.0)
+        cost = min(target_cost, bankroll, capacity)
+        if min_cost_policy == "raise_to_min":
+            if bankroll < min_cost or capacity < min_cost:
+                continue
+            cost = min(max(cost, min_cost), bankroll, capacity)
         if not math.isfinite(cost) or cost < min_cost or fill_price[i] <= 0:
             continue
         shares = cost / fill_price[i]
-        gross_pnl = shares * ((outcome[i] if side[i] == "buy_up" else 1.0 - outcome[i]) - fill_price[i])
         fee_usd = trade_fee_usd(shares, fill_price[i], fee_mode, float(fee_rate), float(fee_exponent))
+        # The cash ledger must cover both the order notional and the taker fee.
+        # This matters when a minimum order consumes a large fraction of a
+        # small bankroll; a losing fill cannot create a negative cash balance.
+        if cost + fee_usd > bankroll + 1e-12:
+            continue
+        gross_pnl = shares * ((outcome[i] if side[i] == "buy_up" else 1.0 - outcome[i]) - fill_price[i])
         pnl = gross_pnl - fee_usd
         before = bankroll
         bankroll += pnl
@@ -293,6 +306,7 @@ def simulate(
         "fee_mode": fee_mode,
         "fee_rate": float(fee_rate),
         "fee_exponent": float(fee_exponent),
+        "min_cost_policy": min_cost_policy,
         **asdict(config),
         **window_metrics(event_returns, trade_flags),
     }
