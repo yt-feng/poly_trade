@@ -2,7 +2,7 @@
 
 This is a pure ledger check.  It never submits an order and never treats a
 paper label as a confirmed fill.  A chain can pass only when every event is a
-confirmed fill, each entry is funded by the prior settled cash balance, and
+confirmed fill, each entry is funded by the same evolving cash balance, and
 the ending balance has not fallen below the starting balance.
 """
 from __future__ import annotations
