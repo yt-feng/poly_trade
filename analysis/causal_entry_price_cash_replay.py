@@ -46,7 +46,7 @@ def evaluate(source_root: Path, output: Path, slippages: tuple[float, ...]) -> d
     logs: list[pd.DataFrame] = []
     for candidate in CANDIDATES:
         strategy, filter_name = candidate.split("__", 1)
-        gated = features.copy() filtered_frame(features, strategy, filter_name)
+        gated = filtered_frame(features, strategy, filter_name)
         for split, names in (("selection20", selection_runs), ("holdout59", holdout_runs), ("all_test79", test_runs)):
             config = study.ExecutionConfig(fixed_slippage=slippages[0])
             trade_log, metrics = simulate_cash_locked(
