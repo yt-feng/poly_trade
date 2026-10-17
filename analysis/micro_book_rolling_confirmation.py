@@ -31,25 +31,32 @@ def main() -> None:
     parser.add_argument("--min-cost", type=float, default=5.0)
     parser.add_argument("--min-order-mode", choices=("notional", "shares", "both"), default="notional")
     parser.add_argument("--min-order-shares", type=float, default=5.0)
+    parser.add_argument("--stress-slippages", default="0.0025")
     args = parser.parse_args()
     features, runs = prepare(Path(args.source_root), ["micro_book_consensus_up"])
     features = make_variant(features)
     folds = study.make_run_folds(runs)
     config = study.ExecutionConfig()
-    _, global_metrics = study.simulate(
-        features,
-        "micro_price65",
-        config,
-        10.0,
-        args.min_cost,
-        capture_logs=False,
-        fee_mode="polymarket_taker",
-        fee_rate=0.07,
-        fee_exponent=1.0,
-        min_cost_policy="raise_to_min",
-        min_order_mode=args.min_order_mode,
-        min_order_shares=args.min_order_shares,
-    )
+    stress_rows = []
+    for slip_text in args.stress_slippages.split(","):
+        slip = float(slip_text)
+        stress_config = study.ExecutionConfig(fixed_slippage=slip)
+        _, global_metrics = study.simulate(
+            features,
+            "micro_price65",
+            stress_config,
+            10.0,
+            args.min_cost,
+            capture_logs=False,
+            fee_mode="polymarket_taker",
+            fee_rate=0.07,
+            fee_exponent=1.0,
+            min_cost_policy="raise_to_min",
+            min_order_mode=args.min_order_mode,
+            min_order_shares=args.min_order_shares,
+        )
+        stress_rows.append({"slippage": slip, "ending_bankroll": float(global_metrics["ending_bankroll"]), "trades": int(global_metrics["trades"]), "max_drawdown": float(global_metrics["max_drawdown"]), "profit_factor": float(global_metrics["profit_factor"]), "win_rate": float(global_metrics["win_rate"])})
+    global_metrics = stress_rows[0]
     bankroll = 10.0
     rows = []
     for fold in folds:
@@ -108,10 +115,10 @@ def main() -> None:
         "min_order_mode": args.min_order_mode,
         "min_order_shares": args.min_order_shares,
     }
-    out.with_name(out.stem + "_global.json").write_text(json.dumps(global_summary, sort_keys=True, indent=2) + "\n")
+    out.with_name(out.stem + "_global.json").write_text(json.dumps({"base": global_summary, "stress": stress_rows}, sort_keys=True, indent=2) + "\n")
     print(result.tail(10).to_string(index=False))
     print(pd.DataFrame(blocks).to_string(index=False))
-    print({"folds": len(result), "rolling_ending_bankroll": float(result["ending_bankroll"].iloc[-1]), "rolling_trades": int(result["trades"].sum()), "global_continuous_ending_bankroll": global_metrics["ending_bankroll"], "global_continuous_trades": global_metrics["trades"], "global_continuous_drawdown": global_metrics["max_drawdown"], "global_profit_factor": global_metrics["profit_factor"], "global_win_rate": global_metrics["win_rate"]})
+    print({"folds": len(result), "rolling_ending_bankroll": float(result["ending_bankroll"].iloc[-1]), "stress": stress_rows})
 
 
 if __name__ == "__main__":
