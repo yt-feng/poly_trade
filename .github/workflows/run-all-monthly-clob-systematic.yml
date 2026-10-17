@@ -125,8 +125,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install research dependencies
-        run: python -m pip install -r requirements.txt
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
 
       - name: Run frozen old-data comparison and seal it in the runner
         env:
