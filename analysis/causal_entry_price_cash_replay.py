@@ -94,7 +94,7 @@ def evaluate(source_root: Path, output: Path, slippages: tuple[float, ...]) -> d
         pd.concat(logs, ignore_index=True).to_csv(output / "trade_logs.csv", index=False)
     selected_rows.to_csv(output / "selected_metrics.csv", index=False)
     meta = {
-        "format": "old-data-causal-path-efficiency-cash-replay-v1",
+        "format": "old-data-causal-entry-price-cash-replay-v1",
         "source_root": str(source_root), "complete_runs": len(runs), "feature_rows": len(features),
         "selection_runs": len(selection_runs), "holdout_runs": len(holdout_runs),
         "candidates": list(CANDIDATES), "selected_candidate": selected_candidate,
