@@ -56,7 +56,10 @@ def first_pair_for_market(
     slippage: float,
 ) -> dict | None:
     frame = frame.sort_values("ts").reset_index(drop=True)
-    ts = frame["ts"].astype("int64").to_numpy()
+    # Pandas 3 stores DatetimeArray integer values in microseconds on this
+    # runtime.  Use Timestamp.value for an explicit nanosecond clock so the
+    # delay and close boundary stay in the same unit.
+    ts = frame["ts"].map(lambda value: value.value if pd.notna(value) else np.iinfo(np.int64).min).to_numpy(dtype=np.int64)
     close = parse_close(str(frame.at[0, "slug"]))
     close_ns = close.value if pd.notna(close) else np.iinfo(np.int64).max
     for i, signal_ts in enumerate(ts):
