@@ -37,6 +37,15 @@ def test_chain_does_not_reset_cash_between_independent_trials():
     assert result["failure_reason"] == "compound_chain_not_growth_positive"
 
 
+def test_resetting_cash_between_fills_cannot_hide_an_unfunded_next_entry():
+    # A reset-per-trial calculation would fund the second $6 entry from $10.
+    # The real chain has only $5 after the first loss, so it must stop there.
+    events = [event(0, payout="0"), event(1, cost="6", payout="7")]
+    result = evaluate_compound_chain(events, required_fills=2)
+    assert result["fills"] == 1
+    assert result["failure_reason"] == "insufficient_cash_for_next_entry"
+
+
 def test_unconfirmed_event_breaks_the_chain():
     result = evaluate_compound_chain([event(0), event(1, status="paper")])
     assert result["gate_passed"] is False

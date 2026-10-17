@@ -2,6 +2,12 @@
 
 The research objective is small-account net growth with repeatable cash reuse. A target balance is an objective to evaluate, never an assumed achievable return. Count retrospective quote replays, prospective paper episodes and authenticated actual fills separately. Ten observations or paper exits do not establish ten actual fills.
 
+## The ten-fill compound Canary definition
+
+The ten-fill criterion is one chronological sequence on one evolving account cash ledger. The first fill starts with the declared initial cash; each later entry is funded only by the cash still available after earlier fees, losses, locked positions and released settlement proceeds. Cash is released at the declared settlement/reuse time, and the ledger never resets between fills. A candidate therefore fails at the first consecutive entry that cannot be funded, even if ten separately reset simulations would each appear to work.
+
+For paper research, report the first-ten prefix, the full selection/holdout chain and independent time blocks separately. The first-ten prefix is a paper upper bound only: it can show that the frozen data and execution assumptions produce a continuous compound chain, but it cannot become a real Canary without ten authenticated fills, settlement receipts and independently reconciled cash checkpoints.
+
 ## Each research cycle
 
 1. Read the current code, in-flight runs, sealed journal and source watermarks. Do not duplicate an active job. A new release can revise old data; compare content hashes and observation times before claiming fresh evidence.
