@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
+import heapq
 
 
 def _money(value: Any, field: str) -> Decimal:
@@ -31,8 +32,9 @@ def evaluate_compound_chain(
     """Evaluate a single no-reset sequence of settled account events.
 
     Each event must contain ``status=confirmed``, ``entry_ts``,
-    ``cash_available_ts``, ``entry_cost``, ``fee`` and ``payout``.  The next
-    entry must occur after the previous event's cash is available.  The
+    ``cash_available_ts``, ``entry_cost``, ``fee`` and ``payout``.  Events may
+    overlap, but every entry is funded from the same cash ledger: settled
+    payouts are released before each entry whose timestamp has arrived.  The
     returned ``fills`` count is therefore a consecutive, reusable-cash chain,
     rather than an aggregate count across independent trials.
     """
@@ -45,9 +47,10 @@ def evaluate_compound_chain(
         raise ValueError("cash and minimum_order must be positive")
 
     rows: list[dict[str, Any]] = []
-    previous_available: Decimal | None = None
     failure_reason: str | None = None
     minimum_cash = cash
+    pending: list[tuple[Decimal, Decimal]] = []
+    previous_entry: Decimal | None = None
 
     for index, event in enumerate(events, start=1):
         if not isinstance(event, dict):
@@ -68,18 +71,21 @@ def evaluate_compound_chain(
         if cost < floor or fee < 0 or payout < 0 or available_ts < entry_ts:
             failure_reason = "invalid_event_constraints"
             break
-        if previous_available is not None and entry_ts < previous_available:
-            failure_reason = "cash_not_reusable_before_next_entry"
+        if previous_entry is not None and entry_ts < previous_entry:
+            failure_reason = "events_not_chronological"
             break
+        previous_entry = entry_ts
+        while pending and pending[0][0] <= entry_ts:
+            _, payout_due = heapq.heappop(pending)
+            cash += payout_due
         reserved = cost + fee
         if reserved > cash:
             failure_reason = "insufficient_cash_for_next_entry"
             break
         cash_before = cash
         cash -= reserved
-        cash += payout
         minimum_cash = min(minimum_cash, cash)
-        previous_available = available_ts
+        heapq.heappush(pending, (available_ts, payout))
         rows.append(
             {
                 "index": index,
@@ -90,6 +96,9 @@ def evaluate_compound_chain(
             }
         )
 
+    while pending:
+        _, payout_due = heapq.heappop(pending)
+        cash += payout_due
     fills = len(rows)
     if failure_reason is None and fills < required_fills:
         failure_reason = "fewer_than_required_consecutive_fills"

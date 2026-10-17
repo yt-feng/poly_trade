@@ -25,7 +25,7 @@ def test_ten_fills_are_one_growth_positive_reusable_cash_chain():
 
 
 def test_chain_does_not_reset_cash_between_independent_trials():
-    events = [event(0), event(1, cost="5", payout="0")]
+    events = [event(0, payout="0"), event(1, cost="5", payout="0")]
     result = evaluate_compound_chain(events, required_fills=2)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "compound_chain_not_growth_positive"
@@ -38,10 +38,18 @@ def test_unconfirmed_event_breaks_the_chain():
     assert result["failure_reason"] == "unconfirmed_fill"
 
 
-def test_next_entry_before_cash_release_is_not_compounding():
+def test_overlapping_entries_use_one_cash_ledger_and_are_compounding():
     first = event(0)
     second = event(1)
     second["entry_ts"] = "5"
+    second["entry_cost"] = "4"
+    result = evaluate_compound_chain([first, second], required_fills=2, minimum_order="4")
+    assert result["gate_passed"] is True
+
+
+def test_events_must_be_chronological():
+    first = event(1)
+    second = event(0)
     result = evaluate_compound_chain([first, second], required_fills=2)
     assert result["gate_passed"] is False
-    assert result["failure_reason"] == "cash_not_reusable_before_next_entry"
+    assert result["failure_reason"] == "events_not_chronological"
