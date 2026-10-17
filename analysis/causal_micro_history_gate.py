@@ -101,7 +101,7 @@ def main() -> None:
                 study.ExecutionConfig(fixed_slippage=slip),
                 args.bankroll0,
                 args.min_cost,
-                capture_logs=False,
+                capture_logs=True,
                 fee_mode="polymarket_taker",
                 fee_rate=0.07,
                 fee_exponent=1.0,
