@@ -26,6 +26,8 @@ from cash_release_sensitivity import simulate_cash_locked
 from v1_state_filter_walk_forward import filtered_frame
 
 CANDIDATES = (
+    "v1_adaptive_mix__unfiltered",
+    "v1_conservative_mix__unfiltered",
     "v1_adaptive_mix__path_efficiency_ge_050",
     "v1_conservative_mix__path_efficiency_ge_050",
 )
@@ -47,7 +49,7 @@ def evaluate(source_root: Path, output: Path, slippages: tuple[float, ...]) -> d
     logs: list[pd.DataFrame] = []
     for candidate in CANDIDATES:
         strategy, filter_name = candidate.split("__", 1)
-        gated = filtered_frame(features, strategy, filter_name)
+        gated = features.copy() if filter_name == "unfiltered" else filtered_frame(features, strategy, filter_name)
         for split, names in (("selection20", selection_runs), ("holdout59", holdout_runs), ("all_test79", test_runs)):
             config = study.ExecutionConfig(fixed_slippage=slippages[0])
             trade_log, metrics = simulate_cash_locked(
