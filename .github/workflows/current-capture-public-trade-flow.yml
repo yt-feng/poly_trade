@@ -15,6 +15,10 @@ on:
         description: 'Half-width of the fixed decision window'
         required: false
         default: '5'
+      window_seconds:
+        description: 'Fixed causal public-trade lookback window'
+        required: false
+        default: '60'
 
 permissions:
   contents: read
@@ -35,6 +39,7 @@ jobs:
       RELEASE_TAGS: ${{ inputs.release_tags }}
       TTE_CENTER: ${{ inputs.tte_center }}
       TTE_WIDTH: ${{ inputs.tte_width }}
+      WINDOW_SECONDS: ${{ inputs.window_seconds }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,6 +77,7 @@ jobs:
           python -u analysis/current_capture_public_trade_flow.py \
             --input "$RUNNER_TEMP/capture-input" \
             --tte-center "$TTE_CENTER" --tte-width "$TTE_WIDTH" \
+            --window-seconds "$WINDOW_SECONDS" \
             --output "$RUNNER_TEMP/audit-output/result.json" \
             > "$RUNNER_TEMP/audit-output/runner.stdout" 2> "$RUNNER_TEMP/audit-output/runner.stderr"
       - name: Seal result and publish only ciphertext

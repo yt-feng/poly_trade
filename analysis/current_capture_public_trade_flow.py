@@ -29,7 +29,7 @@ def _iter(path: Path):
                     yield value
 
 
-def load_public_trades(root: Path) -> dict[str, list[dict[str, Any]]]:
+def load_public_trades(root: Path, token_map: dict[str, tuple[str, str]] | None = None) -> dict[str, list[dict[str, Any]]]:
     """Load only public trade crosschecks observed before each decision.
 
     The raw event's available_at_ms is the local observation clock. The
@@ -37,16 +37,24 @@ def load_public_trades(root: Path) -> dict[str, list[dict[str, Any]]]:
     by the selected decision sample during evaluation.
     """
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    pending_tokens: list[dict[str, Any]] = []
     for path in sorted(root.rglob("raw-*.jsonl.gz")):
         for event in _iter(path):
             if event.get("source") != "polymarket_public_trade_crosscheck":
-                continue
-            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-            slug = payload.get("slug")
-            response = payload.get("response")
+                if event.get("source") != "polymarket_ws":
+                    continue
+                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                if payload.get("event_type") != "last_trade_price":
+                    continue
+                slug = None
+                response = [payload]
+            else:
+                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                slug = payload.get("slug")
+                response = payload.get("response")
             observed_ms = event.get("received_at_ns")
             observed_ms = observed_ms // 1_000_000 if isinstance(observed_ms, int) else None
-            if not isinstance(slug, str) or not isinstance(response, list) or observed_ms is None:
+            if (slug is not None and not isinstance(slug, str)) or not isinstance(response, list) or observed_ms is None:
                 continue
             for trade in response:
                 if not isinstance(trade, dict):
@@ -61,23 +69,37 @@ def load_public_trades(root: Path) -> dict[str, list[dict[str, Any]]]:
                     continue
                 outcome = trade.get("outcome")
                 side = trade.get("side")
-                if outcome not in {"Up", "Down"} or side not in {"BUY", "SELL"}:
+                if side not in {"BUY", "SELL"}:
                     continue
-                result[slug].append({
+                item = {
                     "timestamp_ms": timestamp_ms,
                     "observed_ms": observed_ms,
-                    "outcome": outcome,
                     "side": side,
                     "price": price,
                     "size": size,
-                })
+                }
+                if slug is None:
+                    item["asset_id"] = trade.get("asset_id")
+                    pending_tokens.append(item)
+                elif outcome in {"Up", "Down"}:
+                    item["outcome"] = outcome
+                    result[slug].append(item)
+    if token_map:
+        for item in pending_tokens:
+            mapped = token_map.get(str(item.get("asset_id")))
+            if mapped is None:
+                continue
+            slug, outcome = mapped
+            item = dict(item)
+            item["outcome"] = outcome
+            result[slug].append(item)
     return result
 
 
-def _signal(trades: list[dict[str, Any]], decision_ms: int, candidate: str) -> str | None:
+def _signal(trades: list[dict[str, Any]], decision_ms: int, candidate: str, window_seconds: int) -> str | None:
     eligible = [
         trade for trade in trades
-        if decision_ms - WINDOW_SECONDS * 1000 <= trade["timestamp_ms"] <= decision_ms
+        if decision_ms - window_seconds * 1000 <= trade["timestamp_ms"] <= decision_ms
         and trade["observed_ms"] <= decision_ms
     ]
     if not eligible:
@@ -99,11 +121,17 @@ def _signal(trades: list[dict[str, Any]], decision_ms: int, candidate: str) -> s
     raise ValueError(candidate)
 
 
-def evaluate(root: Path, *, tte_center: float = 50.0, tte_width: float = 5.0) -> dict[str, Any]:
+def evaluate(root: Path, *, tte_center: float = 50.0, tte_width: float = 5.0, window_seconds: int = WINDOW_SECONDS) -> dict[str, Any]:
     rows, _ = load_rows(root, tte_center=tte_center, tte_width=tte_width)
     from current_capture_official_outcome import load_official_labels
     outcomes = load_official_labels(root)
-    trades = load_public_trades(root)
+    token_map = {}
+    for row in rows:
+        if isinstance(row.get("up_token_id"), str):
+            token_map[row["up_token_id"]] = (row["slug"], "Up")
+        if isinstance(row.get("down_token_id"), str):
+            token_map[row["down_token_id"]] = (row["slug"], "Down")
+    trades = load_public_trades(root, token_map)
     rows = [
         row for row in rows
         if row["slug"] in outcomes
@@ -115,6 +143,7 @@ def evaluate(root: Path, *, tte_center: float = 50.0, tte_width: float = 5.0) ->
     result: dict[str, Any] = {
         "schema_version": 1,
         "decision_window_seconds_before_end": [tte_center - tte_width, tte_center + tte_width],
+        "trade_flow_window_seconds": window_seconds,
         "eligible_markets_with_official_outcome": len(markets),
         "train_selection_markets": len(partitions["train_selection"]),
         "test_markets": len(partitions["test"]),
@@ -131,7 +160,7 @@ def evaluate(root: Path, *, tte_center: float = 50.0, tte_width: float = 5.0) ->
             for row in rows:
                 if row["slug"] not in allowed:
                     continue
-                side = _signal(trades.get(row["slug"], []), row["sample_ms"], candidate)
+                side = _signal(trades.get(row["slug"], []), row["sample_ms"], candidate, window_seconds)
                 if side is None:
                     missing += 1
                     continue
@@ -172,8 +201,9 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--tte-center", type=float, default=50.0)
     parser.add_argument("--tte-width", type=float, default=5.0)
+    parser.add_argument("--window-seconds", type=int, default=WINDOW_SECONDS)
     args = parser.parse_args()
-    result = evaluate(args.input, tte_center=args.tte_center, tte_width=args.tte_width)
+    result = evaluate(args.input, tte_center=args.tte_center, tte_width=args.tte_width, window_seconds=args.window_seconds)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({"eligible_markets": result["eligible_markets_with_official_outcome"], "raw_public_trade_slugs": result["raw_public_trade_slugs"], "metrics": result["metrics"]}, sort_keys=True))
