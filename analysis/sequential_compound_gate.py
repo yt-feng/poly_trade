@@ -33,7 +33,11 @@ def evaluate_compound_chain(
     """Evaluate a single no-reset sequence of settled account events.
 
     Each event must contain ``status=confirmed``, ``entry_ts``,
-    ``cash_available_ts``, ``entry_cost``, ``fee`` and ``payout``.  Events may
+    ``cash_available_ts``, ``entry_cost``, ``fee`` and ``payout``.  In
+    ``authenticated`` mode it must also carry an owner-scoped trade reference,
+    a settlement receipt, an independent balance checkpoint, and an explicit
+    ``cash_reconciled=true`` assertion.  A confirmed trade alone is not enough
+    to establish that the cash was released for the next fill.  Events may
     overlap, but every entry is funded from the same cash ledger: settled
     payouts are released before each entry whose timestamp has arrived.  The
     returned ``fills`` count is therefore a consecutive, reusable-cash chain,
@@ -64,6 +68,22 @@ def evaluate_compound_chain(
         if status not in accepted_statuses:
             failure_reason = "unconfirmed_fill"
             break
+        if evidence_mode == "authenticated":
+            required_receipt_fields = (
+                "trade_id",
+                "transaction_ref",
+                "settlement_receipt_id",
+                "balance_checkpoint_id",
+            )
+            if any(not str(event.get(field, "")).strip() for field in required_receipt_fields):
+                failure_reason = "missing_authoritative_receipt_or_checkpoint"
+                break
+            if event.get("cash_reconciled") is not True:
+                failure_reason = "cash_checkpoint_not_reconciled"
+                break
+            if event.get("independent_checkpoint") is not True:
+                failure_reason = "checkpoint_not_independent"
+                break
         try:
             entry_ts = _money(event.get("entry_ts"), "entry_ts")
             available_ts = _money(event.get("cash_available_ts"), "cash_available_ts")

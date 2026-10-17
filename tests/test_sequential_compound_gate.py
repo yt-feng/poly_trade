@@ -9,6 +9,12 @@ from sequential_compound_gate import evaluate_compound_chain
 def event(i: int, *, status: str = "confirmed", cost: str = "5", payout: str = "5.50"):
     return {
         "status": status,
+        "trade_id": f"trade-{i}",
+        "transaction_ref": f"tx-{i}",
+        "settlement_receipt_id": f"settlement-{i}",
+        "balance_checkpoint_id": f"balance-{i}",
+        "cash_reconciled": True,
+        "independent_checkpoint": True,
         "entry_ts": str(i * 100),
         "cash_available_ts": str(i * 100 + 10),
         "entry_cost": cost,
@@ -44,6 +50,22 @@ def test_paper_upper_bound_never_becomes_canary_evidence():
     )
     assert result["paper_replay_passed"] is True
     assert result["gate_passed"] is False
+
+
+def test_authenticated_chain_requires_independent_settlement_and_balance_evidence():
+    row = event(0)
+    del row["balance_checkpoint_id"]
+    result = evaluate_compound_chain([row], required_fills=1)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "missing_authoritative_receipt_or_checkpoint"
+
+
+def test_authenticated_chain_rejects_unreconciled_cash_checkpoint():
+    row = event(0)
+    row["cash_reconciled"] = False
+    result = evaluate_compound_chain([row], required_fills=1)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "cash_checkpoint_not_reconciled"
 
 
 def test_overlapping_entries_use_one_cash_ledger_and_are_compounding():
