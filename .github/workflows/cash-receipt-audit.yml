@@ -1,10 +1,10 @@
 name: cash-receipt-audit
 on:
   pull_request:
-    paths: ['analysis/cash_amount_audit.py', 'analysis/canary_receipt_amount_state.py', 'tests/test_cash_amount_audit.py', '.github/workflows/cash-receipt-audit.yml']
+    paths: ['analysis/cash_amount_audit.py', 'analysis/canary_receipt_amount_state.py', 'analysis/polymarket_receipt_adapter.py', 'tests/test_cash_amount_audit.py', 'tests/test_polymarket_receipt_adapter.py', '.github/workflows/cash-receipt-audit.yml']
   push:
     branches: [main]
-    paths: ['analysis/cash_amount_audit.py', 'analysis/canary_receipt_amount_state.py', 'tests/test_cash_amount_audit.py', '.github/workflows/cash-receipt-audit.yml']
+    paths: ['analysis/cash_amount_audit.py', 'analysis/canary_receipt_amount_state.py', 'analysis/polymarket_receipt_adapter.py', 'tests/test_cash_amount_audit.py', 'tests/test_polymarket_receipt_adapter.py', '.github/workflows/cash-receipt-audit.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -21,8 +21,9 @@ jobs:
           python-version: '3.11'
       - name: Synthetic receipt amount and legacy-regression tests, no account access
         run: |
+          python -m unittest discover -s tests -p 'test_polymarket_receipt_adapter.py' -v
           python -m unittest discover -s tests -p 'test_cash_amount_audit.py' -v
           python -m unittest discover -s tests -p 'test_receipt_source_audit.py' -v
           python -m unittest discover -s tests -p 'test_canary_execution_plan.py' -v
       - name: Compile read-only additions
-        run: python -m py_compile analysis/cash_amount_audit.py analysis/canary_receipt_amount_state.py
+        run: python -m py_compile analysis/cash_amount_audit.py analysis/canary_receipt_amount_state.py analysis/polymarket_receipt_adapter.py tests/test_polymarket_receipt_adapter.py
