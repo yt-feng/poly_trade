@@ -66,7 +66,7 @@ def _pnl(quote: dict[str, Any], markout: Decimal) -> Decimal | None:
     return quantity * (markout - entry_half_spread - SLIPPAGE - fee_per_share)
 
 
-def load_rows(root: Path) -> tuple[list[dict[str, Any]], dict[tuple[str, int, int], dict[str, Any]]]:
+def load_rows(root: Path, *, tte_center: float = 20.0, tte_width: float = 5.0) -> tuple[list[dict[str, Any]], dict[tuple[str, int, int], dict[str, Any]]]:
     best_by_market: dict[str, dict[str, Any]] = {}
     for path in sorted(root.rglob("snapshots-*.jsonl.gz")):
         for row in _iter(path):
@@ -74,7 +74,7 @@ def load_rows(root: Path) -> tuple[list[dict[str, Any]], dict[tuple[str, int, in
             if not isinstance(micro, dict):
                 continue
             tte = micro.get("time_to_expiry_seconds")
-            if not isinstance(tte, (int, float)) or not 15 <= float(tte) <= 25:
+            if not isinstance(tte, (int, float)) or not tte_center - tte_width <= float(tte) <= tte_center + tte_width:
                 continue
             if row.get("poly_valid") is not True or row.get("pair_quote_valid") is not True:
                 continue
@@ -88,7 +88,7 @@ def load_rows(root: Path) -> tuple[list[dict[str, Any]], dict[tuple[str, int, in
             # market. Replaying every one-second sample would manufacture
             # repeated entries for the same contract.
             if current is None or (
-                abs(float(micro["time_to_expiry_seconds"]) - 20.0),
+                abs(float(micro["time_to_expiry_seconds"]) - tte_center),
                 -int(row["sample_ms"]),
             ) < (
                 abs(float(current["microstructure"]["time_to_expiry_seconds"]) - 20.0),
@@ -185,9 +185,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--tte-center", type=float, default=20.0)
+    parser.add_argument("--tte-width", type=float, default=5.0)
     args = parser.parse_args()
-    rows, labels = load_rows(args.input)
+    rows, labels = load_rows(args.input, tte_center=args.tte_center, tte_width=args.tte_width)
     result = evaluate(rows, labels)
+    result["decision_window_seconds_before_end"] = [args.tte_center - args.tte_width, args.tte_center + args.tte_width]
     result["decision_window_rows_after_pair_quote_gate"] = len(rows)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
