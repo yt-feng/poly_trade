@@ -26,6 +26,8 @@ def main() -> None:
     parser.add_argument("--bankroll0", type=float, default=10.0)
     parser.add_argument("--min-cost", type=float, default=5.0)
     parser.add_argument("--fee", type=float, default=0.07)
+    parser.add_argument("--min-order-mode", choices=("notional", "shares", "both"), default="notional")
+    parser.add_argument("--min-order-shares", type=float, default=5.0)
     args = parser.parse_args()
     features, runs = prepare(Path(args.source_root), list(CANDIDATES))
     folds = study.make_run_folds(runs)
@@ -48,6 +50,8 @@ def main() -> None:
                 fee_rate=args.fee,
                 fee_exponent=1.0,
                 min_cost_policy="raise_to_min",
+                min_order_mode=args.min_order_mode,
+                min_order_shares=args.min_order_shares,
             )
             val_metrics.append({"candidate": candidate, "validation_score": score(metrics), **metrics})
         val_df = pd.DataFrame(val_metrics).sort_values(["validation_score", "total_return", "trades"], ascending=False)
@@ -64,6 +68,8 @@ def main() -> None:
             fee_rate=args.fee,
             fee_exponent=1.0,
             min_cost_policy="raise_to_min",
+            min_order_mode=args.min_order_mode,
+            min_order_shares=args.min_order_shares,
         )
         rows.append({
             "fold_id": fold["fold_id"],
@@ -98,7 +104,7 @@ def main() -> None:
     summary.to_csv(summary_path, index=False)
     selections = result["selected_candidate"].value_counts().rename_axis("candidate").reset_index(name="selected_folds")
     selections.to_csv(out.with_name(out.stem + "_selection_counts.csv"), index=False)
-    print(json.dumps({"complete_runs": len(runs), "fold_count": len(folds), "bankroll0": args.bankroll0, "min_cost": args.min_cost, "fee": args.fee}, indent=2))
+    print(json.dumps({"complete_runs": len(runs), "fold_count": len(folds), "bankroll0": args.bankroll0, "min_cost": args.min_cost, "fee": args.fee, "min_order_mode": args.min_order_mode, "min_order_shares": args.min_order_shares}, indent=2))
     print(summary.to_string(index=False))
     print(selections.to_string(index=False))
 
