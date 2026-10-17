@@ -14,6 +14,14 @@ from typing import Any, Iterable
 
 USDC_ASSET_ID = "0"
 USDC_SCALE = Decimal(1_000_000)
+V1_ORDERFILLED_FIELDS = (
+    "order_hash", "maker", "taker", "maker_asset_id", "taker_asset_id",
+    "maker_amount_filled", "taker_amount_filled", "fee",
+)
+V2_ORDERFILLED_FIELDS = (
+    "order_hash", "maker", "taker", "side", "token_id",
+    "maker_amount_filled", "taker_amount_filled", "fee", "builder", "metadata",
+)
 
 
 def _text(value: Any, field: str) -> str:
@@ -43,6 +51,19 @@ def _decimal(value: Any, field: str) -> Decimal:
     if not out.is_finite() or out < 0:
         raise ValueError(f"{field} must be finite and nonnegative")
     return out
+
+
+def _asset_id(value: Any, field: str) -> str:
+    """Canonicalize decimal or hex uint256 asset IDs without float conversion."""
+    try:
+        if isinstance(value, bool):
+            raise ValueError
+        out = int(str(value), 0) if isinstance(value, str) and str(value).lower().startswith("0x") else int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be an asset id") from exc
+    if out < 0:
+        raise ValueError(f"{field} must be nonnegative")
+    return str(out)
 
 
 def _reverted(record: dict[str, Any]) -> bool:
@@ -95,8 +116,8 @@ def normalize_orderfilled(record: dict[str, Any], *, exchange_version: str) -> d
         raise ValueError("fill amounts must be positive")
 
     if exchange_version == "v1":
-        maker_asset = _text(record.get("maker_asset_id"), "maker_asset_id")
-        taker_asset = _text(record.get("taker_asset_id"), "taker_asset_id")
+        maker_asset = _asset_id(record.get("maker_asset_id"), "maker_asset_id")
+        taker_asset = _asset_id(record.get("taker_asset_id"), "taker_asset_id")
         if taker_asset == USDC_ASSET_ID and maker_asset != USDC_ASSET_ID:
             side, token_id = "BUY", maker_asset
             size_raw, cash_raw = maker_amount, taker_amount
@@ -121,7 +142,7 @@ def normalize_orderfilled(record: dict[str, Any], *, exchange_version: str) -> d
             side = {0: "BUY", 1: "SELL"}.get(_integer(side_value, "side"))
             if side is None:
                 raise ValueError("unsupported_v2_side")
-        token_id = _text(record.get("token_id"), "token_id")
+        token_id = _asset_id(record.get("token_id"), "token_id")
         if side == "BUY":
             size_raw, cash_raw, sign = maker_amount, taker_amount, 1
         else:

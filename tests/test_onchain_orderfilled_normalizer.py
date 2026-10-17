@@ -54,6 +54,11 @@ def test_v2_explicit_side_and_token_are_normalized():
     assert out["price"] == "0.6"
 
 
+def test_asset_ids_accept_hex_without_float_rounding():
+    out = normalize_orderfilled(base(maker_asset_id="0x7b", taker_asset_id="0x0"), exchange_version="v1")
+    assert out["token_id"] == "123"
+
+
 def test_reverted_match_is_excluded():
     with pytest.raises(ValueError, match="reverted_transaction"):
         normalize_orderfilled(base(maker_asset_id="123", taker_asset_id="0", receipt_status=0), exchange_version="v1")
