@@ -37,6 +37,17 @@ COOLDOWN_AFTER_LOSSES = 2
 COOLDOWN_EVENTS = 6
 
 
+def configure_simulation(bankroll0: float, min_cost: float) -> None:
+    """Set the explicit bankroll controls for one command-line evaluation."""
+    if not math.isfinite(float(bankroll0)) or float(bankroll0) <= 0:
+        raise ValueError("bankroll0 must be positive and finite")
+    if not math.isfinite(float(min_cost)) or float(min_cost) < 0:
+        raise ValueError("min_cost must be finite and non-negative")
+    global BANKROLL0, MIN_COST
+    BANKROLL0 = float(bankroll0)
+    MIN_COST = float(min_cost)
+
+
 @dataclass(frozen=True)
 class CandidateSpec:
     name: str
@@ -761,6 +772,7 @@ def build_report(
     lines.append("- The selected fill quote receives an added adverse slippage of 0.25c or 0.75c.")
     lines.append("- Fill must pass spread, overround, depth, and price bounds at the delayed quote.")
     lines.append("- Only 25% of visible size is treated as fillable, with 1% or 2% bankroll sizing.")
+    lines.append(f"- Bankroll baseline is ${BANKROLL0:.2f}; minimum filled cost is ${MIN_COST:.2f}.")
     lines.append("- Max 10 trades per rolling 144-event window; after two losses, skip the next six events.")
     lines.append("")
     lines.append("## Data coverage")
@@ -793,7 +805,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", required=True)
     parser.add_argument("--report-dir", required=True)
+    parser.add_argument("--bankroll0", type=float, default=BANKROLL0)
+    parser.add_argument("--min-cost", type=float, default=MIN_COST)
     args = parser.parse_args()
+
+    configure_simulation(args.bankroll0, args.min_cost)
 
     features, coverage, complete_runs = prepare_complete_data(Path(args.source_root))
     folds = make_run_folds(complete_runs)
@@ -848,6 +864,8 @@ def main() -> None:
         "quota_window_events": QUOTA_WINDOW_EVENTS,
         "max_trades_per_window": MAX_TRADES_PER_WINDOW,
         "cooldown_after_losses": COOLDOWN_AFTER_LOSSES,
+        "bankroll0": BANKROLL0,
+        "min_cost": MIN_COST,
         "cooldown_events": COOLDOWN_EVENTS,
     }
     (outdir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
