@@ -637,6 +637,14 @@ jobs:
       - name: Install research and vault dependencies
         run: python -m pip install -r requirements.txt -r requirements-vault.txt
 
+      - name: Validate compound ledger and OrderFilled normalizer
+        run: |
+          python -m pytest -q \
+            tests/test_sequential_compound_gate.py \
+            tests/test_onchain_orderfilled_normalizer.py \
+            tests/test_authoritative_orderfilled_source_audit.py \
+            tests/test_polymarket_receipt_adapter.py
+
       - name: Run old-clean single-account compound replay
         env:
           PYTHONUNBUFFERED: '1'
