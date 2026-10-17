@@ -64,6 +64,33 @@ class MinimumOrderModeTests(unittest.TestCase):
         self.assertEqual(metrics["trades"], 0)
         self.assertTrue(logs.empty)
 
+    def test_one_continuous_call_preserves_trade_window_across_runs(self):
+        frames = []
+        for index in range(11):
+            frame = one_signal(fraction=0.01).copy()
+            frame["first_quote_ts"] = pd.Timestamp("2026-01-01T00:00:00Z") + pd.Timedelta(seconds=index)
+            frame["run_name"] = f"run-{index}"
+            frame["market_id"] = f"market-{index}"
+            frames.append(frame)
+        combined = pd.concat(frames, ignore_index=True)
+        _, global_metrics = simulate(
+            combined, "v1_conservative_mix", ExecutionConfig(), 10.0, 0.0,
+            capture_logs=True, fee_mode="polymarket_taker", fee_rate=0.07,
+            min_cost_policy="raise_to_min", min_order_mode="notional",
+            min_order_shares=5.0,
+        )
+        separate_trades = 0
+        for frame in frames:
+            _, metrics = simulate(
+                frame, "v1_conservative_mix", ExecutionConfig(), 10.0, 0.0,
+                capture_logs=True, fee_mode="polymarket_taker", fee_rate=0.07,
+                min_cost_policy="raise_to_min", min_order_mode="notional",
+                min_order_shares=5.0,
+            )
+            separate_trades += metrics["trades"]
+        self.assertEqual(global_metrics["trades"], 10)
+        self.assertEqual(separate_trades, 11)
+
 
 if __name__ == "__main__":
     unittest.main()
