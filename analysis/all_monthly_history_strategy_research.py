@@ -360,6 +360,7 @@ def candidate_micro_trades(row: pd.Series) -> List[Tuple[str, str, int, float, f
 
 
 def choose_fairprob(hist: pd.DataFrame | None, row: pd.Series, mode: str, fee: float,
+                    fee_mode: str = "polymarket_taker", fee_exponent: float = 1.0,
                     state_index: RollingStateIndex | None = None) -> Dict[str, object]:
     best = {"strategy": "skip", "side": "skip", "entry_minute": -1, "market_price": np.nan, "fair_prob": np.nan, "edge": np.nan, "support": 0}
     best_score = -1e9
@@ -369,7 +370,13 @@ def choose_fairprob(hist: pd.DataFrame | None, row: pd.Series, mode: str, fee: f
         if pd.isna(fair_prob):
             continue
         edge = float(fair_prob - price)
-        margin = fee + 0.02 + min(max(spread, 0.0), 0.05)
+        # Convert the configured taker rate into a per-share cost at the
+        # candidate price.  The historical code treated ``fee`` as a flat
+        # per-share debit, which overstated crypto taker costs and made this
+        # discovery path inconsistent with the execution walk-forward.
+        fee_per_share = (fee if fee_mode == "flat_per_share" else
+                         fee * (price ** fee_exponent) * (1.0 - price))
+        margin = fee_per_share + 0.02 + min(max(spread, 0.0), 0.05)
         if mode == "hist_fairprob_conservative":
             margin += 0.02
         if mode == "hist_fairprob_robust":
@@ -391,26 +398,33 @@ def choose_fairprob(hist: pd.DataFrame | None, row: pd.Series, mode: str, fee: f
 
 
 def choose_trade(hist: pd.DataFrame | None, row: pd.Series, strategy: str, fee: float,
+                 fee_mode: str = "polymarket_taker", fee_exponent: float = 1.0,
                  state_index: RollingStateIndex | None = None) -> Dict[str, object]:
     if strategy.startswith("hist_fairprob_"):
-        return choose_fairprob(hist, row, strategy, fee, state_index=state_index)
+        return choose_fairprob(hist, row, strategy, fee, fee_mode=fee_mode,
+                               fee_exponent=fee_exponent,
+                               state_index=state_index)
     side, minute = choose_static(row, strategy)
     return {"strategy": strategy, "side": side, "entry_minute": minute, "market_price": np.nan, "fair_prob": np.nan, "edge": np.nan, "support": np.nan}
 
 
-def payout(row: pd.Series, side: str, minute: int, fee: float) -> Tuple[float, float, float]:
+def payout(row: pd.Series, side: str, minute: int, fee: float,
+           fee_mode: str = "polymarket_taker", fee_exponent: float = 1.0) -> Tuple[float, float, float]:
     if side == "buy_up":
         price = row[f"buy_up_price_m{minute}"]
         size = row[f"buy_up_size_m{minute}"]
-        pnl_per_share = row["outcome_up"] - price - fee
+        fee_per_share = fee if fee_mode == "flat_per_share" else fee * (price ** fee_exponent) * (1.0 - price)
+        pnl_per_share = row["outcome_up"] - price - fee_per_share
     else:
         price = row[f"buy_down_price_m{minute}"]
         size = row[f"buy_down_size_m{minute}"]
-        pnl_per_share = (1.0 - row["outcome_up"]) - price - fee
+        fee_per_share = fee if fee_mode == "flat_per_share" else fee * (price ** fee_exponent) * (1.0 - price)
+        pnl_per_share = (1.0 - row["outcome_up"]) - price - fee_per_share
     return float(price), float(size), float(pnl_per_share)
 
 
-def simulate_strategy(df: pd.DataFrame, strategy: str, frac: float, fee: float) -> pd.DataFrame:
+def simulate_strategy(df: pd.DataFrame, strategy: str, frac: float, fee: float,
+                      fee_mode: str = "polymarket_taker", fee_exponent: float = 1.0) -> pd.DataFrame:
     bankroll, peak, max_dd = 100.0, 100.0, 0.0
     rows = []
     df = df.sort_values("first_quote_ts").reset_index(drop=True)
@@ -421,7 +435,9 @@ def simulate_strategy(df: pd.DataFrame, strategy: str, frac: float, fee: float) 
             if state_index is not None:
                 state_index.update(row)
             continue
-        choice = choose_trade(None, row, strategy, fee, state_index=state_index)
+        choice = choose_trade(None, row, strategy, fee, fee_mode=fee_mode,
+                              fee_exponent=fee_exponent,
+                              state_index=state_index)
         if state_index is not None:
             # Incorporate the current outcome only after its decision has been
             # made, preserving the original no-lookahead ordering.
@@ -429,7 +445,8 @@ def simulate_strategy(df: pd.DataFrame, strategy: str, frac: float, fee: float) 
         side, minute = str(choice["side"]), int(choice["entry_minute"])
         if side == "skip" or minute < 0:
             continue
-        price, size_avail, pnl_per_share = payout(row, side, minute, fee)
+        price, size_avail, pnl_per_share = payout(
+            row, side, minute, fee, fee_mode=fee_mode, fee_exponent=fee_exponent)
         if pd.isna(price) or pd.isna(size_avail) or price <= 0:
             continue
         target_cost = min(bankroll * frac, bankroll, float(size_avail) * float(price))
@@ -647,6 +664,9 @@ def main() -> None:
     parser.add_argument("--source-root", type=str, required=True)
     parser.add_argument("--report-dir", type=str, required=True)
     parser.add_argument("--fee", type=float, default=0.01)
+    parser.add_argument("--fee-mode", choices=("polymarket_taker", "flat_per_share"),
+                        default="polymarket_taker")
+    parser.add_argument("--fee-exponent", type=float, default=1.0)
     args = parser.parse_args()
 
     raw, run_cover = read_all_monthly_runs(Path(args.source_root))
@@ -657,7 +677,8 @@ def main() -> None:
     logs = []
     for strategy in STATIC_STRATEGIES:
         for frac in FIXED_FRACS:
-            lg = simulate_strategy(wide, strategy, frac, args.fee)
+            lg = simulate_strategy(wide, strategy, frac, args.fee,
+                                   fee_mode=args.fee_mode, fee_exponent=args.fee_exponent)
             if not lg.empty:
                 logs.append(lg)
     logs_df = pd.concat(logs, ignore_index=True) if logs else pd.DataFrame()
