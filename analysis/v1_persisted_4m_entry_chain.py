@@ -21,6 +21,8 @@ def main() -> None:
     parser.add_argument("--fee-mode", choices=("flat_per_share", "polymarket_taker"), default="polymarket_taker")
     parser.add_argument("--fee-exponent", type=float, default=1.0)
     parser.add_argument("--min-cost-policy", choices=("reject", "raise_to_min"), default="raise_to_min")
+    parser.add_argument("--min-order-mode", choices=("notional", "shares", "both"), default="notional")
+    parser.add_argument("--min-order-shares", type=float, default=5.0)
     args = parser.parse_args()
     study.FEE = float(args.fee)
     features, _, runs = study.prepare_data(Path(args.source_root))
@@ -43,6 +45,8 @@ def main() -> None:
                 fee_rate=args.fee,
                 fee_exponent=args.fee_exponent,
                 min_cost_policy=args.min_cost_policy,
+                min_order_mode=args.min_order_mode,
+                min_order_shares=args.min_order_shares,
             )
             rows.append({
                 "strategy": strategy,
@@ -80,6 +84,8 @@ def main() -> None:
         "bankroll0": args.bankroll0,
         "min_cost": args.min_cost,
         "min_cost_policy": args.min_cost_policy,
+        "min_order_mode": args.min_order_mode,
+        "min_order_shares": args.min_order_shares,
         "fee": args.fee,
         "fee_mode": args.fee_mode,
         "output": str(out),

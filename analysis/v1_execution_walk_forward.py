@@ -156,6 +156,8 @@ def simulate(
     fee_rate: float | None = None,
     fee_exponent: float = 1.0,
     min_cost_policy: str = "reject",
+    min_order_mode: str = "notional",
+    min_order_shares: float = 5.0,
 ) -> Tuple[pd.DataFrame, Dict[str, object]]:
     if fee_mode not in {"flat_per_share", "polymarket_taker"}:
         raise ValueError(f"unsupported fee_mode: {fee_mode}")
@@ -167,6 +169,10 @@ def simulate(
         raise ValueError("fee_exponent must be finite and positive")
     if min_cost_policy not in {"reject", "raise_to_min"}:
         raise ValueError(f"unsupported min_cost_policy: {min_cost_policy}")
+    if min_order_mode not in {"notional", "shares", "both"}:
+        raise ValueError(f"unsupported min_order_mode: {min_order_mode}")
+    if not math.isfinite(float(min_order_shares)) or float(min_order_shares) < 0:
+        raise ValueError("min_order_shares must be finite and non-negative")
     d = df.sort_values("first_quote_ts").reset_index(drop=True)
     side = d[f"{strategy}_side"].fillna("skip").astype(str).to_numpy()
     minute = d[f"{strategy}_minute"].to_numpy(dtype=int)
@@ -230,13 +236,21 @@ def simulate(
         capacity = float(quote_size[i]) * FILL_RATIO * float(fill_price[i])
         target_cost = bankroll * max(fraction[i], 0.0)
         cost = min(target_cost, bankroll, capacity)
+        notional_floor = float(min_cost) if min_order_mode in {"notional", "both"} else 0.0
+        shares_floor_cost = (
+            float(min_order_shares) * float(fill_price[i])
+            if min_order_mode in {"shares", "both"} else 0.0
+        )
         if min_cost_policy == "raise_to_min":
-            if bankroll < min_cost or capacity < min_cost:
+            required_cost = max(notional_floor, shares_floor_cost)
+            if bankroll < required_cost or capacity < required_cost:
                 continue
-            cost = min(max(cost, min_cost), bankroll, capacity)
-        if not math.isfinite(cost) or cost < min_cost or fill_price[i] <= 0:
+            cost = min(max(cost, required_cost), bankroll, capacity)
+        if not math.isfinite(cost) or cost < notional_floor or fill_price[i] <= 0:
             continue
         shares = cost / fill_price[i]
+        if shares < float(min_order_shares) and min_order_mode in {"shares", "both"}:
+            continue
         fee_usd = trade_fee_usd(shares, fill_price[i], fee_mode, float(fee_rate), float(fee_exponent))
         # The cash ledger must cover both the order notional and the taker fee.
         # This matters when a minimum order consumes a large fraction of a
@@ -307,6 +321,8 @@ def simulate(
         "fee_rate": float(fee_rate),
         "fee_exponent": float(fee_exponent),
         "min_cost_policy": min_cost_policy,
+        "min_order_mode": min_order_mode,
+        "min_order_shares": float(min_order_shares),
         **asdict(config),
         **window_metrics(event_returns, trade_flags),
     }
