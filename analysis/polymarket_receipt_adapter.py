@@ -12,8 +12,11 @@ from typing import Any
 
 
 _ORDER_TERMINAL = frozenset({"CANCELED", "UNMATCHED"})
+_ORDER_EVENT_TYPES = frozenset({"PLACEMENT", "UPDATE", "CANCELLATION"})
 _TRADE_PENDING = frozenset({
     "MATCHED", "MATCHED_NOT_BROADCASTED", "MINED", "RETRYING",
+    "TRADE_STATUS_MATCHED", "TRADE_STATUS_MATCHED_NOT_BROADCASTED",
+    "TRADE_STATUS_MINED", "TRADE_STATUS_RETRYING",
 })
 _TRADE_CONFIRMED = frozenset({"CONFIRMED", "TRADE_STATUS_CONFIRMED"})
 _TRADE_FAILED = frozenset({"FAILED", "TRADE_STATUS_FAILED"})
@@ -81,6 +84,13 @@ def normalize_user_event(event: Any) -> dict[str, Any]:
     }
     if kind == "order":
         status = str(_value(body, "status") or "").strip().upper()
+        lifecycle = str(_value(body, "orderEventType", "order_event_type") or "").strip().upper()
+        # Explicit SDK aliases win, including empty/unknown supplied values.
+        # Only lifecycle verbs may fall back from wire type, never SDK families.
+        if "orderEventType" not in body and "order_event_type" not in body:
+            wire_type = str(body.get("type") or "").strip().upper()
+            if wire_type in _ORDER_EVENT_TYPES:
+                lifecycle = wire_type
         requested = _decimal_text(_value(body, "originalSize", "original_size"), "original size")
         matched = _decimal_text(_value(body, "sizeMatched", "size_matched"), "matched size")
         if requested is not None:
@@ -89,7 +99,7 @@ def normalize_user_event(event: Any) -> dict[str, Any]:
             out["matched_shares"] = matched
         out.update({
             "order_status": status,
-            "order_event_type": str(_value(body, "orderEventType", "order_event_type") or "").strip().upper(),
+            "order_event_type": lifecycle,
             "order_terminal": status in _ORDER_TERMINAL,
             "entry_order_terminal": status in _ORDER_TERMINAL,
             "confirmed_filled_shares": "0",
