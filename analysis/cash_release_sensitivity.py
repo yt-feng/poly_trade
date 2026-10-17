@@ -74,6 +74,7 @@ def simulate_cash_locked(
     peak_cash = cash
     min_cash = cash
     max_locked = 0.0
+    max_cash_drawdown = 0.0
     recent_trades: list[int] = []
     loss_streak = 0
     cooldown = 0
@@ -85,12 +86,15 @@ def simulate_cash_locked(
     last_now = None
 
     def release_until(now: float) -> None:
-        nonlocal cash, locked
+        nonlocal cash, locked, peak_cash, max_cash_drawdown
         while positions and positions[0]["release_ts"] <= now + 1e-9:
             pos = positions.popleft()
             cash += pos["payout"]
             locked -= pos["reserved"]
             realized.append(pos["pnl"])
+            peak_cash = max(peak_cash, cash)
+            if peak_cash > 0:
+                max_cash_drawdown = max(max_cash_drawdown, (peak_cash - cash) / peak_cash)
 
     for i in np.flatnonzero(signal):
         now = pd.Timestamp(d.at[i, "first_quote_ts"]).timestamp()
@@ -128,6 +132,8 @@ def simulate_cash_locked(
         max_locked = max(max_locked, locked)
         min_cash = min(min_cash, cash)
         peak_cash = max(peak_cash, cash)
+        if peak_cash > 0:
+            max_cash_drawdown = max(max_cash_drawdown, (peak_cash - cash) / peak_cash)
         recent_trades.append(i)
         if pnl < 0:
             loss_streak += 1
@@ -168,6 +174,7 @@ def simulate_cash_locked(
         "net_return": float(cash / bankroll0 - 1.0),
         "min_cash_before_settlement": float(min_cash),
         "max_locked_cash": float(max_locked),
+        "max_cash_drawdown": float(max_cash_drawdown),
         "locked_positions_at_observation_end": int(locked_at_observation_end),
         "blocked_cash_events": int(blocked_cash),
         "blocked_pending_events": int(blocked_pending),
