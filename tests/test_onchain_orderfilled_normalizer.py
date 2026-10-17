@@ -76,3 +76,11 @@ def test_quote_join_requires_token_and_timestamp_identity():
     assert quote_join_ready(fill, {"token_id": "123", "market_id": "m", "timestamp_ms": 2500})
     assert not quote_join_ready(fill, {"token_id": "123", "market_id": "m", "timestamp_ms": 4000})
     assert not quote_join_ready(fill, {"token_id": "999", "market_id": "m", "timestamp_ms": 1000})
+
+
+def test_normalized_fill_preserves_join_scope_when_supplied():
+    out = normalize_orderfilled(
+        base(maker_asset_id="123", taker_asset_id="0", market_id="m", timestamp_ms=1000),
+        exchange_version="v1",
+    )
+    assert quote_join_ready(out, {"token_id": "123", "market_id": "m", "timestamp_ms": 2500})

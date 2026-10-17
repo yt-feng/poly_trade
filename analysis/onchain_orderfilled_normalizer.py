@@ -104,6 +104,8 @@ def _base(record: dict[str, Any], version: str) -> dict[str, Any]:
         "taker": _text(record.get("taker"), "taker").lower(),
         "fee_raw": str(_integer(record.get("fee", 0), "fee")),
         "block_timestamp": record.get("block_timestamp", record.get("timestamp")),
+        "market_id": record.get("market_id", record.get("condition_id")),
+        "timestamp_ms": record.get("timestamp_ms", record.get("block_timestamp_ms")),
     }
 
 
