@@ -96,6 +96,16 @@ def audit_trade_log(
         required_fills=10,
         evidence_mode="paper_upper_bound",
     )
+    # Keep the user's exact gate visible even when the frozen holdout contains
+    # more than ten rows: this is the first ten chronological events on the
+    # same evolving cash ledger, never ten independently reset trials.
+    prefix_chain = evaluate_compound_chain(
+        events[:10],
+        initial_cash="10",
+        minimum_order="5",
+        required_fills=10,
+        evidence_mode="paper_upper_bound",
+    )
     return {
         "format": "old-clean-path-efficiency-paper-compound-audit-v1",
         "candidate": candidate,
@@ -110,6 +120,7 @@ def audit_trade_log(
             "evidence_mode": "paper_upper_bound",
         },
         "compound_chain": chain,
+        "required_prefix_chain": prefix_chain,
         "paper_only": True,
         "actual_fills": 0,
         "verified_canary_fills": 0,
