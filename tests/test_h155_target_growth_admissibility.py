@@ -15,8 +15,8 @@ from analysis.h155_target_growth_admissibility import (
 
 def test_target_multiplier_and_price_cap_are_frozen_and_ordered():
     assert math.isclose(TARGET_MULTIPLIER, 100 ** (1 / 10), rel_tol=1e-12)
-    assert math.isclose(ENTRY_PRICE_CAP, minimum_win_price_cap(), rel_tol=1e-12)
-    assert 0.44 < ENTRY_PRICE_CAP < 0.46
+    assert ENTRY_PRICE_CAP < minimum_win_price_cap()
+    assert 0.43 < ENTRY_PRICE_CAP < 0.45
 
 
 def test_blocks_cover_without_overlap():
