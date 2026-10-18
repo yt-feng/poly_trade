@@ -125,8 +125,16 @@ jobs:
           git add -A reports/all_monthly_runs_clob_systematic
           if ! git diff --cached --quiet; then
             git commit -m 'Update all monthly_runs CLOB systematic research outputs [skip ci]'
-            git pull --rebase origin main || true
-            git push origin HEAD:main
+            for attempt in 1 2 3 4 5; do
+              git fetch origin main
+              git rebase origin/main
+              if git push origin HEAD:main; then
+                exit 0
+              fi
+              sleep $((attempt * 2))
+            done
+            echo 'Unable to publish generated outputs after five fast-forward retries.' >&2
+            exit 1
           else
             echo 'No output changes to commit.'
           fi
