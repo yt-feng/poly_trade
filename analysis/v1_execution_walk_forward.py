@@ -386,7 +386,17 @@ def run_walk_forward(features: pd.DataFrame, folds: List[Dict[str, object]], ban
         ]
         for strategy in STRATEGIES:
             for split_name, frame, run_label in splits:
-                trade_log, metrics = simulate(frame, strategy, config, bankroll0, min_cost, capture_logs=True)
+                # Historical walk-forward path: declare the legacy unit
+                # explicitly so a future default change cannot reinterpret it.
+                trade_log, metrics = simulate(
+                    frame,
+                    strategy,
+                    config,
+                    bankroll0,
+                    min_cost,
+                    capture_logs=True,
+                    min_order_mode="notional",
+                )
                 metrics.update({"split": split_name, "fold_id": fold["fold_id"], "run_label": run_label})
                 rows.append(metrics)
                 if not trade_log.empty:

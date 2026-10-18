@@ -73,7 +73,8 @@ def run(features: pd.DataFrame, folds: List[Dict[str, object]], bankroll0: float
                 ):
                     gated = filtered_frame(frame, strategy, filter_name)
                     trade_log, metrics = study.simulate(
-                        gated, strategy, config, bankroll0, min_cost, capture_logs=True
+                        gated, strategy, config, bankroll0, min_cost,
+                        capture_logs=True, min_order_mode="notional",
                     )
                     metrics.update(
                         {

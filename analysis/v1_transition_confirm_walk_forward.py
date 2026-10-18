@@ -39,7 +39,8 @@ def run(features: pd.DataFrame, folds: List[Dict[str, object]], bankroll0: float
             for split_name, frame, run_label in splits:
                 filtered = apply_confirmation(frame, strategy)
                 trade_log, metrics = study.simulate(
-                    filtered, strategy, config, bankroll0, min_cost, capture_logs=True
+                    filtered, strategy, config, bankroll0, min_cost,
+                    capture_logs=True, min_order_mode="notional",
                 )
                 metrics.update({
                     "candidate": f"{strategy}__transition_confirm",

@@ -48,7 +48,10 @@ def training_state_stats(
     stats: Dict[str, Dict[str, float]] = {}
     for state in sorted(set(train[f"{strategy}_state"]) - {"unknown|p-1"}):
         subset = train[train[f"{strategy}_state"] == state]
-        _, metrics = study.simulate(subset, strategy, config, bankroll0, min_cost, capture_logs=False)
+        _, metrics = study.simulate(
+            subset, strategy, config, bankroll0, min_cost,
+            capture_logs=False, min_order_mode="notional",
+        )
         stats[state] = {
             "trades": float(metrics["trades"]),
             "total_return": float(metrics["total_return"]),
@@ -90,7 +93,8 @@ def run(features: pd.DataFrame, folds: List[Dict[str, object]], bankroll0: float
             ):
                 gated = gated_frame(frame, strategy, active)
                 trade_log, metrics = study.simulate(
-                    gated, strategy, config, bankroll0, min_cost, capture_logs=True
+                    gated, strategy, config, bankroll0, min_cost,
+                    capture_logs=True, min_order_mode="notional",
                 )
                 metrics.update(
                     {

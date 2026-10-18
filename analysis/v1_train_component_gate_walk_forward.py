@@ -47,6 +47,7 @@ def component_training_returns(
             bankroll0,
             min_cost,
             capture_logs=False,
+            min_order_mode="notional",
         )
         result[component] = float(metrics["total_return"])
     return result
@@ -90,6 +91,7 @@ def run(
                     bankroll0,
                     min_cost,
                     capture_logs=True,
+                    min_order_mode="notional",
                 )
                 metrics.update(
                     {

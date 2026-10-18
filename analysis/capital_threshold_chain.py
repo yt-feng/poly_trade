@@ -39,6 +39,7 @@ def main() -> None:
                     capture_logs=False,
                     fee_mode="polymarket_taker",
                     fee_rate=args.fee,
+                    min_order_mode="notional",
                     fee_exponent=1.0,
                     min_cost_policy="raise_to_min",
                 )

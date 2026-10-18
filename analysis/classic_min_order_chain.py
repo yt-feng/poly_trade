@@ -71,6 +71,7 @@ def main() -> None:
                 fee_rate=args.fee,
                 fee_exponent=1.0,
                 min_cost_policy="raise_to_min",
+                min_order_mode="notional",
             )
             rows.append({
                 "strategy": strategy,

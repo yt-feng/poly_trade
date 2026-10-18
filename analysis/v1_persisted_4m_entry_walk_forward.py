@@ -61,6 +61,7 @@ def run(
                     capture_logs=True,
                     fee_mode=fee_mode,
                     fee_rate=fee_rate,
+                    min_order_mode="notional",
                     fee_exponent=fee_exponent,
                     min_cost_policy=min_cost_policy,
                 )
