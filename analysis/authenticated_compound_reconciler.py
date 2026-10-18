@@ -37,6 +37,9 @@ def reconcile_authenticated_chain(
     initial_cash: Any = "10",
     minimum_order: Any = "5",
     required_fills: int = 10,
+    starting_checkpoint_id: Any = None,
+    closing_balance_checkpoint_id: Any = None,
+    closing_balance: Any = None,
 ) -> dict[str, Any]:
     """Validate identities and evaluate one no-reset authenticated cash chain.
 
@@ -45,9 +48,11 @@ def reconcile_authenticated_chain(
     records.  Identity checks are deliberately stricter than the paper replay:
     owner, ledger, chain, sequence, checkpoint, transaction, trade, settlement,
     cash-release, and balance identifiers must each be present and unique.
-    This compatibility helper is itself a ten-event boundary; callers that
-    have not produced the v2 ledger fields fail closed instead of replaying
-    independently reset rows on a fresh balance.
+    The explicit opening and closing checkpoint anchors are required even for
+    this compatibility helper. Without them, a caller could supply ten
+    internally consistent rows while leaving the account slice undefined.
+    These anchors do not authenticate their origin; they make the required
+    ledger interval explicit so a v2 caller can bind it to captured evidence.
     """
     expected_owner = _text(owner)
     if not expected_owner:
@@ -57,6 +62,53 @@ def reconcile_authenticated_chain(
             "gate_passed": False,
             "fills": 0,
             "failure_reason": "required_fills_fixed_at_ten",
+            "owner_scoped": False,
+            "identity_complete": False,
+        }
+    try:
+        expected_initial_cash = _decimal(initial_cash, "initial_cash")
+        if expected_initial_cash != Decimal("10"):
+            return {
+                "gate_passed": False,
+                "fills": 0,
+                "failure_reason": "initial_cash_must_equal_ten",
+                "owner_scoped": False,
+                "identity_complete": False,
+            }
+        opening_checkpoint = _text(starting_checkpoint_id)
+        closing_checkpoint = _text(closing_balance_checkpoint_id)
+    except (ValueError, TypeError, InvalidOperation) as exc:
+        reason = str(exc) if isinstance(exc, ValueError) and str(exc) else "ledger_anchor_required"
+        return {
+            "gate_passed": False,
+            "fills": 0,
+            "failure_reason": reason,
+            "owner_scoped": False,
+            "identity_complete": False,
+        }
+    if not opening_checkpoint or not closing_checkpoint:
+        return {
+            "gate_passed": False,
+            "fills": 0,
+            "failure_reason": "ledger_anchors_required",
+            "owner_scoped": False,
+            "identity_complete": False,
+        }
+    try:
+        expected_closing_balance = _decimal(closing_balance, "closing_balance")
+    except (ValueError, TypeError, InvalidOperation) as exc:
+        return {
+            "gate_passed": False,
+            "fills": 0,
+            "failure_reason": str(exc) if isinstance(exc, ValueError) and str(exc) else "closing_balance_required",
+            "owner_scoped": False,
+            "identity_complete": False,
+        }
+    if opening_checkpoint == closing_checkpoint:
+        return {
+            "gate_passed": False,
+            "fills": 0,
+            "failure_reason": "opening_and_closing_checkpoints_must_differ",
             "owner_scoped": False,
             "identity_complete": False,
         }
@@ -134,15 +186,15 @@ def reconcile_authenticated_chain(
     sequence_values = [row.get("sequence_no") for row in rows]
     if sequence_values != list(range(1, 11)):
         return {"gate_passed": False, "fills": 0, "failure_reason": "sequence_no_must_be_exactly_one_to_ten", "owner_scoped": True, "identity_complete": False}
-    previous_checkpoint = ""
-    previous_after = Decimal("10")
+    previous_checkpoint = opening_checkpoint
+    previous_after = expected_initial_cash
     previous_entry: int | None = None
     for index, row in enumerate(rows):
         checkpoint = _text(row.get("balance_checkpoint_id"))
         prior_checkpoint = _text(row.get("previous_checkpoint_id"))
         if not checkpoint or not prior_checkpoint:
             return {"gate_passed": False, "fills": 0, "failure_reason": "checkpoint_link_required", "owner_scoped": True, "identity_complete": False}
-        if index and prior_checkpoint != previous_checkpoint:
+        if prior_checkpoint != previous_checkpoint:
             return {"gate_passed": False, "fills": 0, "failure_reason": "previous_checkpoint_link_mismatch", "owner_scoped": True, "identity_complete": False}
         entry_raw = row.get("entry_ts")
         try:
@@ -152,11 +204,16 @@ def reconcile_authenticated_chain(
             released = _decimal(row.get("released_cash_since_previous_entry"), "released_cash_since_previous_entry")
             cost = _decimal(row.get("entry_cost"), "entry_cost")
             fee = _decimal(row.get("fee"), "fee")
+            available_ts = int(str(row.get("cash_available_ts")))
         except (ValueError, TypeError, InvalidOperation) as exc:
             reason = str(exc) if isinstance(exc, ValueError) and str(exc) else "invalid_ledger_amount_or_timestamp"
             return {"gate_passed": False, "fills": 0, "failure_reason": reason, "owner_scoped": True, "identity_complete": False}
         if previous_entry is not None and entry_ts <= previous_entry:
             return {"gate_passed": False, "fills": 0, "failure_reason": "entry_timestamps_must_increase", "owner_scoped": True, "identity_complete": False}
+        if available_ts < entry_ts:
+            return {"gate_passed": False, "fills": 0, "failure_reason": "cash_available_timestamp_before_entry", "owner_scoped": True, "identity_complete": False}
+        if index == 0 and released != Decimal("0"):
+            return {"gate_passed": False, "fills": 0, "failure_reason": "first_entry_cannot_use_prior_release", "owner_scoped": True, "identity_complete": False}
         if balance_before != previous_after + released:
             return {"gate_passed": False, "fills": 0, "failure_reason": "balance_before_arithmetic_mismatch", "owner_scoped": True, "identity_complete": False}
         if balance_after != balance_before - cost - fee:
@@ -184,4 +241,32 @@ def reconcile_authenticated_chain(
         "unique_cash_release_receipts": len(seen["cash_release_receipt_id"]),
         "unique_balance_checkpoints": len(seen["balance_checkpoint_id"]),
     })
+    if result.get("failure_reason"):
+        return result
+    if closing_checkpoint in seen["balance_checkpoint_id"]:
+        return {
+            **result,
+            "gate_passed": False,
+            "fills": 0,
+            "failure_reason": "closing_checkpoint_must_be_independent",
+            "identity_complete": False,
+        }
+    try:
+        ending_cash = _decimal(result.get("ending_cash"), "ending_cash")
+    except (ValueError, TypeError, InvalidOperation) as exc:
+        return {
+            **result,
+            "gate_passed": False,
+            "fills": 0,
+            "failure_reason": str(exc) if isinstance(exc, ValueError) and str(exc) else "ending_cash_missing",
+            "identity_complete": False,
+        }
+    if expected_closing_balance != ending_cash:
+        return {
+            **result,
+            "gate_passed": False,
+            "fills": 0,
+            "failure_reason": "closing_balance_arithmetic_mismatch",
+            "identity_complete": False,
+        }
     return result

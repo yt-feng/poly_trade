@@ -360,6 +360,20 @@ def test_cash_reset_between_fills_cannot_be_two_compound_ledgers():
     assert result["failure_reason"] == "balance_before_arithmetic_mismatch"
 
 
+def test_v2_requires_explicit_opening_and_closing_ledger_anchors():
+    doc = bundle()
+    del doc["starting_checkpoint_id"]
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "starting_checkpoint_id_required"
+
+    doc = bundle()
+    del doc["closing_balance_checkpoint_id"]
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "closing_balance_checkpoint_id_required"
+
+
 def test_sequence_reset_and_checkpoint_link_fail_closed():
     doc = bundle()
     doc["events"][5]["sequence_no"] = 5

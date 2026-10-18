@@ -638,6 +638,9 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
         # universal notional minimum that the market did not report.
         minimum_order=str(MINIMUM_ENTRY_COST_FOR_LEDGER),
         required_fills=REQUIRED_FILLS,
+        starting_checkpoint_id=document.get("starting_checkpoint_id"),
+        closing_balance_checkpoint_id=document.get("closing_balance_checkpoint_id"),
+        closing_balance=document.get("closing_balance"),
     )
     # Keep the source manifest compact and omit owner/account identifiers.
     return {
