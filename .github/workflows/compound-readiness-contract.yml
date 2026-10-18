@@ -1,0 +1,23 @@
+name: compound-readiness-contract
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compound readiness contract smoke tests
+        run: python -m unittest discover -s tests -p 'test_compound_readiness_contract.py' -v
+      - name: Compile readiness implementation
+        run: python -m py_compile tools/compound_readiness_report.py
