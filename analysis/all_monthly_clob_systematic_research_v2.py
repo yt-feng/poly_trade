@@ -355,7 +355,86 @@ def candidate_history_stats(hist: pd.DataFrame, row: pd.Series, micro: str, side
     return exp_weighted_mean(pnl), float((pnl > 0).mean()), int(len(pnl))
 
 
-def choose_trade(hist: pd.DataFrame, row: pd.Series, strategy: str, fee: float) -> Dict[str, object]:
+def _missing_key_component(value: object) -> bool:
+    try:
+        result = pd.isna(value)
+        return bool(result) if not hasattr(result, "__len__") else False
+    except (TypeError, ValueError):
+        return False
+
+
+def candidate_history_key(row: pd.Series, micro: str, side: str, minute: int) -> Tuple[object, ...] | None:
+    """Return the exact categorical key used by candidate_history_stats."""
+    regime = row.get("regime")
+    if _missing_key_component(regime):
+        return None
+    if minute in (1, 4):
+        return micro, regime
+    if side == "buy_up":
+        components = (
+            row.get("up_price_bucket_2m"),
+            row.get("liq_sign_up_2m"),
+            row.get("spread_sign_2m"),
+        )
+    else:
+        components = (
+            row.get("down_price_bucket_2m"),
+            row.get("liq_sign_down_2m"),
+            row.get("imb_sign_2m"),
+        )
+    if any(_missing_key_component(value) for value in components):
+        return None
+    return micro, regime, *components
+
+
+class CandidateHistoryIndex:
+    """Incremental equivalent of candidate_history_stats for chronological replay.
+
+    The original implementation copied and filtered the whole prefix for every
+    event.  This index keeps the same exponentially weighted mean, win count,
+    and support for each categorical history key while preserving strict
+    pre-event ordering.
+    """
+
+    _ALPHA = 0.5 ** (1.0 / 25.0)
+
+    def __init__(self) -> None:
+        self._stats: Dict[Tuple[object, ...], Tuple[int, float, float, int]] = {}
+
+    def update(self, row: pd.Series) -> None:
+        for micro, side, minute in candidate_micro_trades(row):
+            key = candidate_history_key(row, micro, side, minute)
+            if key is None:
+                continue
+            raw_pnl = pd.to_numeric(row.get(f"realized_pnl_{side}_{minute}m"), errors="coerce")
+            if pd.isna(raw_pnl):
+                continue
+            pnl = float(raw_pnl)
+            count, weighted_sum, weight_total, wins = self._stats.get(key, (0, 0.0, 0.0, 0))
+            self._stats[key] = (
+                count + 1,
+                pnl + self._ALPHA * weighted_sum,
+                1.0 + self._ALPHA * weight_total,
+                wins + (1 if pnl > 0 else 0),
+            )
+
+    def stats(self, row: pd.Series, micro: str, side: str, minute: int) -> Tuple[float, float, int]:
+        key = candidate_history_key(row, micro, side, minute)
+        if key is None or key not in self._stats:
+            return np.nan, np.nan, 0
+        count, weighted_sum, weight_total, wins = self._stats[key]
+        if count < 12:
+            return np.nan, np.nan, int(count)
+        return float(weighted_sum / weight_total), float(wins / count), int(count)
+
+
+def choose_trade(
+    hist: pd.DataFrame,
+    row: pd.Series,
+    strategy: str,
+    fee: float,
+    history_index: CandidateHistoryIndex | None = None,
+) -> Dict[str, object]:
     if strategy.startswith("static_"):
         side, minute = candidate_static(row, strategy)
         return {"side": side, "minute": minute, "score": np.nan, "support": np.nan, "micro": strategy}
@@ -381,7 +460,10 @@ def choose_trade(hist: pd.DataFrame, row: pd.Series, strategy: str, fee: float) 
         return best
     best = {"side": "skip", "minute": -1, "score": -1e9, "support": 0, "micro": "none"}
     for micro, side, minute in candidate_micro_trades(row):
-        mean_pnl, win_rate, support = candidate_history_stats(hist, row, micro, side, minute)
+        if history_index is None:
+            mean_pnl, win_rate, support = candidate_history_stats(hist, row, micro, side, minute)
+        else:
+            mean_pnl, win_rate, support = history_index.stats(row, micro, side, minute)
         if pd.isna(mean_pnl):
             continue
         score = mean_pnl
@@ -413,45 +495,51 @@ def simulate_strategy(df: pd.DataFrame, strategy: str, frac: float, fee: float) 
     bankroll, peak, max_dd = 100.0, 100.0, 0.0
     rows: List[Dict[str, object]] = []
     df = df.sort_values("first_quote_ts").reset_index(drop=True)
+    history_index = CandidateHistoryIndex() if strategy.startswith("state_selector") else None
     for i in range(len(df)):
         row = df.iloc[i]
-        hist = df.iloc[:i].copy()
-        if len(hist) < 60:
-            continue
-        choice = choose_trade(hist, row, strategy, fee)
-        side, minute = str(choice["side"]), int(choice["minute"])
-        if side == "skip" or minute < 0:
-            continue
-        price, size_avail, pnl_per_share = payout(row, side, minute, fee)
-        if pd.isna(price) or pd.isna(size_avail) or price <= 0:
-            continue
-        target_cost = min(bankroll * frac, bankroll, float(size_avail) * float(price))
-        if target_cost <= 0:
-            continue
-        shares = target_cost / price
-        pnl = shares * pnl_per_share
-        bankroll += pnl
-        peak = max(peak, bankroll)
-        max_dd = max(max_dd, 0.0 if peak <= 0 else (peak - bankroll) / peak)
-        rows.append({
-            "strategy": strategy,
-            "sizing": f"fixed_{int(frac*100)}pct",
-            "run_name": row["run_name"],
-            "market_id": row["market_id"],
-            "slug": row["slug"],
-            "first_quote_ts": row["first_quote_ts"],
-            "regime": row["regime"],
-            "entry_minute": minute,
-            "side": side,
-            "micro": choice.get("micro", strategy),
-            "signal_score": choice.get("score", np.nan),
-            "support": choice.get("support", np.nan),
-            "target_cost": target_cost,
-            "entry_price": price,
-            "pnl_usd": pnl,
-            "bankroll_after": bankroll,
-            "sim_max_drawdown": max_dd,
-        })
+        # The incremental index already contains the strict pre-event prefix;
+        # avoid materialising that prefix again for every state-selector row.
+        needs_prefix_frame = not (
+            strategy.startswith("static_")
+            or strategy.startswith("logistic_selector")
+            or strategy.startswith("state_selector")
+        )
+        hist = df.iloc[:i].copy() if needs_prefix_frame else None
+        if i >= 60:
+            choice = choose_trade(hist, row, strategy, fee, history_index=history_index)
+            side, minute = str(choice["side"]), int(choice["minute"])
+            if side != "skip" and minute >= 0:
+                price, size_avail, pnl_per_share = payout(row, side, minute, fee)
+                if not (pd.isna(price) or pd.isna(size_avail) or price <= 0):
+                    target_cost = min(bankroll * frac, bankroll, float(size_avail) * float(price))
+                    if target_cost > 0:
+                        shares = target_cost / price
+                        pnl = shares * pnl_per_share
+                        bankroll += pnl
+                        peak = max(peak, bankroll)
+                        max_dd = max(max_dd, 0.0 if peak <= 0 else (peak - bankroll) / peak)
+                        rows.append({
+                            "strategy": strategy,
+                            "sizing": f"fixed_{int(frac*100)}pct",
+                            "run_name": row["run_name"],
+                            "market_id": row["market_id"],
+                            "slug": row["slug"],
+                            "first_quote_ts": row["first_quote_ts"],
+                            "regime": row["regime"],
+                            "entry_minute": minute,
+                            "side": side,
+                            "micro": choice.get("micro", strategy),
+                            "signal_score": choice.get("score", np.nan),
+                            "support": choice.get("support", np.nan),
+                            "target_cost": target_cost,
+                            "entry_price": price,
+                            "pnl_usd": pnl,
+                            "bankroll_after": bankroll,
+                            "sim_max_drawdown": max_dd,
+                        })
+        if history_index is not None:
+            history_index.update(row)
     return pd.DataFrame(rows)
 
 
