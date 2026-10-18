@@ -26,7 +26,7 @@ H4_SOURCE_GROUPS: dict[str, tuple[str, ...]] = {
     "owner_scope": ("owner", "ledger_id", "chain_id"),
     "onchain_taker_fill": (
         "transaction_hash", "log_index", "block_number", "maker_address",
-        "taker_address", "trader_side", "filled_shares", "fill_price", "fee",
+        "taker_address", "trader_side", "trader_side_source", "filled_shares", "fill_price", "fee",
     ),
     "fee_contract": ("fee_schedule_source", "fee_schedule_observed_ts"),
     "whale_observation": (
@@ -86,6 +86,7 @@ def audit_h4_source_schema(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "maker_address": {"maker_address", "maker"},
         "taker_address": {"taker_address", "taker"},
         "trader_side": {"trader_side"},
+        "trader_side_source": {"trader_side_source"},
         "filled_shares": {"filled_shares", "size"},
         "fill_price": {"fill_price", "price"},
     }
@@ -158,7 +159,7 @@ def validate_h4_chain(
         "token_id", "condition_id", "market_slug", "outcome_name",
         "source_version", "identity_hash", "whale_address", "whale_trade_id",
         "whale_transaction_hash", "transaction_hash", "trade_id", "order_hash",
-        "maker_address", "taker_address", "settlement_receipt_id",
+        "maker_address", "taker_address", "trader_side_source", "settlement_receipt_id",
         "settlement_transaction_hash", "settlement_status", "cash_release_receipt_id",
         "fee_schedule_source", "fee_schedule_observed_ts",
         "balance_checkpoint_id", "previous_checkpoint_id",
@@ -184,6 +185,8 @@ def validate_h4_chain(
             issues.append({"reason": "owner_must_be_onchain_taker", "sequence_no": sequence})
         if _text(row.get("trader_side")).upper() != "TAKER":
             issues.append({"reason": "trader_side_must_be_taker", "sequence_no": sequence})
+        if _text(row.get("trader_side_source")).upper() != "SETTLED_TAKER_LEG":
+            issues.append({"reason": "trader_side_source_must_be_settled_taker_leg", "sequence_no": sequence})
         if _text(row.get("tx_status")).upper() not in {"CONFIRMED", "SUCCESS", "MINED"}:
             issues.append({"reason": "transaction_must_be_confirmed", "sequence_no": sequence})
         if row.get("market_join_verified") is not True:

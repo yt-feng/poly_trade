@@ -39,6 +39,7 @@ def bundle():
             "maker_address": f"maker-{i}",
             "taker_address": "owner-1",
             "trader_side": "TAKER",
+            "trader_side_source": "SETTLED_TAKER_LEG",
             "tx_status": "CONFIRMED",
             "filled_shares": "10", "fee": "0.1",
             "fee_schedule_source": "clob-market-info-v2", "fee_schedule_observed_ts": ts - 50,
@@ -127,6 +128,13 @@ class H4SettlementGroundedWhaleFlowTests(unittest.TestCase):
         result = self.validate(rows)
         self.assertEqual(result["failure_reason"], "h4_event_contract_failed")
         self.assertTrue(any(item["reason"] == "trader_side_must_be_taker" for item in result["issues"]))
+
+    def test_h4_rejects_public_print_direction_source(self):
+        rows = bundle()
+        rows[0]["trader_side_source"] = "PUBLIC_PRINT"
+        result = self.validate(rows)
+        self.assertEqual(result["failure_reason"], "h4_event_contract_failed")
+        self.assertTrue(any(item["reason"] == "trader_side_source_must_be_settled_taker_leg" for item in result["issues"]))
 
 
     def test_h4_rejects_duplicate_or_reordered_rows(self):
