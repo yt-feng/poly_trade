@@ -88,6 +88,17 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add reports/all_monthly_runs_5m_research reports/strategy_definitions_all.md
+          # Keep the complete raw trade log in the Actions artifact.  GitHub's
+          # pre-receive hook rejects individual files above 100 MB, so retrying
+          # the same push cannot repair this deterministic publication failure.
+          max_bytes=90000000
+          while IFS= read -r -d '' file; do
+            size=$(stat -c '%s' "$file")
+            if [ "$size" -gt "$max_bytes" ]; then
+              git restore --staged -- "$file" || true
+              echo "Keeping oversized generated file in Actions artifact only: $file ($size bytes)"
+            fi
+          done < <(find reports/all_monthly_runs_5m_research -type f -print0)
           if ! git diff --cached --quiet; then
             git commit -m 'Update all monthly_runs 5m strategy research outputs [skip ci]'
             for attempt in 1 2 3 4 5; do
