@@ -39,6 +39,7 @@ FROZEN_TAKER_FEE_RATE = Decimal("0.07")
 FEE_AMOUNT_TOLERANCE = Decimal("0.000001")
 FROZEN_MINIMUM_ORDER_SIZE_UNIT = "USDC"
 FROZEN_MINIMUM_ORDER_SIZE = Decimal("5")
+FROZEN_MINIMUM_ORDER_SHARES = Decimal("5")
 MINIMUM_ENTRY_COST_FOR_LEDGER = Decimal("0.0000001")
 FROZEN_STRATEGY_ID = "h30_move_uncertainty"
 FROZEN_STRATEGY_VERSION = "h54-execution-contract-prefix-v1"
@@ -138,11 +139,14 @@ def _market_windows(document: dict[str, Any]) -> tuple[dict[str, dict[str, Any]]
             return {}, "minimum_order_size_unit_must_be_usdc_notional"
         try:
             min_order_size = _decimal(item.get("min_order_size"), "min_order_size")
+            min_order_shares = _decimal(item.get("min_order_shares"), "min_order_shares")
             tick_size = _decimal(item.get("tick_size"), "tick_size")
         except ValueError as exc:
             return {}, str(exc)
         if min_order_size < FROZEN_MINIMUM_ORDER_SIZE:
             return {}, "market_minimum_order_size_below_frozen_floor"
+        if min_order_shares < FROZEN_MINIMUM_ORDER_SHARES:
+            return {}, "market_minimum_order_shares_below_frozen_floor"
         if tick_size <= 0:
             return {}, "tick_size_must_be_positive"
         try:
@@ -159,6 +163,7 @@ def _market_windows(document: dict[str, Any]) -> tuple[dict[str, dict[str, Any]]
             "window_start_ms": start,
             "window_end_ms": end,
             "min_order_size": min_order_size,
+            "min_order_shares": min_order_shares,
             "tick_size": tick_size,
         }
     return out, None
@@ -480,6 +485,8 @@ def _validate_same_ledger(
                 return "shares_must_be_positive"
             if entry_cost < window["min_order_size"]:
                 return "entry_cost_below_market_minimum_notional"
+            if shares < window["min_order_shares"]:
+                return "shares_below_market_minimum"
             if depth["available_shares"] < shares:
                 return "depth_available_shares_insufficient"
             if price <= 0 or price >= 1:
