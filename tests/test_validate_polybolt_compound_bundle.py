@@ -204,3 +204,11 @@ def test_source_must_cover_every_account_market():
     result = validate_bundle_document(doc)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "source_account_market_coverage_mismatch"
+
+
+def test_unhashable_source_sequence_fails_closed():
+    doc = bundle()
+    doc["events"][0]["source_ref"]["seq"] = []
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "source_ref_invalid"

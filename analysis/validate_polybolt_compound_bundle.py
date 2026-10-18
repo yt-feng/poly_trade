@@ -181,9 +181,12 @@ def _validate_same_ledger(
             source_seq = source_ref.get("seq")
             source_hash = _text(source_ref.get("raw_payload_sha256"), "source_raw_payload_sha256").lower()
             source_event_ms = source_ref.get("event_ms")
-            key = (market_id, capture_id, source_seq)
             if type(source_seq) is not int or source_seq < 0 or not _integer(source_event_ms):
                 return "source_ref_invalid"
+            # Validate the sequence type before using it in a set/dict key.
+            # Malformed JSON values such as a list are otherwise unhashable
+            # and would escape the fail-closed validator as a TypeError.
+            key = (market_id, capture_id, source_seq)
             if key in seen_source_refs:
                 return "source_ref_reused"
             seen_source_refs.add(key)
