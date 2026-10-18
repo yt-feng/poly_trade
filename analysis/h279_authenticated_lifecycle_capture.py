@@ -237,7 +237,6 @@ def main() -> None:
     print(json.dumps({
         "status": "computed",
         "format": result["format"],
-        "authenticated_trade_rows": result["receipt_boundary"]["authenticated_trade_rows"],
         "canary_eligible": False,
     }, sort_keys=True))
 
