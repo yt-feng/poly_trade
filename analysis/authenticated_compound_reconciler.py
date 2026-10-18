@@ -13,7 +13,10 @@ from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 
-from sequential_compound_gate import evaluate_compound_chain
+try:  # Support package imports from tests as well as script-style tools.
+    from .sequential_compound_gate import evaluate_compound_chain
+except ImportError:  # pragma: no cover - used by standalone repository tools.
+    from sequential_compound_gate import evaluate_compound_chain
 
 
 def _text(value: Any) -> str:

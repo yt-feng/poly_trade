@@ -19,5 +19,7 @@ jobs:
           python-version: '3.11'
       - name: Compound readiness contract smoke tests
         run: python -m unittest discover -s tests -p 'test_compound_readiness_contract.py' -v
+      - name: Maker compound receipt contract smoke tests
+        run: python -m unittest discover -s tests -p 'test_maker_compound_receipt_contract.py' -v
       - name: Compile readiness implementation
-        run: python -m py_compile tools/compound_readiness_report.py
+        run: python -m py_compile tools/compound_readiness_report.py analysis/orderfilled_compound_binding.py analysis/authenticated_compound_reconciler.py analysis/maker_compound_receipt_contract.py

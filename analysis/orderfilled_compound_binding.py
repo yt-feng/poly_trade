@@ -50,6 +50,8 @@ def audit_orderfilled_bindings(
     orderfilled: Iterable[dict[str, Any]],
     *,
     owner_address: str | None = None,
+    execution_role: str = "TAKER",
+    expected_side: str = "BUY",
 ) -> dict[str, Any]:
     """Audit ten ledger rows against distinct canonical OrderFilled records.
 
@@ -60,6 +62,14 @@ def audit_orderfilled_bindings(
     reported separately and requires an explicit address supplied by the
     caller; a successful field join alone never proves account ownership.
     """
+    role = _text(execution_role).upper()
+    side = _text(expected_side).upper()
+    if role not in {"TAKER", "MAKER"}:
+        raise ValueError("execution_role_must_be_taker_or_maker")
+    if side not in {"BUY", "SELL"}:
+        raise ValueError("expected_side_must_be_buy_or_sell")
+    expected_sign = 1 if side == "BUY" else -1
+    owner_field = "taker" if role == "TAKER" else "maker"
     raw_rows = list(rows)
     raw_fills = list(orderfilled)
     issues: list[dict[str, Any]] = []
@@ -125,18 +135,21 @@ def audit_orderfilled_bindings(
             row_issues.append(_issue("transaction_ref_mismatch", sequence))
         if _text(fill.get("market_id")) != _text(row.get("market_id")):
             row_issues.append(_issue("market_id_mismatch_or_missing", sequence))
-        if _text(fill.get("side")).upper() != "BUY" or fill.get("sign") != 1:
-            row_issues.append(_issue("orderfilled_not_buy_entry", sequence))
-        if _text(row.get("execution_role")).upper() != "TAKER":
-            row_issues.append(_issue("ledger_execution_role_not_taker", sequence))
+        if _text(fill.get("side")).upper() != side or fill.get("sign") != expected_sign:
+            reason = "orderfilled_not_buy_entry" if role == "TAKER" and side == "BUY" else "orderfilled_side_mismatch"
+            row_issues.append(_issue(reason, sequence, expected_side=side))
+        if _text(row.get("execution_role")).upper() != role:
+            reason = "ledger_execution_role_not_taker" if role == "TAKER" else "ledger_execution_role_mismatch"
+            row_issues.append(_issue(reason, sequence, expected_execution_role=role))
         if not _same_decimal(fill.get("size"), row.get("shares"), "shares"):
             row_issues.append(_issue("share_quantity_mismatch", sequence))
         if not _same_decimal(fill.get("price"), row.get("price"), "price"):
             row_issues.append(_issue("execution_price_mismatch", sequence))
         if not _same_decimal(fill.get("cash_amount"), row.get("entry_cost"), "entry_cost"):
             row_issues.append(_issue("entry_cost_mismatch", sequence))
-        if owner_checked and _text(fill.get("taker")).lower() != owner_address_text:
-            row_issues.append(_issue("taker_owner_mismatch", sequence))
+        if owner_checked and _text(fill.get(owner_field)).lower() != owner_address_text:
+            reason = "taker_owner_mismatch" if role == "TAKER" else "maker_owner_mismatch"
+            row_issues.append(_issue(reason, sequence, owner_field=owner_field))
         if row_issues:
             issues.extend(row_issues)
             continue
@@ -156,5 +169,8 @@ def audit_orderfilled_bindings(
         "owner_scope_verified": owner_checked and matched == 10 and not issues,
         "orderfilled_binding_ready": matched == 10 and not issues,
         "issues": issues,
+        "execution_role": role,
+        "expected_side": side,
+        "owner_field": owner_field,
         "evidence_boundary": "canonical on-chain event binding only; no account authentication or settlement/cash proof",
     }
