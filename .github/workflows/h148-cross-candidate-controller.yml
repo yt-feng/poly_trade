@@ -10,6 +10,8 @@ jobs:
   h148-cross-candidate-controller:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
     steps:
       - name: Checkout poly_trade
         uses: actions/checkout@v4
@@ -39,7 +41,6 @@ jobs:
       - name: Run H148 on the frozen old-clean source
         env:
           PYTHONUNBUFFERED: '1'
-          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
         run: |
           set -euo pipefail
           PRIVATE_DIR="$RUNNER_TEMP/old-data-h148"
