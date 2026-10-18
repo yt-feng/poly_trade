@@ -59,7 +59,7 @@ jobs:
               os.fsync(handle.fileno())
           PY
 
-      - name: Run v2 admission and retain only redacted result
+      - name: Run v2 offline consistency checks and retain only redacted result
         run: |
           set -euo pipefail
           PRIVATE_DIR="$RUNNER_TEMP/polybolt-compound-admission"
@@ -85,21 +85,33 @@ jobs:
           recipient_id = os.environ['QUALITY_FIRST_RECIPIENT_ID']
           research_vault.validate_recipient(recipient, recipient_id)
           result = json.loads((private / 'result.json').read_text())
-          passed = (
-              result.get('gate_passed') is True
+          offline_passed = (
+              result.get('offline_consistency_passed') is True
+              and result.get('evidence_scope') == 'offline_bundle_consistency_only'
               and result.get('fills') == 10
               and result.get('consecutive') is True
               and result.get('same_ledger_identity_verified') is True
               and result.get('cash_amounts_reconciled') is True
               and result.get('source_fill_references_verified') is True
           )
-          payload = {
-              'format': 'authenticated-polybolt-compound-admission-sealed-v1',
-              'result': result,
-              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          # Normalize nested and top-level status, including legacy results.
+          verification = {
+              'evidence_scope': 'offline_bundle_consistency_only',
+              'offline_consistency_passed': offline_passed,
+              # This workflow has no independent receipt-authentication path.
+              # Never promote supplied flags, row counts or an exit code.
+              'receipt_authenticity_verified': False,
+              'gate_passed': False,
               'actual_fills': 0,
-              'verified_canary_fills': 10 if passed else 0,
-              'same_ledger_compounding_rows': 10 if passed else 0,
+              'verified_canary_fills': 0,
+          }
+          payload = {
+              'format': 'polybolt-compound-offline-consistency-sealed-v1',
+              'result': {**result, **verification},
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+              **verification,
+              'offline_consistent_compounding_rows': 10 if offline_passed else 0,
+              'same_ledger_compounding_rows': 0,
               'new_data_collected': False,
               'model_refit': False,
               'live_orders_enabled': False,

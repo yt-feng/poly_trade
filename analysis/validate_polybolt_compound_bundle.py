@@ -1,8 +1,10 @@
-"""Offline admission for a PolyBolt-backed authenticated compound bundle.
+"""Offline consistency checks for a supplied PolyBolt compound bundle.
 
 This is a stricter v2 boundary than the legacy authenticated bundle validator.
 It accepts an already captured artifact only; it never connects to Polymarket,
 reads credentials, submits orders, or turns public observations into fills.
+Supplied authentication flags, identities and hashes are claims, not independent
+receipt authentication.  This entrypoint cannot pass the actual canary gate.
 """
 from __future__ import annotations
 
@@ -23,6 +25,13 @@ from polybolt_twap_adapter import (
 
 
 SCHEMA = "authenticated-polybolt-compound-bundle-v2"
+OFFLINE_VERIFICATION = {
+    "evidence_scope": "offline_bundle_consistency_only",
+    "receipt_authenticity_verified": False,
+    "actual_fills": 0,
+    "verified_canary_fills": 0,
+    "gate_passed": False,
+}
 MARKET_SLUG = re.compile(r"^btc-updown-5m-[0-9]+$")
 REQUIRED_FILLS = 10
 FROZEN_EXECUTION_ROLE = "TAKER"
@@ -54,7 +63,8 @@ def _fail(reason: str, *, event_count: int = 0, source_event_count: int = 0) -> 
         "event_count": int(event_count),
         "source_event_count": int(source_event_count),
         "source_continuity_ok": False,
-        "gate_passed": False,
+        **OFFLINE_VERIFICATION,
+        "offline_consistency_passed": False,
         "failure_reason": reason,
     }
 
@@ -222,7 +232,7 @@ def _settlement_receipts(
     document: dict[str, Any],
     windows: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, dict[str, Any]], str | None]:
-    """Index one independently captured settlement proof per fill."""
+    """Check supplied settlement references; hashes do not authenticate origin."""
     receipts = document.get("settlement_receipts")
     if not isinstance(receipts, list) or len(receipts) != REQUIRED_FILLS:
         return {}, "exactly_ten_settlement_receipts_required"
@@ -525,7 +535,7 @@ def _validate_same_ledger(
 
 
 def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict[str, Any]:
-    """Validate a source-and-account bundle without exposing account identifiers."""
+    """Check supplied fields without authenticating receipts or exposing owners."""
     if not isinstance(document, dict) or document.get("schema") != SCHEMA:
         return _fail("invalid_bundle_schema")
     if type(required_fills) is not int or required_fills <= 0:
@@ -631,7 +641,10 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
         "fills": int(result.get("fills", 0)),
         "consecutive": bool(result.get("consecutive", False)),
         "paper_replay_passed": bool(result.get("paper_replay_passed", False)),
-        "gate_passed": bool(result.get("gate_passed", False)),
+        # Legacy reconciler flags describe consistency of caller-supplied rows.
+        # Keep that diagnostic separate from independently authenticated fills.
+        **OFFLINE_VERIFICATION,
+        "offline_consistency_passed": result.get("gate_passed") is True,
         "failure_reason": result.get("failure_reason"),
         "ending_cash": result.get("ending_cash"),
         "net_pnl": result.get("net_pnl"),
@@ -656,7 +669,8 @@ def main() -> int:
     except (OSError, json.JSONDecodeError):
         result = _fail("bundle_read_error")
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0 if result.get("gate_passed") else 1
+    # Exit success describes the offline check, never actual canary admission.
+    return 0 if result.get("offline_consistency_passed") else 1
 
 
 if __name__ == "__main__":
