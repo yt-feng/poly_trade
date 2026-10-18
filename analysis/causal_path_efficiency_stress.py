@@ -4,8 +4,13 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import pandas as pd
+
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
 
 import v1_execution_walk_forward as study
 from cash_release_sensitivity import simulate_cash_locked
@@ -15,19 +20,37 @@ STRATEGY = "v1_adaptive_mix"
 FILTER = "path_efficiency_ge_050"
 DELAYS = (600.0, 1200.0, 1800.0)
 SLIPPAGES = (0.005, 0.01, 0.015)
-BLOCK_SIZES = (16, 16, 16, 16, 15)
+SELECTION_RUN_COUNT = 20
+HOLDOUT_BLOCK_SIZES = (12, 12, 12, 12, 11)
+# Compatibility alias for callers that import the old name.
+BLOCK_SIZES = HOLDOUT_BLOCK_SIZES
+
+
+def chronological_blocks(runs: list[str], sizes: tuple[int, ...]) -> list[list[str]]:
+    """Partition exactly one chronological split without importing selection runs."""
+    if sum(sizes) != len(runs):
+        raise ValueError("BLOCK_SIZES_MUST_COVER_RUNS_EXACTLY")
+    blocks: list[list[str]] = []
+    cursor = 0
+    for size in sizes:
+        block = runs[cursor : cursor + size]
+        if len(block) != size:
+            raise ValueError("BLOCK_SIZE_OUT_OF_RANGE")
+        blocks.append(block)
+        cursor += size
+    flattened = [item for block in blocks for item in block]
+    if len(set(flattened)) != len(flattened):
+        raise ValueError("BLOCKS_MUST_NOT_OVERLAP")
+    return blocks
 
 
 def evaluate(source_root: Path, output: Path) -> dict[str, object]:
     features, _coverage, runs = study.prepare_data(source_root)
     gated = filtered_frame(features, STRATEGY, FILTER)
     test_runs = runs[4:]
-    holdout_runs = test_runs[20:]
-    blocks: list[list[str]] = []
-    cursor = 0
-    for size in BLOCK_SIZES:
-        blocks.append(test_runs[cursor : cursor + size])
-        cursor += size
+    selection_runs = test_runs[:SELECTION_RUN_COUNT]
+    holdout_runs = test_runs[SELECTION_RUN_COUNT:]
+    blocks = chronological_blocks(holdout_runs, HOLDOUT_BLOCK_SIZES)
     rows: list[dict[str, object]] = []
     logs: list[pd.DataFrame] = []
     for delay in DELAYS:
@@ -58,7 +81,9 @@ def evaluate(source_root: Path, output: Path) -> dict[str, object]:
     meta = {
         "format": "old-data-causal-path-efficiency-cash-stress-v1",
         "source_root": str(source_root), "complete_runs": len(runs), "feature_rows": len(features),
-        "strategy": STRATEGY, "filter": "path_efficiency_first2m >= 0.50", "holdout_runs": len(holdout_runs),
+        "strategy": STRATEGY, "filter": "path_efficiency_first2m >= 0.50",
+        "selection_runs": len(selection_runs), "holdout_runs": len(holdout_runs),
+        "holdout_block_sizes": list(HOLDOUT_BLOCK_SIZES),
         "delays_seconds": list(DELAYS), "slippages": list(SLIPPAGES),
         "protocol": {"initial_cash": 10.0, "min_cost": 5.0, "fee_rate": 0.07, "settlement_seconds": 300.0, "fill_ratio": 0.25, "cooldown_events": 0},
         "stress_gate": "all five blocks must end >=$5 with nonnegative net return for every delay and slippage",
