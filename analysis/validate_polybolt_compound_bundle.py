@@ -27,6 +27,9 @@ REQUIRED_FILLS = 10
 FROZEN_EXECUTION_ROLE = "TAKER"
 FROZEN_TAKER_FEE_RATE = Decimal("0.07")
 FEE_AMOUNT_TOLERANCE = Decimal("0.000001")
+FROZEN_MINIMUM_ORDER_SIZE_UNIT = "shares"
+FROZEN_MINIMUM_ORDER_SIZE = Decimal("5")
+MINIMUM_ENTRY_COST_FOR_LEDGER = Decimal("0.0000001")
 
 
 def _fail(reason: str, *, event_count: int = 0, source_event_count: int = 0) -> dict[str, Any]:
@@ -81,6 +84,17 @@ def _market_windows(document: dict[str, Any]) -> tuple[dict[str, dict[str, Any]]
             return {}, "btc_five_minute_window_required"
         if item.get("asset") != "btc":
             return {}, "btc_asset_required"
+        if item.get("min_order_size_unit") != FROZEN_MINIMUM_ORDER_SIZE_UNIT:
+            return {}, "minimum_order_size_unit_must_be_shares"
+        try:
+            min_order_size = _decimal(item.get("min_order_size"), "min_order_size")
+            tick_size = _decimal(item.get("tick_size"), "tick_size")
+        except ValueError as exc:
+            return {}, str(exc)
+        if min_order_size < FROZEN_MINIMUM_ORDER_SIZE:
+            return {}, "market_minimum_order_size_below_frozen_floor"
+        if tick_size <= 0:
+            return {}, "tick_size_must_be_positive"
         try:
             slug_epoch_ms = int(slug.rsplit("-", 1)[1]) * 1000
         except (ValueError, IndexError):
@@ -89,7 +103,14 @@ def _market_windows(document: dict[str, Any]) -> tuple[dict[str, dict[str, Any]]
             return {}, "btc_slug_window_start_mismatch"
         if market_id in out:
             return {}, "duplicate_market_id"
-        out[market_id] = {"market_id": market_id, "slug": slug, "window_start_ms": start, "window_end_ms": end}
+        out[market_id] = {
+            "market_id": market_id,
+            "slug": slug,
+            "window_start_ms": start,
+            "window_end_ms": end,
+            "min_order_size": min_order_size,
+            "tick_size": tick_size,
+        }
     return out, None
 
 
@@ -246,8 +267,13 @@ def _validate_same_ledger(
                 return "zero_fee_not_admissible"
             if shares <= 0:
                 return "shares_must_be_positive"
+            if shares < window["min_order_size"]:
+                return "shares_below_market_minimum"
             if price <= 0 or price >= 1:
                 return "price_must_be_between_zero_and_one"
+            tick_multiple = price / window["tick_size"]
+            if tick_multiple != tick_multiple.to_integral_value():
+                return "price_not_on_tick_size"
             if entry_cost != shares * price:
                 return "entry_cost_price_arithmetic_mismatch"
             expected_fee = shares * fee_rate * price * (Decimal("1") - price)
@@ -366,6 +392,10 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
     result = reconcile_authenticated_chain(
         reconcile_events,
         owner=owner,
+        # The CLOB minimum is a share quantity.  The market-window check above
+        # enforces that floor; this ledger floor only rejects zero-cost
+        # arithmetic and must not reintroduce a $5 notional rule.
+        minimum_order=str(MINIMUM_ENTRY_COST_FOR_LEDGER),
         required_fills=REQUIRED_FILLS,
     )
     # Keep the source manifest compact and omit owner/account identifiers.

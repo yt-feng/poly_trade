@@ -35,8 +35,8 @@ def source_event(seq: int, market_id: str = MARKET_ID, *, event_ms: int | None =
 def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain-1") -> dict[str, object]:
     entry_ms = START + (i - 1) * 10_000 + 1_000
     release_ms = entry_ms + 5_000
-    before = Decimal("10") + Decimal("0.325") * (i - 1)
-    after = before - Decimal("5.175")
+    before = Decimal("10") + Decimal("0.26") * (i - 1)
+    after = before - Decimal("4.14")
     digest = hashlib.sha256(f"event-{i}".encode()).hexdigest()
     return {
         "owner": "owner-1",
@@ -57,12 +57,12 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
         "independent_checkpoint": True,
         "entry_ts_ms": entry_ms,
         "cash_available_ts_ms": release_ms,
-        "entry_cost": "5",
-        "shares": "10",
+        "entry_cost": "4",
+        "shares": "8",
         "price": "0.5",
-        "fee": "0.175",
-        "payout": "5.50",
-        "released_cash_since_previous_entry": "0" if i == 1 else "5.50",
+        "fee": "0.14",
+        "payout": "4.40",
+        "released_cash_since_previous_entry": "0" if i == 1 else "4.40",
         "balance_before": format(before, "f"),
         "balance_after": format(after, "f"),
         "source_ref": {
@@ -84,7 +84,7 @@ def bundle(events=None, source=None):
         "chain_id": "chain-1",
         "starting_checkpoint_id": "opening",
         "initial_cash": "10",
-        "closing_balance": "13.25",
+        "closing_balance": "12.60",
         "closing_balance_checkpoint_id": "closing",
         "market_windows": [{
             "market_id": MARKET_ID,
@@ -92,9 +92,12 @@ def bundle(events=None, source=None):
             "slug": "btc-updown-5m-1800000000",
             "window_start_ms": START,
             "window_end_ms": START + 300_000,
+            "min_order_size_unit": "shares",
+            "min_order_size": "5",
+            "tick_size": "0.01",
         }],
         "cash_release_receipts": [
-            {"receipt_id": f"cash-release-{i}", "sequence_no": i, "amount": "5.50", "release_ts_ms": START + (i - 1) * 10_000 + 6_000}
+            {"receipt_id": f"cash-release-{i}", "sequence_no": i, "amount": "4.40", "release_ts_ms": START + (i - 1) * 10_000 + 6_000}
             for i in range(1, 11)
         ],
         "source_events": [source_event(i) for i in range(1, 11)] if source is None else source,
@@ -111,6 +114,37 @@ def test_polybolt_source_and_authenticated_cash_chain_admit_together():
     assert result["cash_amounts_reconciled"] is True
     assert result["market_window_count"] == 1
     assert "owner-1" not in str(result)
+
+
+def test_share_floor_allows_entry_cost_below_five_dollars():
+    result = validate_bundle_document(bundle())
+    assert result["gate_passed"] is True
+
+
+def test_market_share_floor_is_enforced():
+    doc = bundle()
+    doc["events"][0]["shares"] = "4"
+    doc["events"][0]["entry_cost"] = "2"
+    doc["events"][0]["fee"] = "0.056"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "shares_below_market_minimum"
+
+
+def test_executed_price_must_follow_market_tick_size():
+    doc = bundle()
+    doc["events"][0]["price"] = "0.503"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "price_not_on_tick_size"
+
+
+def test_market_constraints_are_required():
+    doc = bundle()
+    del doc["market_windows"][0]["tick_size"]
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "tick_size_must_be_finite_decimal"
 
 
 def test_two_independent_ledgers_cannot_be_concatenated():
@@ -255,6 +289,7 @@ def test_source_must_cover_every_account_market():
     doc["market_windows"].append({
         "market_id": "m-2", "asset": "btc", "slug": "btc-updown-5m-1800000300",
         "window_start_ms": START + 300_000, "window_end_ms": START + 600_000,
+        "min_order_size_unit": "shares", "min_order_size": "5", "tick_size": "0.01",
     })
     doc["events"][0]["market_id"] = "m-2"
     result = validate_bundle_document(doc)
