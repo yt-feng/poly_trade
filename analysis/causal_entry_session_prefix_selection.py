@@ -12,7 +12,9 @@ import v1_execution_walk_forward as study
 from causal_entry_gate_prefix_selection import CAUSAL_CANDIDATE, PROFILES, add_causal_candidate, prepare_once
 from causal_registered_gate_sweep import attach_gate
 from cash_release_sensitivity import simulate_cash_locked
+from compound_old_clean_replay import _paper_events
 from execution_envelope_depth_sweep import bootstrap_run_pnl
+from sequential_compound_gate import evaluate_compound_chain
 
 
 SESSION_CANDIDATE = "classic_early_drop_down_causal_1m_spread_london_us_afternoon"
@@ -39,6 +41,7 @@ def main() -> None:
     parser.add_argument("--selection-runs", type=int, default=20)
     parser.add_argument("--bankroll0", type=float, default=10.0)
     parser.add_argument("--min-cost", type=float, default=5.0)
+    parser.add_argument("--cash-release-delay-seconds", type=float, default=600.0)
     parser.add_argument("--replicates", type=int, default=20000)
     parser.add_argument("--seed", type=int, default=20261024)
     args = parser.parse_args()
@@ -63,7 +66,7 @@ def main() -> None:
         _, metrics = simulate_cash_locked(
             frame[frame["run_name"].isin(prefix_runs)], strategy,
             study.ExecutionConfig(fixed_slippage=args.selection_slippage, **envelope),
-            args.bankroll0, args.min_cost, 0.0, 12, capture_logs=True,
+            args.bankroll0, args.min_cost, args.cash_release_delay_seconds, 12, capture_logs=True,
         )
         selection_rows.append({
             "candidate": label, "selection_slippage": args.selection_slippage,
@@ -76,23 +79,19 @@ def main() -> None:
     selected = str(selection.iloc[0]["candidate"])
 
     rows, blocks, confidence = [], [], []
-    order = {name: i for i, name in enumerate(test_runs)}
     for label, (frame, strategy, diagnostic) in prepared.items():
         score = float(selection.loc[selection["candidate"] == label, "selection_score"].iloc[0])
         for slip in slippages:
-            logs, metrics = simulate_cash_locked(
-                frame[frame["run_name"].isin(test_runs)], strategy,
-                study.ExecutionConfig(fixed_slippage=slip, **envelope),
-                args.bankroll0, args.min_cost, 0.0, 12, capture_logs=True,
-            )
-            rows.append({"candidate": label, "slippage": slip, "selected_by_prefix": label == selected, "selection_score": score, **envelope, **metrics, **{f"diagnostic_{k}": v for k, v in diagnostic.items()}})
-            logged = logs.copy()
-            if not logged.empty:
-                logged["test_index"] = logged["run_name"].map(order)
-            for block, lo, hi in [("selection20", 0, args.selection_runs), ("holdout59", args.selection_runs, len(test_runs))]:
-                part = logged[logged["test_index"].between(lo, hi - 1)] if not logged.empty else logged
-                blocks.append({"candidate": label, "slippage": slip, "block": block, "trades": int(len(part)), "sum_pnl": float(part["pnl_usd"].sum()) if not part.empty else 0.0, "win_rate": float((part["pnl_usd"] > 0).mean()) if not part.empty else float("nan")})
-            confidence.append({"candidate": label, "slippage": slip, **bootstrap_run_pnl(logs, test_runs, args.bankroll0, args.replicates, args.seed)})
+            for split, names in (("selection20", prefix_runs), ("holdout59", test_runs[args.selection_runs:])):
+                logs, metrics = simulate_cash_locked(
+                    frame[frame["run_name"].isin(names)], strategy,
+                    study.ExecutionConfig(fixed_slippage=slip, **envelope),
+                    args.bankroll0, args.min_cost, args.cash_release_delay_seconds, 12, capture_logs=True,
+                )
+                chain = evaluate_compound_chain(_paper_events(logs), initial_cash=args.bankroll0, minimum_order=args.min_cost, required_fills=10, evidence_mode="paper_upper_bound", stop_after_required_fills=True)
+                rows.append({"candidate": label, "split": split, "slippage": slip, "selected_by_prefix": label == selected, "selection_score": score, "paper_chain_fills": int(chain["fills"]), "paper_chain_ending_cash": float(chain["ending_cash"]), "paper_chain_minimum_cash": float(chain["minimum_cash"]), "paper_chain_passed": bool(chain["paper_replay_passed"]), "paper_chain_failure_reason": chain["failure_reason"], **envelope, **metrics, **{f"diagnostic_{k}": v for k, v in diagnostic.items()}})
+                blocks.append({"candidate": label, "split": split, "slippage": slip, "trades": int(len(logs)), "sum_pnl": float(logs["pnl_usd"].sum()) if not logs.empty else 0.0, "win_rate": float((logs["pnl_usd"] > 0).mean()) if not logs.empty else float("nan"), "paper_chain_fills": int(chain["fills"]), "paper_chain_ending_cash": float(chain["ending_cash"]), "paper_chain_passed": bool(chain["paper_replay_passed"])})
+                confidence.append({"candidate": label, "split": split, "slippage": slip, **bootstrap_run_pnl(logs, names, args.bankroll0, args.replicates, args.seed)})
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -101,7 +100,7 @@ def main() -> None:
     pd.DataFrame(blocks).to_csv(out.with_name(out.stem + "_blocks.csv"), index=False)
     pd.DataFrame(confidence).to_csv(out.with_name(out.stem + "_confidence.csv"), index=False)
     meta = {
-        "format": "old-data-causal-entry-session-prefix-selection-v1", "source_root": str(source_root),
+        "format": "old-data-causal-entry-session-prefix-selection-v2", "source_root": str(source_root),
         "complete_runs": len(runs), "test_runs": len(test_runs), "selection_runs": args.selection_runs,
         "holdout_runs": len(test_runs) - args.selection_runs, "candidates": list(prepared), "selected_candidate": selected,
         "selection_rule": "prefix net_return - 0.5 * max_cash_drawdown at fixed 0.50% slippage",
@@ -112,7 +111,7 @@ def main() -> None:
         "cooldown_events": 12, "fee_contract": "polymarket_taker_rate_0.07_exponent_1.0",
         "promotion_rule": "candidate may replace causal base only if holdout PnL is nonnegative at every tested slippage and q025 is at least $5 at 1.00% slippage",
         "old_clean_dataset_only": True, "new_data_collected": False, "causal_history_only": True,
-        "cash_release_delay_seconds": 0.0, "live_orders_enabled": False, "actual_fills": 0, "verified_canary_fills": 0,
+        "cash_release_delay_seconds": args.cash_release_delay_seconds, "independent_split_ledgers": True, "compound_chain_contract": "ten chronological paper rows per fresh split ledger; no selection-to-holdout bankroll carryover", "live_orders_enabled": False, "actual_fills": 0, "verified_canary_fills": 0,
         "official_sources": ["https://docs.polymarket.com/market-data/market-details#trading-constraints", "https://docs.polymarket.com/trading/place-orders", "https://docs.polymarket.com/trading/fees"],
         "interpretation": "predeclared timestamp-causal session paper comparison; not canary evidence",
     }
