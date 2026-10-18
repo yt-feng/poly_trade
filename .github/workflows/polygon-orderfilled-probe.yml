@@ -18,7 +18,7 @@ on:
       rpc_url:
         description: 'Read-only Polygon JSON-RPC endpoint'
         required: false
-        default: 'https://polygon-rpc.com'
+        default: 'https://polygon-bor-rpc.publicnode.com'
 
 permissions:
   contents: write
