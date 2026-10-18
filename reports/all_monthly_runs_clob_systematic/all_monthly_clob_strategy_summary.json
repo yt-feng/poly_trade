@@ -1,7 +1,7 @@
 {
-  "rows_features": 45879,
+  "rows_features": 24918,
   "rows_summary": 32,
-  "rows_logs": 180749,
-  "rows_coverage": 164,
+  "rows_logs": 102892,
+  "rows_coverage": 90,
   "figure_count": 2
 }
