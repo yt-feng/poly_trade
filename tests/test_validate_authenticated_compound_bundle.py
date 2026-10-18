@@ -27,14 +27,11 @@ def event(i: int) -> dict[str, object]:
     }
 
 
-def test_bundle_validator_returns_compact_success_summary():
+def test_legacy_bundle_validator_fails_closed_and_requires_v2():
     result = validate_bundle_document(
         {"schema": "authenticated-compound-bundle-v1", "owner": "owner-1", "events": [event(i) for i in range(10)]}
     )
-    assert result["gate_passed"] is True
-    assert result["fills"] == 10
-    assert "ledger" not in result
-    assert "owner-1" not in json.dumps(result)
+    assert result == {"gate_passed": False, "failure_reason": "legacy_schema_not_admissible_use_v2"}
 
 
 def test_bundle_schema_failure_is_explicit():

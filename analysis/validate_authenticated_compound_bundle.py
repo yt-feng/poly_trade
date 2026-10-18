@@ -27,33 +27,10 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
     """Validate one JSON bundle and return a sanitized compound result."""
     if not isinstance(document, dict) or document.get("schema") != SCHEMA:
         return {"gate_passed": False, "failure_reason": "invalid_bundle_schema"}
-    owner = document.get("owner")
-    events = document.get("events")
-    if not isinstance(owner, str) or not owner.strip():
-        return {"gate_passed": False, "failure_reason": "bundle_owner_required"}
-    if not isinstance(events, list):
-        return {"gate_passed": False, "failure_reason": "bundle_events_required"}
-    result = reconcile_authenticated_chain(
-        events,
-        owner=owner,
-        required_fills=required_fills,
-    )
-    # Deliberately omit the event ledger and all account identifiers from the
-    # CLI result.  The sealed source artifact remains the evidence record.
-    return {
-        "schema": SCHEMA,
-        "required_fills": int(required_fills),
-        "event_count": len(events),
-        "fills": int(result.get("fills", 0)),
-        "consecutive": bool(result.get("consecutive", False)),
-        "paper_replay_passed": bool(result.get("paper_replay_passed", False)),
-        "gate_passed": bool(result.get("gate_passed", False)),
-        "failure_reason": result.get("failure_reason"),
-        "ending_cash": result.get("ending_cash"),
-        "net_pnl": result.get("net_pnl"),
-        "owner_scoped": bool(result.get("owner_scoped", False)),
-        "identity_complete": bool(result.get("identity_complete", False)),
-    }
+    # The v1 shape has no ledger identity, sequence/checkpoint links or numeric
+    # cash reconciliation.  Keeping it executable would allow the old helper
+    # to replay concatenated/reset rows.  Admission is v2-only now.
+    return {"gate_passed": False, "failure_reason": "legacy_schema_not_admissible_use_v2"}
 
 
 def main() -> int:
