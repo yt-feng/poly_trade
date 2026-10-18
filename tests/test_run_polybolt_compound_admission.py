@@ -47,6 +47,16 @@ def test_tool_preserves_fail_closed_result(tmp_path):
     assert result["failure_reason"] == "ledger_id_mismatch"
 
 
+def test_tool_records_missing_bundle_without_fabricating_evidence(tmp_path):
+    source = tmp_path / "missing-bundle.json"
+    output = tmp_path / "result.json"
+    subprocess.run([sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output)], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "bundle_secret_unavailable"
+    assert_unverified_receipts(result)
+
+
 def test_tool_seals_generic_failure_for_invalid_json(tmp_path):
     source = tmp_path / "bundle.json"
     output = tmp_path / "result.json"
@@ -62,6 +72,8 @@ def test_tool_seals_generic_failure_for_invalid_json(tmp_path):
 def test_workflow_never_uploads_private_bundle_or_enables_orders():
     text = WORKFLOW.read_text()
     assert "POLYBOLT_COMPOUND_BUNDLE_B64" in text
+    assert "redacted fail-closed result" in text
+    assert "private bundle secret is unavailable" not in text
     assert "tests/test_polymarket_receipt_adapter.py" in text
     assert "tests/test_polymarket_user_stream_adapter.py" in text
     assert "result.get('consecutive') is True" in text

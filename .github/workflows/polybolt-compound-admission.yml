@@ -47,7 +47,8 @@ jobs:
           from pathlib import Path
           value = os.environ.get('POLYBOLT_COMPOUND_BUNDLE_B64', '')
           if not value:
-              raise SystemExit('private bundle secret is unavailable')
+              print('private bundle secret unavailable; continuing with redacted fail-closed result')
+              raise SystemExit(0)
           data = base64.b64decode(value, validate=True)
           if not data or len(data) > 2 * 1024 * 1024:
               raise SystemExit('private bundle size is invalid')

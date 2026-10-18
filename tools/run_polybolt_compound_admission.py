@@ -77,6 +77,8 @@ def _allowlist(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def run(bundle_path: Path) -> dict[str, Any]:
+    if not bundle_path.exists():
+        return _failure("bundle_secret_unavailable")
     document = _read_json(bundle_path)
     if not isinstance(document, dict):
         raise ValueError("bundle_json_object_required")
