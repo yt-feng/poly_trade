@@ -1,5 +1,6 @@
 import hashlib
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
@@ -34,8 +35,8 @@ def source_event(seq: int, market_id: str = MARKET_ID, *, event_ms: int | None =
 def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain-1") -> dict[str, object]:
     entry_ms = START + (i - 1) * 10_000 + 1_000
     release_ms = entry_ms + 5_000
-    before = 10 + (i - 1) * 0.5
-    after = before - 5
+    before = Decimal("10") + Decimal("0.43") * (i - 1)
+    after = before - Decimal("5.07")
     digest = hashlib.sha256(f"event-{i}".encode()).hexdigest()
     return {
         "owner": "owner-1",
@@ -49,17 +50,19 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
         "transaction_ref": f"tx-{i}",
         "settlement_receipt_id": f"settlement-{i}",
         "cash_release_receipt_id": f"cash-release-{i}",
+        "execution_role": "TAKER",
+        "fee_rate": "0.07",
         "balance_checkpoint_id": f"balance-{i}",
         "cash_reconciled": True,
         "independent_checkpoint": True,
         "entry_ts_ms": entry_ms,
         "cash_available_ts_ms": release_ms,
         "entry_cost": "5",
-        "fee": "0",
+        "fee": "0.07",
         "payout": "5.50",
         "released_cash_since_previous_entry": "0" if i == 1 else "5.50",
-        "balance_before": str(before),
-        "balance_after": str(after),
+        "balance_before": format(before, "f"),
+        "balance_after": format(after, "f"),
         "source_ref": {
             "market_id": MARKET_ID,
             "capture_id": "capture-a",
@@ -79,7 +82,7 @@ def bundle(events=None, source=None):
         "chain_id": "chain-1",
         "starting_checkpoint_id": "opening",
         "initial_cash": "10",
-        "closing_balance": "15.0",
+        "closing_balance": "14.3",
         "closing_balance_checkpoint_id": "closing",
         "market_windows": [{
             "market_id": MARKET_ID,
@@ -175,6 +178,30 @@ def test_non_btc_five_minute_market_cannot_enter():
     result = validate_bundle_document(doc)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "btc_five_minute_slug_required"
+
+
+def test_zero_fee_counterfactual_is_not_a_canary():
+    doc = bundle()
+    doc["events"][0]["fee"] = "0"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "zero_fee_not_admissible"
+
+
+def test_maker_execution_is_not_a_canary():
+    doc = bundle()
+    doc["events"][0]["execution_role"] = "MAKER"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "execution_role_must_be_taker"
+
+
+def test_fee_schedule_must_match_frozen_taker_rate():
+    doc = bundle()
+    doc["events"][0]["fee_rate"] = "0.00"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "fee_rate_must_equal_frozen_taker_rate"
 
 
 def test_required_fills_cannot_be_lowered_to_a_lucky_prefix():

@@ -24,6 +24,8 @@ from polybolt_twap_adapter import (
 SCHEMA = "authenticated-polybolt-compound-bundle-v2"
 MARKET_SLUG = re.compile(r"^btc-updown-5m-[0-9]+$")
 REQUIRED_FILLS = 10
+FROZEN_EXECUTION_ROLE = "TAKER"
+FROZEN_TAKER_FEE_RATE = Decimal("0.07")
 
 
 def _fail(reason: str, *, event_count: int = 0, source_event_count: int = 0) -> dict[str, Any]:
@@ -229,6 +231,16 @@ def _validate_same_ledger(
             released_cash = _decimal(row.get("released_cash_since_previous_entry"), "released_cash_since_previous_entry")
             if entry_cost < 0 or fee < 0 or payout < 0 or released_cash < 0:
                 return "negative_cash_amount"
+            if _text(row.get("execution_role"), "execution_role") != FROZEN_EXECUTION_ROLE:
+                return "execution_role_must_be_taker"
+            try:
+                fee_rate = _decimal(row.get("fee_rate"), "fee_rate")
+            except ValueError as exc:
+                return str(exc)
+            if fee_rate != FROZEN_TAKER_FEE_RATE:
+                return "fee_rate_must_equal_frozen_taker_rate"
+            if fee <= 0:
+                return "zero_fee_not_admissible"
             if receipt["amount"] != payout or receipt["release_ts_ms"] != release_ms:
                 return "cash_release_amount_mismatch"
             due = Decimal("0")
