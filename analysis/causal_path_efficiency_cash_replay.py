@@ -23,6 +23,7 @@ if str(CURRENT_DIR) not in sys.path:
 
 import v1_execution_walk_forward as study
 from cash_release_sensitivity import simulate_cash_locked
+from sequential_compound_gate import evaluate_compound_chain
 from v1_state_filter_walk_forward import filtered_frame
 
 CANDIDATES = (
@@ -49,6 +50,39 @@ def chronological_blocks(runs: list[str], sizes: tuple[int, ...]) -> list[list[s
     if len({item for block in blocks for item in block}) != len(runs):
         raise ValueError("BLOCKS_MUST_NOT_OVERLAP")
     return blocks
+
+
+def paper_prefix_summary(logs: pd.DataFrame, required_fills: int = 10) -> dict[str, object]:
+    """Evaluate the first N paper rows on one evolving cash ledger."""
+    if logs.empty:
+        events: list[dict[str, object]] = []
+    else:
+        rows = logs.sort_values("first_quote_ts", kind="stable")
+        events = [
+            {
+                "status": "paper",
+                "entry_ts": float(pd.Timestamp(row.first_quote_ts).timestamp()),
+                "cash_available_ts": float(pd.Timestamp(row.release_ts).timestamp()),
+                "entry_cost": str(row.filled_cost),
+                "fee": str(row.fee_usd),
+                "payout": str(row.payout_at_settlement),
+            }
+            for row in rows.itertuples(index=False)
+        ]
+    result = evaluate_compound_chain(
+        events[:required_fills],
+        initial_cash="10",
+        minimum_order="5",
+        required_fills=required_fills,
+        evidence_mode="paper_upper_bound",
+    )
+    return {
+        "fills": int(result["fills"]),
+        "ending_cash": result["ending_cash"],
+        "minimum_cash": result["minimum_cash"],
+        "paper_replay_passed": bool(result["paper_replay_passed"]),
+        "failure_reason": result["failure_reason"],
+    }
 
 
 def evaluate(source_root: Path, output: Path, slippages: tuple[float, ...]) -> dict[str, object]:
@@ -106,8 +140,23 @@ def evaluate(source_root: Path, output: Path, slippages: tuple[float, ...]) -> d
     selected_rows = result[result["candidate"].eq(selected_candidate)].copy()
     holdout = selected_rows[selected_rows["split"].eq("holdout59")]
     blocks_selected = selected_rows[selected_rows["split"].str.startswith("holdout_block")]
+    all_logs = pd.concat(logs, ignore_index=True) if logs else pd.DataFrame()
+    selected_selection_logs = all_logs[
+        all_logs.get("candidate", pd.Series(dtype=object)).astype(str).eq(selected_candidate)
+        & all_logs.get("split", pd.Series(dtype=object)).astype(str).eq("selection20")
+    ] if not all_logs.empty else pd.DataFrame()
+    selected_holdout_logs = all_logs[
+        all_logs.get("candidate", pd.Series(dtype=object)).astype(str).eq(selected_candidate)
+        & all_logs.get("split", pd.Series(dtype=object)).astype(str).eq("holdout59")
+    ] if not all_logs.empty else pd.DataFrame()
+    selection_prefix = paper_prefix_summary(selected_selection_logs)
+    holdout_prefix = paper_prefix_summary(selected_holdout_logs)
+    same_ledger_prefix_gate = bool(
+        selection_prefix["paper_replay_passed"] and holdout_prefix["paper_replay_passed"]
+    )
     gate = bool(
         int(holdout["trades"].iloc[0]) >= 10
+        and same_ledger_prefix_gate
         and len(blocks_selected) == len(HOLDOUT_BLOCK_SIZES) * len(slippages)
         and bool((blocks_selected["ending_cash"] >= 5.0).all())
         and bool((blocks_selected["net_return"] >= 0.0).all())
@@ -127,9 +176,12 @@ def evaluate(source_root: Path, output: Path, slippages: tuple[float, ...]) -> d
         "protocol": {"initial_cash": 10.0, "min_cost": 5.0, "fee_rate": 0.07,
                      "settlement_seconds": 300.0, "cash_release_delay_seconds": 600.0,
                      "slippages": list(slippages), "fill_ratio": 0.25, "cooldown_events": 0},
-        "promotion_rule": "selected holdout must have >=10 trades and all five holdout-only blocks must end >=$5 with nonnegative PnL at both slippages",
+        "promotion_rule": "selection and holdout must each pass one same-ledger ten-fill paper prefix; selected holdout must have >=10 trades and all five holdout-only blocks must end >=$5 with nonnegative PnL at both slippages",
         "selection_block_sizes": list(SELECTION_BLOCK_SIZES),
         "holdout_block_sizes": list(HOLDOUT_BLOCK_SIZES),
+        "selection_prefix": selection_prefix,
+        "holdout_prefix": holdout_prefix,
+        "same_ledger_prefix_gate": same_ledger_prefix_gate,
         "selected_gate_passed": gate, "new_data_collected": False, "live_orders_enabled": False,
         "actual_fills": 0, "verified_canary_fills": 0,
     }

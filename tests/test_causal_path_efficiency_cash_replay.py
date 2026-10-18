@@ -1,24 +1,30 @@
-from __future__ import annotations
+import pandas as pd
 
-import pytest
-
-from analysis.causal_path_efficiency_cash_replay import (
-    HOLDOUT_BLOCK_SIZES,
-    SELECTION_BLOCK_SIZES,
-    chronological_blocks,
-)
+from analysis.causal_path_efficiency_cash_replay import paper_prefix_summary
 
 
-def test_selection_and_holdout_block_contracts_are_disjoint() -> None:
-    selection = [f"selection-{i}" for i in range(sum(SELECTION_BLOCK_SIZES))]
-    holdout = [f"holdout-{i}" for i in range(sum(HOLDOUT_BLOCK_SIZES))]
-    selection_blocks = chronological_blocks(selection, SELECTION_BLOCK_SIZES)
-    holdout_blocks = chronological_blocks(holdout, HOLDOUT_BLOCK_SIZES)
-    assert [len(block) for block in selection_blocks] == list(SELECTION_BLOCK_SIZES)
-    assert [len(block) for block in holdout_blocks] == list(HOLDOUT_BLOCK_SIZES)
-    assert set().union(*selection_blocks).isdisjoint(set().union(*holdout_blocks))
+def _row(index: int) -> dict[str, object]:
+    entry = pd.Timestamp("2026-06-01T00:00:00Z") + pd.Timedelta(minutes=20 * index)
+    return {
+        "first_quote_ts": entry,
+        "release_ts": entry + pd.Timedelta(minutes=15),
+        "filled_cost": "5",
+        "fee_usd": "0.05",
+        "payout_at_settlement": "6.5",
+    }
 
 
-def test_block_partition_rejects_selection_overlap_shape() -> None:
-    with pytest.raises(ValueError, match="BLOCK_SIZES_MUST_COVER_RUNS_EXACTLY"):
-        chronological_blocks([f"run-{i}" for i in range(79)], HOLDOUT_BLOCK_SIZES)
+def test_prefix_summary_uses_one_evolving_cash_ledger():
+    result = paper_prefix_summary(pd.DataFrame([_row(index) for index in range(10)]))
+
+    assert result["fills"] == 10
+    assert result["paper_replay_passed"] is True
+    assert result["ending_cash"] == "24.50"
+
+
+def test_prefix_summary_rejects_fewer_than_ten_rows():
+    result = paper_prefix_summary(pd.DataFrame([_row(index) for index in range(9)]))
+
+    assert result["fills"] == 9
+    assert result["paper_replay_passed"] is False
+    assert result["failure_reason"] == "fewer_than_required_consecutive_fills"
