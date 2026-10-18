@@ -133,6 +133,14 @@ def test_numeric_balance_mismatch_is_not_hidden_by_boolean_checkpoint_flags():
     assert result["failure_reason"] == "balance_after_arithmetic_mismatch"
 
 
+def test_current_fill_payout_cannot_be_released_before_its_entry():
+    doc = bundle()
+    doc["cash_release_receipts"][0]["release_ts_ms"] = doc["events"][0]["entry_ts_ms"]
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "cash_release_before_entry"
+
+
 def test_source_is_bound_to_each_fill_and_must_precede_entry():
     doc = bundle()
     after_entry = doc["events"][0]["entry_ts_ms"] + 1

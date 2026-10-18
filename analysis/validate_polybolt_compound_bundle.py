@@ -207,6 +207,12 @@ def _validate_same_ledger(
             receipt = receipt_by_id[receipt_id]
             if receipt["sequence_no"] != sequence:
                 return "cash_release_receipt_sequence_mismatch"
+            # A fill cannot release its own payout before (or at the same
+            # instant as) its entry.  Only receipts from earlier fills may
+            # fund the current balance; the current receipt is available for
+            # a later entry or for the closing-balance reconciliation.
+            if receipt["release_ts_ms"] <= entry_ms:
+                return "cash_release_before_entry"
             entry_cost = _decimal(row.get("entry_cost"), "entry_cost")
             fee = _decimal(row.get("fee"), "fee")
             payout = _decimal(row.get("payout"), "payout")
@@ -237,8 +243,6 @@ def _validate_same_ledger(
             if balance_after < 0:
                 return "negative_balance_after_entry"
             released_receipt_ids.update(due_receipt_ids)
-            if receipt["release_ts_ms"] <= entry_ms:
-                released_receipt_ids.add(receipt_id)
             previous_after = balance_after
             previous_checkpoint = checkpoint
         except ValueError as exc:
