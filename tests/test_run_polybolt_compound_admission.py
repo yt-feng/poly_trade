@@ -54,6 +54,12 @@ def test_tool_seals_generic_failure_for_invalid_json(tmp_path):
 def test_workflow_never_uploads_private_bundle_or_enables_orders():
     text = WORKFLOW.read_text()
     assert "POLYBOLT_COMPOUND_BUNDLE_B64" in text
+    assert "tests/test_polymarket_receipt_adapter.py" in text
+    assert "tests/test_polymarket_user_stream_adapter.py" in text
+    assert "result.get('consecutive') is True" in text
+    assert "result.get('same_ledger_identity_verified') is True" in text
+    assert "result.get('cash_amounts_reconciled') is True" in text
+    assert "result.get('source_fill_references_verified') is True" in text
     assert "actions/upload-artifact" not in text
     assert "live_orders_enabled': False" in text
     assert "actual_fills': 0" in text

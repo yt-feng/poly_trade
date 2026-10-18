@@ -31,7 +31,9 @@ jobs:
           python -m pytest -q \
             tests/test_polybolt_twap_adapter.py \
             tests/test_validate_polybolt_compound_bundle.py \
-            tests/test_run_polybolt_compound_admission.py
+            tests/test_run_polybolt_compound_admission.py \
+            tests/test_polymarket_receipt_adapter.py \
+            tests/test_polymarket_user_stream_adapter.py
 
       - name: Materialize private bundle only in runner temp
         env:
@@ -83,7 +85,14 @@ jobs:
           recipient_id = os.environ['QUALITY_FIRST_RECIPIENT_ID']
           research_vault.validate_recipient(recipient, recipient_id)
           result = json.loads((private / 'result.json').read_text())
-          passed = result.get('gate_passed') is True and result.get('fills') == 10
+          passed = (
+              result.get('gate_passed') is True
+              and result.get('fills') == 10
+              and result.get('consecutive') is True
+              and result.get('same_ledger_identity_verified') is True
+              and result.get('cash_amounts_reconciled') is True
+              and result.get('source_fill_references_verified') is True
+          )
           payload = {
               'format': 'authenticated-polybolt-compound-admission-sealed-v1',
               'result': result,
