@@ -1,4 +1,5 @@
 from decimal import Decimal
+import unittest
 
 from analysis.h4_settlement_grounded_whale_flow import validate_h4_chain
 
@@ -63,60 +64,46 @@ def bundle():
     return rows
 
 
-def test_h4_accepts_only_offline_consistent_taker_whale_chain():
-    result = validate_h4_chain(
-        bundle(),
-        owner="owner-1",
-        opening_checkpoint_id="opening",
-        closing_checkpoint_id="closing",
-        closing_balance="15.0",
-    )
-    assert result["offline_consistency_passed"] is True
-    assert result["same_ledger_compounding_rows"] == 10
-    assert result["actual_fills"] == 0
-    assert result["verified_canary_fills"] == 0
-    assert result["gate_passed"] is False
+class H4SettlementGroundedWhaleFlowTests(unittest.TestCase):
+    def validate(self, rows):
+        return validate_h4_chain(
+            rows,
+            owner="owner-1",
+            opening_checkpoint_id="opening",
+            closing_checkpoint_id="closing",
+            closing_balance="15.0",
+        )
+
+    def test_h4_accepts_only_offline_consistent_taker_whale_chain(self):
+        result = self.validate(bundle())
+        self.assertIs(result["offline_consistency_passed"], True)
+        self.assertEqual(result["same_ledger_compounding_rows"], 10)
+        self.assertEqual(result["actual_fills"], 0)
+        self.assertEqual(result["verified_canary_fills"], 0)
+        self.assertIs(result["gate_passed"], False)
 
 
-def test_h4_rejects_quote_only_row():
-    rows = bundle()
-    rows[0]["transaction_hash"] = ""
-    result = validate_h4_chain(
-        rows,
-        owner="owner-1",
-        opening_checkpoint_id="opening",
-        closing_checkpoint_id="closing",
-        closing_balance="15.0",
-    )
-    assert result["failure_reason"] == "h4_event_contract_failed"
-    assert any(item["reason"] == "transaction_hash_required" for item in result["issues"])
+    def test_h4_rejects_quote_only_row(self):
+        rows = bundle()
+        rows[0]["transaction_hash"] = ""
+        result = self.validate(rows)
+        self.assertEqual(result["failure_reason"], "h4_event_contract_failed")
+        self.assertTrue(any(item["reason"] == "transaction_hash_required" for item in result["issues"]))
 
 
-def test_h4_rejects_maker_side_and_owner_mismatch():
-    rows = bundle()
-    rows[2]["trader_side"] = "MAKER"
-    result = validate_h4_chain(
-        rows,
-        owner="owner-1",
-        opening_checkpoint_id="opening",
-        closing_checkpoint_id="closing",
-        closing_balance="15.0",
-    )
-    assert result["failure_reason"] == "h4_event_contract_failed"
-    assert any(item["reason"] == "trader_side_must_be_taker" for item in result["issues"])
+    def test_h4_rejects_maker_side_and_owner_mismatch(self):
+        rows = bundle()
+        rows[2]["trader_side"] = "MAKER"
+        result = self.validate(rows)
+        self.assertEqual(result["failure_reason"], "h4_event_contract_failed")
+        self.assertTrue(any(item["reason"] == "trader_side_must_be_taker" for item in result["issues"]))
 
 
-def test_h4_rejects_duplicate_or_reordered_rows():
-    rows = bundle()
-    rows[1]["transaction_hash"] = rows[0]["transaction_hash"]
-    rows[1]["sequence_no"] = 3
-    result = validate_h4_chain(
-        rows,
-        owner="owner-1",
-        opening_checkpoint_id="opening",
-        closing_checkpoint_id="closing",
-        closing_balance="15.0",
-    )
-    assert result["failure_reason"] == "h4_event_contract_failed"
-    assert any(item["reason"] == "duplicate_transaction_hash" for item in result["issues"])
-    assert any(item["reason"] == "sequence_no_must_be_exactly_one_to_ten" for item in result["issues"])
+    def test_h4_rejects_duplicate_or_reordered_rows(self):
+        rows = bundle()
+        rows[1]["transaction_hash"] = rows[0]["transaction_hash"]
+        rows[1]["sequence_no"] = 3
+        result = self.validate(rows)
+        self.assertEqual(result["failure_reason"], "h4_event_contract_failed")
+        self.assertTrue(any(item["reason"] == "duplicate_transaction_hash" for item in result["issues"]))
+        self.assertTrue(any(item["reason"] == "sequence_no_must_be_exactly_one_to_ten" for item in result["issues"]))
