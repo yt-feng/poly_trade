@@ -361,6 +361,8 @@ def adapt_trade(
             "market_id": trade["market_id"],
             "asset_id": trade["asset_id"],
             "taker_order_id": trade["taker_order_id"],
+            "maker_order_ids": sorted(_maker_order_ids(trade["maker_orders"])),
+            "trade_owner": trade["trade_owner"],
             "side": trade["side"],
             "price": trade["price"],
             "size": trade["size"],
