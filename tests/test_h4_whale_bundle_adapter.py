@@ -14,7 +14,8 @@ def groups():
             "owner": "owner-1", "transaction_hash": "tx-1", "block_number": 1, "log_index": 0,
             "trade_id": "trade-1", "order_hash": "order-1", "maker_address": "maker-1",
             "taker_address": "owner-1", "trader_side": "TAKER", "tx_status": "CONFIRMED",
-            "filled_shares": "10", "fill_price": "0.5", "entry_ts": 1000,
+            "filled_shares": "10", "fill_price": "0.5", "fee": "0.1",
+            "fee_schedule_source": "clob-market-info-v2", "fee_schedule_observed_ts": 950, "entry_ts": 1000,
         },
         "whale": {
             "whale_address": "whale-1", "whale_trade_id": "whale-trade-1",

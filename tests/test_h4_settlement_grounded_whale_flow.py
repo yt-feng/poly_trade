@@ -40,7 +40,8 @@ def bundle():
             "taker_address": "owner-1",
             "trader_side": "TAKER",
             "tx_status": "CONFIRMED",
-            "filled_shares": "10",
+            "filled_shares": "10", "fee": "0.1",
+            "fee_schedule_source": "clob-market-info-v2", "fee_schedule_observed_ts": ts - 50,
             "fill_price": "0.50",
             "settlement_receipt_id": f"settlement-{i}",
             "settlement_transaction_hash": f"settlement-tx-{i}",
@@ -108,6 +109,13 @@ class H4SettlementGroundedWhaleFlowTests(unittest.TestCase):
         result = self.validate(rows)
         self.assertEqual(result["failure_reason"], "h4_event_contract_failed")
         self.assertTrue(any(item["reason"] == "settlement_status_required" for item in result["issues"]))
+
+    def test_h4_rejects_fee_schedule_observed_after_entry(self):
+        rows = bundle()
+        rows[0]["fee_schedule_observed_ts"] = rows[0]["entry_ts"] + 1
+        result = self.validate(rows)
+        self.assertEqual(result["failure_reason"], "h4_event_contract_failed")
+        self.assertTrue(any(item["reason"] == "fee_schedule_observation_after_entry" for item in result["issues"]))
 
 
     def test_h4_rejects_maker_side_and_owner_mismatch(self):

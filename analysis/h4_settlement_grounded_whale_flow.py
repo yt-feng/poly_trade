@@ -26,8 +26,9 @@ H4_SOURCE_GROUPS: dict[str, tuple[str, ...]] = {
     "owner_scope": ("owner", "ledger_id", "chain_id"),
     "onchain_taker_fill": (
         "transaction_hash", "log_index", "block_number", "maker_address",
-        "taker_address", "trader_side", "filled_shares", "fill_price",
+        "taker_address", "trader_side", "filled_shares", "fill_price", "fee",
     ),
+    "fee_contract": ("fee_schedule_source", "fee_schedule_observed_ts"),
     "whale_observation": (
         "whale_address", "whale_trade_id", "whale_transaction_hash",
         "whale_observed_ts", "whale_observation_verified",
@@ -152,6 +153,7 @@ def validate_h4_chain(
         "whale_transaction_hash", "transaction_hash", "trade_id", "order_hash",
         "maker_address", "taker_address", "settlement_receipt_id",
         "settlement_transaction_hash", "settlement_status", "cash_release_receipt_id",
+        "fee_schedule_source", "fee_schedule_observed_ts",
         "balance_checkpoint_id", "previous_checkpoint_id",
     )
     for row in rows:
@@ -193,10 +195,13 @@ def validate_h4_chain(
             outcome_index = int(str(row.get("outcome_index")))
             entry_ts = int(str(row.get("entry_ts")))
             whale_ts = int(str(row.get("whale_observed_ts")))
+            fee_schedule_ts = int(str(row.get("fee_schedule_observed_ts")))
             if block < 0 or log_index < 0 or outcome_index < 0:
                 raise ValueError
             if whale_ts > entry_ts:
                 issues.append({"reason": "whale_observation_after_entry", "sequence_no": sequence})
+            if fee_schedule_ts > entry_ts:
+                issues.append({"reason": "fee_schedule_observation_after_entry", "sequence_no": sequence})
         except (TypeError, ValueError):
             issues.append({"reason": "onchain_identity_or_whale_clock_invalid", "sequence_no": sequence})
         try:

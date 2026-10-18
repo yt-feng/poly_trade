@@ -54,7 +54,7 @@ def assemble_h4_whale_row(
         raise ValueError("whale_observation_must_be_verified")
 
     required_market = ("token_id", "condition_id", "market_slug", "outcome_index", "outcome_name", "source_version", "identity_hash")
-    required_fill = ("transaction_hash", "block_number", "log_index", "trade_id", "order_hash", "maker_address", "taker_address", "filled_shares", "fill_price", "entry_ts")
+    required_fill = ("transaction_hash", "block_number", "log_index", "trade_id", "order_hash", "maker_address", "taker_address", "filled_shares", "fill_price", "fee", "fee_schedule_source", "fee_schedule_observed_ts", "entry_ts")
     required_whale = ("whale_address", "whale_trade_id", "whale_transaction_hash", "whale_notional_usdc", "whale_observed_ts")
     for name, source, fields in (
         ("market", market, required_market),
