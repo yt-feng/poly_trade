@@ -1,0 +1,120 @@
+name: polybolt-compound-admission
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: polybolt-compound-admission-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  admission:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: python -m pip install -r requirements-vault.txt pytest
+
+      - name: Validate admission contracts
+        run: |
+          python -m pytest -q \
+            tests/test_polybolt_twap_adapter.py \
+            tests/test_validate_polybolt_compound_bundle.py \
+            tests/test_run_polybolt_compound_admission.py
+
+      - name: Materialize private bundle only in runner temp
+        env:
+          POLYBOLT_COMPOUND_BUNDLE_B64: ${{ secrets.POLYBOLT_COMPOUND_BUNDLE_B64 }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/polybolt-compound-admission"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python - "$PRIVATE_DIR/bundle.json" <<'PY'
+          import base64, os, sys
+          from pathlib import Path
+          value = os.environ.get('POLYBOLT_COMPOUND_BUNDLE_B64', '')
+          if not value:
+              raise SystemExit('private bundle secret is unavailable')
+          data = base64.b64decode(value, validate=True)
+          if not data or len(data) > 2 * 1024 * 1024:
+              raise SystemExit('private bundle size is invalid')
+          path = Path(sys.argv[1])
+          fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(fd, 'wb') as handle:
+              handle.write(data)
+              handle.flush()
+              os.fsync(handle.fileno())
+          PY
+
+      - name: Run v2 admission and retain only redacted result
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/polybolt-compound-admission"
+          python tools/run_polybolt_compound_admission.py \
+            --bundle "$PRIVATE_DIR/bundle.json" \
+            --output "$PRIVATE_DIR/result.json"
+
+      - name: Seal redacted admission result
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/polybolt-compound-admission"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          recipient = research_vault.load_json_bytes(
+              base64.b64decode(os.environ['QUALITY_FIRST_RECIPIENT_JSON_B64'], validate=True), 4096)
+          recipient_id = os.environ['QUALITY_FIRST_RECIPIENT_ID']
+          research_vault.validate_recipient(recipient, recipient_id)
+          result = json.loads((private / 'result.json').read_text())
+          passed = result.get('gate_passed') is True and result.get('fills') == 10
+          payload = {
+              'format': 'authenticated-polybolt-compound-admission-sealed-v1',
+              'result': result,
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+              'actual_fills': 0,
+              'verified_canary_fills': 10 if passed else 0,
+              'same_ledger_compounding_rows': 10 if passed else 0,
+              'new_data_collected': False,
+              'model_refit': False,
+              'live_orders_enabled': False,
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          status = {'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': False, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical(status) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted admission result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local bundle and plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/polybolt-compound-admission" sealed-delivery
