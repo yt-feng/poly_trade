@@ -35,8 +35,8 @@ def source_event(seq: int, market_id: str = MARKET_ID, *, event_ms: int | None =
 def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain-1") -> dict[str, object]:
     entry_ms = START + (i - 1) * 10_000 + 1_000
     release_ms = entry_ms + 5_000
-    before = Decimal("10") + Decimal("0.43") * (i - 1)
-    after = before - Decimal("5.07")
+    before = Decimal("10") + Decimal("0.325") * (i - 1)
+    after = before - Decimal("5.175")
     digest = hashlib.sha256(f"event-{i}".encode()).hexdigest()
     return {
         "owner": "owner-1",
@@ -58,7 +58,9 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
         "entry_ts_ms": entry_ms,
         "cash_available_ts_ms": release_ms,
         "entry_cost": "5",
-        "fee": "0.07",
+        "shares": "10",
+        "price": "0.5",
+        "fee": "0.175",
         "payout": "5.50",
         "released_cash_since_previous_entry": "0" if i == 1 else "5.50",
         "balance_before": format(before, "f"),
@@ -82,7 +84,7 @@ def bundle(events=None, source=None):
         "chain_id": "chain-1",
         "starting_checkpoint_id": "opening",
         "initial_cash": "10",
-        "closing_balance": "14.3",
+        "closing_balance": "13.25",
         "closing_balance_checkpoint_id": "closing",
         "market_windows": [{
             "market_id": MARKET_ID,
@@ -213,6 +215,22 @@ def test_fee_schedule_must_match_frozen_taker_rate():
     result = validate_bundle_document(doc)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "fee_rate_must_equal_frozen_taker_rate"
+
+
+def test_taker_fee_amount_must_match_price_and_shares_formula():
+    doc = bundle()
+    doc["events"][0]["fee"] = "0.174"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "taker_fee_amount_mismatch"
+
+
+def test_entry_cost_must_match_executed_shares_and_price():
+    doc = bundle()
+    doc["events"][0]["shares"] = "9"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "entry_cost_price_arithmetic_mismatch"
 
 
 def test_required_fills_cannot_be_lowered_to_a_lucky_prefix():

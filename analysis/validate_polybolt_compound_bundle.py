@@ -26,6 +26,7 @@ MARKET_SLUG = re.compile(r"^btc-updown-5m-[0-9]+$")
 REQUIRED_FILLS = 10
 FROZEN_EXECUTION_ROLE = "TAKER"
 FROZEN_TAKER_FEE_RATE = Decimal("0.07")
+FEE_AMOUNT_TOLERANCE = Decimal("0.000001")
 
 
 def _fail(reason: str, *, event_count: int = 0, source_event_count: int = 0) -> dict[str, Any]:
@@ -226,6 +227,8 @@ def _validate_same_ledger(
             entry_cost = _decimal(row.get("entry_cost"), "entry_cost")
             fee = _decimal(row.get("fee"), "fee")
             payout = _decimal(row.get("payout"), "payout")
+            shares = _decimal(row.get("shares"), "shares")
+            price = _decimal(row.get("price"), "price")
             balance_before = _decimal(row.get("balance_before"), "balance_before")
             balance_after = _decimal(row.get("balance_after"), "balance_after")
             released_cash = _decimal(row.get("released_cash_since_previous_entry"), "released_cash_since_previous_entry")
@@ -241,6 +244,15 @@ def _validate_same_ledger(
                 return "fee_rate_must_equal_frozen_taker_rate"
             if fee <= 0:
                 return "zero_fee_not_admissible"
+            if shares <= 0:
+                return "shares_must_be_positive"
+            if price <= 0 or price >= 1:
+                return "price_must_be_between_zero_and_one"
+            if entry_cost != shares * price:
+                return "entry_cost_price_arithmetic_mismatch"
+            expected_fee = shares * fee_rate * price * (Decimal("1") - price)
+            if abs(fee - expected_fee) > FEE_AMOUNT_TOLERANCE:
+                return "taker_fee_amount_mismatch"
             if receipt["amount"] != payout or receipt["release_ts_ms"] != release_ms:
                 return "cash_release_amount_mismatch"
             due = Decimal("0")
