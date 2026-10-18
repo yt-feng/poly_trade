@@ -36,7 +36,7 @@ jobs:
         run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest scikit-learn
 
       - name: Validate H160 contract
-        run: python -m pytest -q tests/test_h160_fraction_ladder_exact_target_chain.py tests/test_h158_registry_exact_variable_multiplier_target_chain.py tests/test_sequential_compound_gate.py
+        run: python -m pytest -q tests/test_h160_new_signal_family_exact_target_chain.py tests/test_h158_registry_exact_variable_multiplier_target_chain.py tests/test_sequential_compound_gate.py
 
       - name: Run H160 on pinned old-clean source
         env:
