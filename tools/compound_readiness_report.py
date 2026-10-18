@@ -72,30 +72,86 @@ def _paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _orderfilled_frontier(state: dict[str, Any]) -> dict[str, Any]:
+    """Expose the future-only on-chain binding gate without inventing fills.
+
+    The binding audit is deliberately separate from settlement and cash release.
+    A missing or synthetic audit therefore remains a hard admission failure even
+    when a caller supplies optimistic aggregate fill counts.
+    """
+    audit = state.get("latest_orderfilled_binding_audit")
+    if audit is None:
+        return {
+            "reported": False,
+            "future_only": True,
+            "owner_scope_verified": False,
+            "same_ledger_rows": 0,
+            "ready": False,
+            "evidence_boundary": "no_orderfilled_binding_audit_in_state",
+        }
+    if not isinstance(audit, dict):
+        raise ValueError("ORDERFILLED_BINDING_AUDIT_REQUIRED")
+    verification = audit.get("verification")
+    decision = audit.get("decision")
+    if not isinstance(verification, dict) or not isinstance(decision, dict):
+        raise ValueError("ORDERFILLED_BINDING_AUDIT_SHAPE_REQUIRED")
+    owner_scope = verification.get("current_owner_bundle_available") is True
+    synthetic_only = verification.get("synthetic_only") is True
+    same_ledger_rows = decision.get("same_ledger_compounding_rows")
+    if type(same_ledger_rows) is not int:
+        raise ValueError("ORDERFILLED_SAME_LEDGER_ROWS_MUST_BE_INTEGER")
+    ready = (
+        owner_scope
+        and not synthetic_only
+        and same_ledger_rows == 10
+        and decision.get("canary_ready") is True
+    )
+    return {
+        "reported": True,
+        "future_only": True,
+        "owner_scope_verified": owner_scope,
+        "same_ledger_rows": same_ledger_rows,
+        "ready": ready,
+        "synthetic_only": synthetic_only,
+        "evidence_boundary": audit.get("evidence_boundary")
+        or "binding_reported_without_evidence_boundary",
+    }
+
+
 def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]:
     receipt = state.get("receipt_boundary_status")
     if not isinstance(receipt, dict):
         raise ValueError("RECEIPT_BOUNDARY_STATUS_REQUIRED")
     frontier = _paper_frontier(paper)
+    orderfilled = _orderfilled_frontier(state)
     owner_bundle = receipt.get("authenticated_owner_scoped_bundle_available") is True
     btc_bundle = receipt.get("btc_five_minute_bundle_available") is True
     verified = receipt.get("verified_canary_fills")
     actual = state.get("actual_fills")
     if type(verified) is not int or type(actual) is not int:
         raise ValueError("FILL_COUNTS_MUST_BE_INTEGERS")
-    settlement_evidence_ready = owner_bundle and btc_bundle and verified >= 10 and actual >= 10
+    settlement_evidence_ready = (
+        owner_bundle
+        and btc_bundle
+        and verified >= 10
+        and actual >= 10
+        and orderfilled["ready"]
+    )
     canary_ready = frontier["pooled_frontier_consistent"] and settlement_evidence_ready
     hard_blockers = []
     if not owner_bundle or not btc_bundle:
         hard_blockers.append("authenticated_owner_scoped_btc_five_minute_bundle_missing")
     if verified < 10 or actual < 10:
         hard_blockers.append("ten_verified_same_ledger_fills_missing")
+    if not orderfilled["ready"]:
+        hard_blockers.append("onchain_orderfilled_binding_missing_or_unverified")
     return {
         "format": "compound-readiness-report-v1",
         "source_scope": "existing_state_and_paper_artifact_only",
         "required_fills": 10,
         "same_ledger_contract": "one chronological evolving cash ledger; no reset or concatenation",
         "paper_frontier": frontier,
+        "orderfilled_binding": orderfilled,
         "settlement_evidence": {
             "owner_scoped_bundle": owner_bundle,
             "btc_five_minute_bundle": btc_bundle,
