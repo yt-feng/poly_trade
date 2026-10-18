@@ -130,7 +130,7 @@ def bundle(events=None, source=None):
             "slug": "btc-updown-5m-1800000000",
             "window_start_ms": START,
             "window_end_ms": START + 300_000,
-            "min_order_size_unit": "USDC",
+            "min_order_size_unit": "shares",
             "min_order_size": "5",
             "min_order_shares": "5",
             "tick_size": "0.01",
@@ -167,19 +167,19 @@ def test_supplied_source_and_cash_chain_pass_offline_consistency_only():
     assert "owner-1" not in str(result)
 
 
-def test_minimum_notional_contract_accepts_five_dollar_entry():
+def test_minimum_share_contract_accepts_five_share_entry():
     result = validate_bundle_document(bundle())
     assert result["offline_consistency_passed"] is True
 
 
-def test_market_notional_floor_is_enforced():
+def test_market_share_floor_is_enforced():
     doc = bundle()
     doc["events"][0]["shares"] = "4"
     doc["events"][0]["entry_cost"] = "2"
     doc["events"][0]["fee"] = "0.056"
     result = validate_bundle_document(doc)
     assert result["offline_consistency_passed"] is False
-    assert result["failure_reason"] == "entry_cost_below_market_minimum_notional"
+    assert result["failure_reason"] == "shares_below_market_minimum"
 
 
 def test_market_share_floor_field_is_required_and_frozen():
@@ -196,12 +196,42 @@ def test_market_share_floor_field_is_required_and_frozen():
     assert result["failure_reason"] == "market_minimum_order_shares_below_frozen_floor"
 
 
-def test_share_unit_claim_is_rejected_when_notional_unit_is_required():
+def test_notional_unit_claim_is_rejected_when_share_unit_is_required():
     doc = bundle()
-    doc["market_windows"][0]["min_order_size_unit"] = "shares"
+    doc["market_windows"][0]["min_order_size_unit"] = "USDC"
     result = validate_bundle_document(doc)
     assert result["offline_consistency_passed"] is False
-    assert result["failure_reason"] == "minimum_order_size_unit_must_be_usdc_notional"
+    assert result["failure_reason"] == "minimum_order_size_unit_must_be_shares"
+
+
+def test_five_share_fill_can_use_less_than_five_dollars_of_cash():
+    """A share floor must not become an accidental universal notional floor."""
+    doc = bundle()
+    for snapshot in doc["depth_snapshots"]:
+        snapshot["ask_price"] = "0.20"
+    payout = Decimal("1.1")
+    fee = Decimal("0.056")
+    previous_after = Decimal("10")
+    for i, event in enumerate(doc["events"], start=1):
+        before = previous_after if i == 1 else previous_after + payout
+        after = before - Decimal("1") - fee
+        event.update(
+            entry_cost="1",
+            shares="5",
+            price="0.2",
+            fee=format(fee, "f"),
+            payout=format(payout, "f"),
+            released_cash_since_previous_entry="0" if i == 1 else format(payout, "f"),
+            balance_before=format(before, "f"),
+            balance_after=format(after, "f"),
+        )
+        doc["cash_release_receipts"][i - 1]["amount"] = format(payout, "f")
+        doc["settlement_receipts"][i - 1]["payout"] = format(payout, "f")
+        previous_after = after
+    doc["closing_balance"] = format(previous_after + payout, "f")
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is True
+    assert Decimal(result["ending_cash"]) == Decimal("10.44")
 
 
 def test_executed_price_must_follow_market_tick_size():
@@ -453,7 +483,7 @@ def test_source_must_cover_every_account_market():
     doc["market_windows"].append({
         "market_id": "m-2", "asset": "btc", "slug": "btc-updown-5m-1800000300",
         "window_start_ms": START + 300_000, "window_end_ms": START + 600_000,
-        "min_order_size_unit": "USDC", "min_order_size": "5", "min_order_shares": "5", "tick_size": "0.01",
+        "min_order_size_unit": "shares", "min_order_size": "5", "min_order_shares": "5", "tick_size": "0.01",
     })
     doc["events"][0]["market_id"] = "m-2"
     result = validate_bundle_document(doc)
