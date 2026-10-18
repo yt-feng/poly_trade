@@ -6,12 +6,12 @@ on:
       window_blocks:
         description: 'Bounded finalized Polygon block window'
         required: true
-        default: '100000'
+        default: '20000'
         type: string
       chunk_blocks:
         description: 'RPC chunk size'
         required: true
-        default: '200'
+        default: '1000'
         type: string
       max_logs:
         description: 'Maximum decoded public logs'

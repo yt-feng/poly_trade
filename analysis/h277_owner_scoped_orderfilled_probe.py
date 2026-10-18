@@ -90,17 +90,22 @@ def run(
     # cannot consume a public RPC budget.
     for spec in owner_specs:
         normalize_owner(spec.get("address"))
+    # Query only the indexed taker topic for the derived owners.  This keeps
+    # the read-only owner join bounded and avoids downloading the entire
+    # public OrderFilled stream before filtering locally.
     public = probe(
         rpc_url=rpc_url,
         window_blocks=window_blocks,
         chunk_blocks=chunk_blocks,
         max_logs=max_logs,
+        taker_addresses=[spec.get("address") for spec in owner_specs],
     )
     return {
         "format": "h277-owner-scoped-orderfilled-probe-v1",
         "source": public,
         "owner_summaries": summarize_records(public.get("records", []), owner_specs),
-        "evidence_boundary": "public Polygon OrderFilled join only; no authenticated user-stream, settlement, cash-release or balance receipt",
+        "evidence_boundary": "public Polygon OrderFilled taker-topic join only; no authenticated user-stream, settlement, cash-release or balance receipt",
+        "taker_topic_filter_applied": True,
         "strategy_evaluated": False,
         "new_data_collected": False,
         "model_refit": False,
@@ -116,8 +121,8 @@ def main() -> None:
     parser.add_argument("--owners-file", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--rpc-url", default=POLYGON_RPC_URL)
-    parser.add_argument("--window-blocks", type=int, default=100_000)
-    parser.add_argument("--chunk-blocks", type=int, default=200)
+    parser.add_argument("--window-blocks", type=int, default=20_000)
+    parser.add_argument("--chunk-blocks", type=int, default=1_000)
     parser.add_argument("--max-logs", type=int, default=2_000)
     args = parser.parse_args()
     owners = json.loads(args.owners_file.read_text(encoding="utf-8"))

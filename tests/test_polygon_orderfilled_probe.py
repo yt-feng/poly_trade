@@ -89,3 +89,35 @@ def test_probe_defaults_to_v1_and_v2_exchange_sources(monkeypatch):
     assert result["topics"] == list(probe.ORDER_FILLED_TOPICS)
     assert result["exchange_versions"] == ["v1", "v2"]
 
+
+def test_probe_can_filter_indexed_taker_topic(monkeypatch):
+    calls = []
+
+    def fake_rpc(url, method, params, request_id):
+        calls.append((method, params))
+        if method == "eth_blockNumber":
+            return "0x10000"
+        if method == "eth_getBlockByNumber":
+            return {"number": "0x10000"}
+        if method == "eth_getLogs":
+            return []
+        raise AssertionError(method)
+
+    monkeypatch.setattr(probe, "_rpc", fake_rpc)
+    owner = "0x" + "22" * 20
+    result = probe.probe(
+        from_block=0xFF00,
+        to_block=0xFF01,
+        window_blocks=2,
+        chunk_blocks=200,
+        taker_addresses=[owner],
+    )
+    filters = [params[0] for method, params in calls if method == "eth_getLogs"]
+    assert filters
+    assert all(item["topics"] == [
+        list(probe.ORDER_FILLED_TOPICS), None, None,
+        "0x" + "0" * 24 + "22" * 20,
+    ] for item in filters)
+    assert result["taker_topic_filter"] == "0x" + "0" * 24 + "22" * 20
+    assert result["account_scope"] == "public_taker_filtered; not a private wallet receipt"
+

@@ -1,4 +1,5 @@
-from analysis.h277_owner_scoped_orderfilled_probe import normalize_owner, summarize_records
+import analysis.h277_owner_scoped_orderfilled_probe as h277
+from analysis.h277_owner_scoped_orderfilled_probe import normalize_owner, run, summarize_records
 
 
 OWNER = "0x" + "11" * 20
@@ -36,3 +37,23 @@ def test_summary_requires_bounded_owner_count():
         assert "one to four" in str(exc)
     else:
         raise AssertionError("empty owner set accepted")
+
+
+def test_run_uses_owner_indexed_taker_filter(monkeypatch):
+    seen = {}
+
+    def fake_probe(**kwargs):
+        seen.update(kwargs)
+        return {"records": [], "account_scope": "public_taker_filtered; not a private wallet receipt"}
+
+    monkeypatch.setattr(h277, "probe", fake_probe)
+    result = run(
+        owners=[{"label": "key-a", "address": OWNER}],
+        rpc_url="https://rpc.example",
+        window_blocks=100,
+        chunk_blocks=50,
+        max_logs=10,
+    )
+    assert seen["taker_addresses"] == [OWNER]
+    assert result["taker_topic_filter_applied"] is True
+    assert result["new_data_collected"] is False

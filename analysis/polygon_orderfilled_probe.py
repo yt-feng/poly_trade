@@ -83,6 +83,18 @@ def _topic(value: Any) -> str:
     return text
 
 
+def _owner_topic(value: Any) -> str:
+    """Encode a 20-byte owner as the indexed ``address`` topic used by logs."""
+    text = str(value or "").strip().lower()
+    if not text.startswith("0x") or len(text) != 42:
+        raise ValueError("owner address must be a 20-byte hexadecimal address")
+    try:
+        int(text[2:], 16)
+    except ValueError as exc:
+        raise ValueError("owner address must be a 20-byte hexadecimal address") from exc
+    return "0x" + ("0" * 24) + text[2:]
+
+
 def decode_v1_log(log: dict[str, Any], *, block_timestamp: int | None = None) -> dict[str, Any]:
     """Decode one V1 ``OrderFilled`` log into the normalizer's input shape."""
     if not isinstance(log, dict):
@@ -195,6 +207,7 @@ def probe(
     chunk_blocks: int = DEFAULT_CHUNK_BLOCKS,
     max_logs: int = DEFAULT_MAX_LOGS,
     addresses: Iterable[str] | None = None,
+    taker_addresses: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Fetch a bounded finalized log window and return decoded records."""
     if window_blocks <= 0 or chunk_blocks <= 0 or max_logs <= 0:
@@ -215,6 +228,12 @@ def probe(
     addresses_list = tuple(sorted({str(address).lower() for address in address_source if str(address)}))
     if not addresses_list:
         raise ValueError("at least one exchange address is required")
+    taker_topics = None
+    if taker_addresses is not None:
+        owners = tuple(sorted({_owner_topic(address) for address in taker_addresses}))
+        if not owners:
+            raise ValueError("at least one taker address is required")
+        taker_topics = owners[0] if len(owners) == 1 else list(owners)
     logs: dict[str, dict[str, Any]] = {}
     chunks = 0
     for address in addresses_list:
@@ -224,7 +243,17 @@ def probe(
             result = _rpc(
                 rpc_url,
                 "eth_getLogs",
-                [{"address": address, "topics": [list(ORDER_FILLED_TOPICS)], "fromBlock": hex(start), "toBlock": hex(end)}],
+                [{
+                    "address": address,
+                    "topics": [list(ORDER_FILLED_TOPICS), None, None, taker_topics],
+                    "fromBlock": hex(start),
+                    "toBlock": hex(end),
+                } if taker_topics is not None else {
+                    "address": address,
+                    "topics": [list(ORDER_FILLED_TOPICS)],
+                    "fromBlock": hex(start),
+                    "toBlock": hex(end),
+                }],
                 chunks + 10,
             )
             chunks += 1
@@ -264,13 +293,14 @@ def probe(
         "to_block": requested_to,
         "addresses": list(addresses_list),
         "topics": list(ORDER_FILLED_TOPICS),
+        "taker_topic_filter": taker_topics,
         "exchange_versions": ["v1", "v2"],
         "chunk_blocks": chunk_blocks,
         "rpc_log_chunk_count": chunks,
         "record_count": len(records),
         "records": records,
         "authoritative_event_source": True,
-        "account_scope": "public_all_accounts; not a private wallet receipt",
+        "account_scope": "public_taker_filtered; not a private wallet receipt" if taker_topics is not None else "public_all_accounts; not a private wallet receipt",
         "live_orders_enabled": False,
         "actual_fills": 0,
         "verified_canary_fills": 0,
