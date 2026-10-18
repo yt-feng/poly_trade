@@ -33,6 +33,7 @@ on:
       - 'analysis/h60_fast_focused_registry_verification.py'
       - 'analysis/h61_runner_up_holdout_only.py'
       - 'analysis/h62_fee_slippage_counterfactual.py'
+      - 'analysis/h62_missing_cell_retry.py'
       - '.github/workflows/run-all-monthly-clob-systematic.yml'
       - 'requirements.txt'
 
@@ -1944,7 +1945,7 @@ jobs:
           set -euo pipefail
           PRIVATE_DIR="$RUNNER_TEMP/old-data-h62-counterfactual"
           mkdir -m 700 "$PRIVATE_DIR"
-          python -u analysis/h62_fee_slippage_counterfactual.py \
+          python -u analysis/h62_missing_cell_retry.py \
             --source-root source_poly/data/monthly_runs \
             --source-commit "$SOURCE_DATA_COMMIT" \
             --output "$PRIVATE_DIR/results" \
