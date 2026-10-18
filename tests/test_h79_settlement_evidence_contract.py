@@ -14,6 +14,7 @@ def event(i: int) -> dict[str, object]:
         "trade_id": f"trade-{i}",
         "transaction_ref": f"tx-{i}",
         "settlement_receipt_id": f"settlement-{i}",
+        "cash_release_receipt_id": f"cash-release-{i}",
         "balance_checkpoint_id": f"balance-{i}",
         "cash_reconciled": True,
         "independent_checkpoint": True,

@@ -21,6 +21,7 @@ def pair(i: int) -> dict[str, object]:
         "down_fee_rate_bps": "0",
         "merge_receipt_id": f"merge-{i}",
         "settlement_receipt_id": f"settlement-{i}",
+        "cash_release_receipt_id": f"cash-release-{i}",
         "balance_checkpoint_id": f"balance-{i}",
         "cash_reconciled": True,
         "independent_checkpoint": True,

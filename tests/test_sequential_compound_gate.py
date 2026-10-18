@@ -12,6 +12,7 @@ def event(i: int, *, status: str = "confirmed", cost: str = "5", payout: str = "
         "trade_id": f"trade-{i}",
         "transaction_ref": f"tx-{i}",
         "settlement_receipt_id": f"settlement-{i}",
+        "cash_release_receipt_id": f"cash-release-{i}",
         "balance_checkpoint_id": f"balance-{i}",
         "cash_reconciled": True,
         "independent_checkpoint": True,
@@ -75,6 +76,22 @@ def test_authenticated_chain_rejects_unreconciled_cash_checkpoint():
     result = evaluate_compound_chain([row], required_fills=1)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "cash_checkpoint_not_reconciled"
+
+
+def test_explicit_cash_release_gate_requires_distinct_receipt():
+    row = event(0)
+    del row["cash_release_receipt_id"]
+    result = evaluate_compound_chain(
+        [row], required_fills=1, require_cash_release_receipt=True
+    )
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "missing_authoritative_receipt_or_checkpoint"
+
+    row["cash_release_receipt_id"] = row["settlement_receipt_id"]
+    result = evaluate_compound_chain(
+        [row], required_fills=1, require_cash_release_receipt=True
+    )
+    assert result["failure_reason"] == "cash_release_receipt_not_independent"
 
 
 def test_overlapping_entries_use_one_cash_ledger_and_are_compounding():

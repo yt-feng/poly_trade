@@ -3,7 +3,8 @@
 The validator consumes captured evidence only.  It has no wallet, network,
 order, cancel, merge, redeem or balance-reading capability.  A pair counts as
 one compound ledger fill only after both maker legs, the merge/settlement
-receipt and an independent cash checkpoint are joined.
+receipt, a distinct cash-release/redemption receipt, and an independent cash
+checkpoint are joined.
 """
 from __future__ import annotations
 
@@ -37,7 +38,7 @@ def validate_maker_pair_chain(
     required = (
         "pair_id", "up_trade_id", "down_trade_id", "up_transaction_ref",
         "down_transaction_ref", "merge_receipt_id", "settlement_receipt_id",
-        "balance_checkpoint_id", "entry_ts", "cash_available_ts", "entry_cost",
+        "cash_release_receipt_id", "balance_checkpoint_id", "entry_ts", "cash_available_ts", "entry_cost",
         "fee", "payout",
     )
     for row in events:
@@ -62,6 +63,7 @@ def validate_maker_pair_chain(
             _text(row["pair_id"]), _text(row["up_trade_id"]), _text(row["down_trade_id"]),
             _text(row["up_transaction_ref"]), _text(row["down_transaction_ref"]),
             _text(row["merge_receipt_id"]), _text(row["settlement_receipt_id"]),
+            _text(row["cash_release_receipt_id"]),
             _text(row["balance_checkpoint_id"]),
         )
         if any(identity in seen for identity in identities):
@@ -73,6 +75,7 @@ def validate_maker_pair_chain(
             "trade_id": _text(row["pair_id"]),
             "transaction_ref": _text(row["up_transaction_ref"]) + "|" + _text(row["down_transaction_ref"]),
             "settlement_receipt_id": _text(row["settlement_receipt_id"]),
+            "cash_release_receipt_id": _text(row["cash_release_receipt_id"]),
             "balance_checkpoint_id": _text(row["balance_checkpoint_id"]),
             "cash_reconciled": True,
             "independent_checkpoint": True,
@@ -88,6 +91,7 @@ def validate_maker_pair_chain(
         minimum_order=minimum_order,
         required_fills=required_pairs,
         evidence_mode="authenticated",
+        require_cash_release_receipt=True,
     )
     return {
         "pairs": len(rows),

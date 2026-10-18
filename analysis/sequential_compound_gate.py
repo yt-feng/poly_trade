@@ -29,6 +29,7 @@ def evaluate_compound_chain(
     minimum_order: Any = "5",
     required_fills: int = 10,
     evidence_mode: str = "authenticated",
+    require_cash_release_receipt: bool = False,
 ) -> dict[str, Any]:
     """Evaluate a single no-reset sequence of settled account events.
 
@@ -36,9 +37,12 @@ def evaluate_compound_chain(
     ``cash_available_ts``, ``entry_cost``, ``fee`` and ``payout``.  In
     ``authenticated`` mode it must also carry an owner-scoped trade reference,
     a settlement receipt, an independent balance checkpoint, and an explicit
-    ``cash_reconciled=true`` assertion.  A confirmed trade alone is not enough
-    to establish that the cash was released for the next fill.  Events may
-    overlap, but every entry is funded from the same cash ledger: settled
+    ``cash_reconciled=true`` assertion.  Callers that require an explicit
+    settlement/redemption-to-cash boundary can set
+    ``require_cash_release_receipt=True``; this adds a distinct
+    ``cash_release_receipt_id`` requirement.  A confirmed trade alone is not
+    enough to establish that the cash was released for the next fill.  Events
+    may overlap, but every entry is funded from the same cash ledger: settled
     payouts are released before each entry whose timestamp has arrived.  The
     returned ``fills`` count is therefore a consecutive, reusable-cash chain,
     rather than an aggregate count across independent trials.
@@ -69,14 +73,19 @@ def evaluate_compound_chain(
             failure_reason = "unconfirmed_fill"
             break
         if evidence_mode == "authenticated":
-            required_receipt_fields = (
+            required_receipt_fields = [
                 "trade_id",
                 "transaction_ref",
                 "settlement_receipt_id",
                 "balance_checkpoint_id",
-            )
+            ]
+            if require_cash_release_receipt:
+                required_receipt_fields.append("cash_release_receipt_id")
             if any(not str(event.get(field, "")).strip() for field in required_receipt_fields):
                 failure_reason = "missing_authoritative_receipt_or_checkpoint"
+                break
+            if require_cash_release_receipt and str(event["cash_release_receipt_id"]).strip() == str(event["settlement_receipt_id"]).strip():
+                failure_reason = "cash_release_receipt_not_independent"
                 break
             if event.get("cash_reconciled") is not True:
                 failure_reason = "cash_checkpoint_not_reconciled"

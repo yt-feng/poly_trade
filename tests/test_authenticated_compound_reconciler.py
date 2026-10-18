@@ -13,6 +13,7 @@ def row(i: int, *, owner: str = "owner-1") -> dict[str, object]:
         "trade_id": f"trade-{i}",
         "transaction_ref": f"tx-{i}",
         "settlement_receipt_id": f"settlement-{i}",
+        "cash_release_receipt_id": f"cash-release-{i}",
         "balance_checkpoint_id": f"balance-{i}",
         "cash_reconciled": True,
         "independent_checkpoint": True,
@@ -53,3 +54,15 @@ def test_missing_checkpoint_is_not_an_authenticated_fill():
     result = reconcile_authenticated_chain(rows, owner="owner-1", required_fills=1)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "missing_settlement_receipt_id"
+
+
+def test_cash_release_receipt_is_required_and_distinct_from_settlement():
+    rows = [row(0)]
+    del rows[0]["cash_release_receipt_id"]
+    result = reconcile_authenticated_chain(rows, owner="owner-1", required_fills=1)
+    assert result["failure_reason"] == "missing_cash_release_receipt_id"
+
+    rows = [row(0)]
+    rows[0]["cash_release_receipt_id"] = rows[0]["settlement_receipt_id"]
+    result = reconcile_authenticated_chain(rows, owner="owner-1", required_fills=1)
+    assert result["failure_reason"] == "cash_release_receipt_not_independent"
