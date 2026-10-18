@@ -96,7 +96,8 @@ def _orderfilled_frontier(state: dict[str, Any]) -> dict[str, Any]:
     if isinstance(verification, dict) and isinstance(decision, dict):
         # Full binding-review.json shape.
         owner_scope = verification.get("current_owner_bundle_available") is True
-        synthetic_only = verification.get("synthetic_only") is True
+        synthetic_marker = verification.get("synthetic_only")
+        synthetic_only = synthetic_marker is True
         same_ledger_rows = decision.get("same_ledger_compounding_rows")
         canary_ready = decision.get("canary_ready") is True
         boundary = audit.get("evidence_boundary")
@@ -105,10 +106,21 @@ def _orderfilled_frontier(state: dict[str, Any]) -> dict[str, Any]:
         # Missing row counts remain zero; the summary can never manufacture
         # an admissible ten-row binding.
         owner_scope = audit.get("current_owner_bundle_available") is True
-        synthetic_only = audit.get("synthetic_only") is True
+        synthetic_marker = audit.get("synthetic_only")
+        synthetic_only = synthetic_marker is True
         same_ledger_rows = audit.get("same_ledger_compounding_rows", 0)
         canary_ready = audit.get("canary_ready") is True
         boundary = audit.get("evidence_boundary")
+    if synthetic_marker is not False:
+        return {
+            "reported": True,
+            "future_only": True,
+            "owner_scope_verified": owner_scope,
+            "same_ledger_rows": same_ledger_rows if type(same_ledger_rows) is int else 0,
+            "ready": False,
+            "synthetic_only": synthetic_only,
+            "evidence_boundary": boundary or "synthetic_marker_missing_or_not_false",
+        }
     if type(same_ledger_rows) is not int:
         raise ValueError("ORDERFILLED_SAME_LEDGER_ROWS_MUST_BE_INTEGER")
     ready = (

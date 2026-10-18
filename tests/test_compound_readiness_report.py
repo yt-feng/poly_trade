@@ -78,3 +78,11 @@ def test_report_fails_closed_when_binding_audit_is_absent():
     assert report["orderfilled_binding"]["ready"] is False
     assert report["settlement_evidence"]["ready"] is False
     assert "onchain_orderfilled_binding_missing_or_unverified" in report["hard_blockers"]
+
+
+def test_report_fails_closed_when_binding_is_not_explicitly_non_synthetic():
+    fixture = state(bundle=True, fills=10, binding=True)
+    del fixture["latest_orderfilled_binding_audit"]["verification"]["synthetic_only"]
+    report = build_report(fixture, paper_artifact(block_failure=False))
+    assert report["orderfilled_binding"]["ready"] is False
+    assert report["settlement_evidence"]["ready"] is False
