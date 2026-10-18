@@ -39,9 +39,12 @@ def simulate_cash_locked(
     fee_rate: float = 0.07,
     fee_exponent: float = 1.0,
     min_order_shares: float = 5.0,
+    minimum_free_cash_after_entry: float = 0.0,
 ) -> tuple[pd.DataFrame, dict]:
     if not math.isfinite(float(min_order_shares)) or float(min_order_shares) < 0:
         raise ValueError("min_order_shares must be finite and non-negative")
+    if not math.isfinite(float(minimum_free_cash_after_entry)) or float(minimum_free_cash_after_entry) < 0:
+        raise ValueError("minimum_free_cash_after_entry must be finite and non-negative")
     d = df.sort_values("first_quote_ts").reset_index(drop=True)
     side = d[f"{strategy}_side"].fillna("skip").astype(str).to_numpy()
     minute = d[f"{strategy}_minute"].to_numpy(dtype=int)
@@ -130,6 +133,9 @@ def simulate_cash_locked(
         if reserved > cash + 1e-12:
             blocked_cash += 1
             continue
+        if cash - reserved < float(minimum_free_cash_after_entry) - 1e-12:
+            blocked_cash += 1
+            continue
         payout = shares * (outcome[i] if side[i] == "buy_up" else 1.0 - outcome[i])
         pnl = payout - reserved
         cash -= reserved
@@ -181,6 +187,7 @@ def simulate_cash_locked(
         "fee_exponent": float(fee_exponent),
         "min_order_notional": float(min_cost),
         "min_order_shares": float(min_order_shares),
+        "minimum_free_cash_after_entry": float(minimum_free_cash_after_entry),
         "trades": len(realized),
         "ending_cash": float(cash),
         "net_return": float(cash / bankroll0 - 1.0),

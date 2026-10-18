@@ -91,6 +91,33 @@ class CashReleaseSensitivityTests(unittest.TestCase):
         self.assertEqual(metrics["min_order_shares"], 19.0)
         self.assertEqual(metrics["trades"], 1)
 
+    def test_declared_free_cash_buffer_blocks_entries_below_buffer(self):
+        _, no_buffer = simulate_cash_locked(
+            self.frame(),
+            "classic_early_drop_down_mean_positive",
+            ExecutionConfig(),
+            10.0,
+            5.0,
+            600.0,
+            fee_mode="polymarket_taker",
+            fee_rate=0.0,
+            minimum_free_cash_after_entry=0.0,
+        )
+        _, buffered = simulate_cash_locked(
+            self.frame(),
+            "classic_early_drop_down_mean_positive",
+            ExecutionConfig(),
+            10.0,
+            5.0,
+            600.0,
+            fee_mode="polymarket_taker",
+            fee_rate=0.0,
+            minimum_free_cash_after_entry=5.0,
+        )
+        self.assertEqual(no_buffer["trades"], 2)
+        self.assertEqual(buffered["trades"], 1)
+        self.assertEqual(buffered["minimum_free_cash_after_entry"], 5.0)
+
 
 if __name__ == "__main__":
     unittest.main()
