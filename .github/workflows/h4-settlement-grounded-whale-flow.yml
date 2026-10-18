@@ -21,6 +21,6 @@ jobs:
         with:
           python-version: '3.11'
       - name: H4 settlement-grounded whale-flow contract tests
-        run: python -m unittest -v tests/test_h4_settlement_grounded_whale_flow.py tests/test_sequential_compound_gate.py
+        run: python -m unittest -v tests/test_h4_settlement_grounded_whale_flow.py tests/test_h4_whale_bundle_adapter.py tests/test_sequential_compound_gate.py
       - name: Compile H4 validator
-        run: python -m py_compile analysis/h4_settlement_grounded_whale_flow.py analysis/authenticated_compound_reconciler.py
+        run: python -m py_compile analysis/h4_settlement_grounded_whale_flow.py analysis/h4_whale_bundle_adapter.py analysis/authenticated_compound_reconciler.py
