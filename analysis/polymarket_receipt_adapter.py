@@ -89,6 +89,9 @@ def _order_canonical(payload: dict[str, Any]) -> dict[str, Any]:
     associate = _pick(payload, "associate_trades", "associateTrades", default=[])
     if not isinstance(associate, list):
         raise ValueError("associate_trades must be a list")
+    trade_ids = _pick(payload, "trade_ids", "tradeIDs", default=[])
+    if not isinstance(trade_ids, list):
+        raise ValueError("trade_ids must be a list")
     return {
         "id": _text(_pick(payload, "id")),
         "market_id": _text(_pick(payload, "market", "conditionId", "condition_id")),
@@ -99,6 +102,10 @@ def _order_canonical(payload: dict[str, Any]) -> dict[str, Any]:
         "size_matched": _text(_pick(payload, "size_matched", "sizeMatched", default="0")),
         "status": _text(_pick(payload, "status")).upper(),
         "associate_trades": associate,
+        # Async order responses may expose trade IDs before the transaction
+        # hash is available. Preserve them for a later authenticated trade
+        # update; they never establish a fill by themselves.
+        "trade_ids": [_text(value) for value in trade_ids if _text(value)],
     }
 
 
@@ -199,6 +206,7 @@ def adapt_order(payload: dict[str, Any], *, expected: dict[str, Any]) -> dict[st
             "order_status": order["status"],
             "original_size_shares": order["original_size"],
             "size_matched_shares": order["size_matched"],
+            "trade_ids": list(order["trade_ids"]),
             "evidence_source": "authenticated_clob_order",
         }
     )

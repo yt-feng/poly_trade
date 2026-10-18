@@ -29,6 +29,7 @@ class PolymarketReceiptAdapter(unittest.TestCase):
             "size_matched": "5",
             "status": status,
             "associate_trades": ["trade-1"],
+            "tradeIDs": ["trade-1"],
         }
 
     def trade(self, status="TRADE_STATUS_CONFIRMED", tx="0xtx"):
@@ -55,7 +56,9 @@ class PolymarketReceiptAdapter(unittest.TestCase):
         result = adapt_order(self.order(), expected=self.expected)
         self.assertEqual(result["issues"], [])
         self.assertEqual(result["order"]["size_matched"], "5")
+        self.assertEqual(result["order"]["trade_ids"], ["trade-1"])
         self.assertEqual([event["kind"] for event in result["events"]], ["entry_order_accepted"])
+        self.assertEqual(result["events"][0]["trade_ids"], ["trade-1"])
 
     def test_matched_order_emits_terminal_event(self):
         result = adapt_order(self.order("MATCHED"), expected=self.expected)
