@@ -3,7 +3,9 @@
 This is a pure ledger check.  It never submits an order and never treats a
 paper label as a confirmed fill.  A chain can pass only when every event is a
 confirmed fill, each entry is funded by the same evolving cash balance, and
-the ending balance has not fallen below the starting balance.
+the ending balance has not fallen below the starting balance.  A bounded
+chain can explicitly stop after its required fill count; this is the contract
+for a finite Canary batch rather than an assertion about later trades.
 """
 from __future__ import annotations
 
@@ -30,6 +32,7 @@ def evaluate_compound_chain(
     required_fills: int = 10,
     evidence_mode: str = "authenticated",
     require_cash_release_receipt: bool = False,
+    stop_after_required_fills: bool = False,
 ) -> dict[str, Any]:
     """Evaluate a single no-reset sequence of settled account events.
 
@@ -45,12 +48,18 @@ def evaluate_compound_chain(
     may overlap, but every entry is funded from the same cash ledger: settled
     payouts are released before each entry whose timestamp has arrived.  The
     returned ``fills`` count is therefore a consecutive, reusable-cash chain,
-    rather than an aggregate count across independent trials.
+    rather than an aggregate count across independent trials.  When
+    ``stop_after_required_fills`` is true, processing ends immediately after
+    the required number of valid entries and later events are outside the
+    bounded batch.  This keeps a ten-fill Canary result from being invalidated
+    by trades that were never part of that batch.
     """
     if required_fills <= 0:
         raise ValueError("required_fills must be positive")
     if evidence_mode not in {"authenticated", "paper_upper_bound"}:
         raise ValueError("unsupported evidence_mode")
+    if type(stop_after_required_fills) is not bool:
+        raise ValueError("stop_after_required_fills must be a bool")
     cash = _money(initial_cash, "initial_cash")
     start_cash = cash
     floor = _money(minimum_order, "minimum_order")
@@ -62,8 +71,12 @@ def evaluate_compound_chain(
     minimum_cash = cash
     pending: list[tuple[Decimal, Decimal]] = []
     previous_entry: Decimal | None = None
+    stopped_after_required = False
 
     for index, event in enumerate(events, start=1):
+        if stop_after_required_fills and len(rows) >= required_fills:
+            stopped_after_required = True
+            break
         if not isinstance(event, dict):
             failure_reason = "invalid_event"
             break
@@ -129,6 +142,9 @@ def evaluate_compound_chain(
                 "cash_after_entry": str(cash),
             }
         )
+        if stop_after_required_fills and len(rows) >= required_fills:
+            stopped_after_required = True
+            break
 
     while pending:
         _, payout_due = heapq.heappop(pending)
@@ -144,6 +160,7 @@ def evaluate_compound_chain(
         "required_fills": int(required_fills),
         "fills": fills,
         "consecutive": fills == len(rows),
+        "stopped_after_required_fills": stopped_after_required,
         "ending_cash": str(cash),
         "net_pnl": str(cash - start_cash),
         "minimum_cash": str(minimum_cash),
