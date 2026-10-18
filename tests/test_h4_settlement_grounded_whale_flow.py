@@ -1,7 +1,7 @@
 from decimal import Decimal
 import unittest
 
-from analysis.h4_settlement_grounded_whale_flow import validate_h4_chain
+from analysis.h4_settlement_grounded_whale_flow import audit_h4_source_schema, validate_h4_chain
 
 
 def bundle():
@@ -81,6 +81,18 @@ class H4SettlementGroundedWhaleFlowTests(unittest.TestCase):
         self.assertEqual(result["actual_fills"], 0)
         self.assertEqual(result["verified_canary_fills"], 0)
         self.assertIs(result["gate_passed"], False)
+
+    def test_source_schema_preflight_rejects_orderfilled_without_market_join(self):
+        result = audit_h4_source_schema([{
+            "tx_hash": "tx-1", "log_index": 0, "block_number": 1,
+            "maker": "maker", "taker": "taker", "size": "10", "price": "0.5",
+            "token_id": "token-1", "side": "BUY",
+        }])
+        self.assertEqual(result["record_count"], 1)
+        self.assertIs(result["token_market_join_ready"], False)
+        self.assertIs(result["h4_source_ready"], False)
+        self.assertIn("condition_id", result["missing_by_group"]["token_market_join"])
+        self.assertEqual(result["same_ledger_compounding_rows"], 0)
 
 
     def test_h4_rejects_quote_only_row(self):

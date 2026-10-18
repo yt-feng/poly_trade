@@ -21,6 +21,21 @@ except ImportError:  # pragma: no cover
 REQUIRED_FILLS = 10
 ZERO = Decimal("0")
 
+H4_SOURCE_GROUPS: dict[str, tuple[str, ...]] = {
+    "token_market_join": ("token_id", "condition_id", "market_slug", "outcome_index", "outcome_name"),
+    "owner_scope": ("owner", "ledger_id", "chain_id"),
+    "onchain_taker_fill": (
+        "transaction_hash", "log_index", "block_number", "maker_address",
+        "taker_address", "trader_side", "filled_shares", "fill_price",
+    ),
+    "whale_observation": (
+        "whale_address", "whale_trade_id", "whale_transaction_hash",
+        "whale_observed_ts", "whale_observation_verified",
+    ),
+    "settlement": ("settlement_status", "settlement_receipt_id", "settlement_transaction_hash"),
+    "cash_release": ("cash_release_status", "cash_release_receipt_id", "balance_checkpoint_id"),
+}
+
 
 def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
@@ -50,6 +65,56 @@ def _failure(reason: str, issues: list[dict[str, Any]] | None = None) -> dict[st
         "gate_passed": False,
         "failure_reason": reason,
         "issues": issues or [],
+    }
+
+
+def audit_h4_source_schema(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Report whether captured records can even enter the H4 validator.
+
+    This is a schema preflight, not a fill counter.  It accepts aliases used by
+    normalized V2 OrderFilled records (``tx_hash``/``taker``/``size``), but it
+    never treats those aliases as proof of owner scope or settlement.
+    """
+    rows = list(records)
+    names: set[str] = set()
+    for row in rows:
+        if isinstance(row, dict):
+            names.update(str(key) for key in row)
+    aliases = {
+        "transaction_hash": {"transaction_hash", "tx_hash"},
+        "maker_address": {"maker_address", "maker"},
+        "taker_address": {"taker_address", "taker"},
+        "trader_side": {"trader_side"},
+        "filled_shares": {"filled_shares", "size"},
+        "fill_price": {"fill_price", "price"},
+    }
+    field_presence: dict[str, bool] = {}
+    missing_by_group: dict[str, list[str]] = {}
+    for group, fields in H4_SOURCE_GROUPS.items():
+        missing: list[str] = []
+        for field in fields:
+            options = aliases.get(field, {field})
+            present = bool(options & names)
+            field_presence[field] = present
+            if not present:
+                missing.append(field)
+        missing_by_group[group] = missing
+    return {
+        "schema": "h4-source-schema-audit-v1",
+        "record_count": len(rows),
+        "field_presence": field_presence,
+        "missing_by_group": missing_by_group,
+        "token_market_join_ready": not missing_by_group["token_market_join"],
+        "owner_scoped_receipts_ready": not (
+            missing_by_group["owner_scope"]
+            or missing_by_group["settlement"]
+            or missing_by_group["cash_release"]
+        ),
+        "h4_source_ready": not any(missing_by_group.values()),
+        "strategy_evaluated": False,
+        "actual_fills": 0,
+        "verified_canary_fills": 0,
+        "same_ledger_compounding_rows": 0,
     }
 
 
@@ -183,4 +248,4 @@ def validate_h4_chain(
     return out
 
 
-__all__ = ["validate_h4_chain"]
+__all__ = ["H4_SOURCE_GROUPS", "audit_h4_source_schema", "validate_h4_chain"]
