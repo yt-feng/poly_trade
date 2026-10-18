@@ -135,6 +135,17 @@ def bundle(events=None, source=None):
             {"receipt_id": f"cash-release-{i}", "sequence_no": i, "amount": "4.40", "release_ts_ms": START + (i - 1) * 10_000 + 6_000}
             for i in range(1, 11)
         ],
+        "settlement_receipts": [
+            {
+                "receipt_id": f"settlement-{i}",
+                "sequence_no": i,
+                "market_id": MARKET_ID,
+                "settled_ts_ms": START + (i - 1) * 10_000 + 5_000,
+                "raw_payload_sha256": hashlib.sha256(f"settlement-{i}".encode()).hexdigest(),
+                "payout": "4.40",
+            }
+            for i in range(1, 11)
+        ],
         "source_events": [source_event(i) for i in range(1, 11)] if source is None else source,
         "depth_snapshots": [depth_snapshot(i) for i in range(1, 11)],
         "events": [account_event(i) for i in range(1, 11)] if events is None else events,
@@ -224,6 +235,35 @@ def test_taker_execution_cannot_be_better_than_the_bound_ask():
     result = validate_bundle_document(doc)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "executed_price_below_depth_ask"
+
+
+def test_settlement_receipt_is_required_and_bound_to_each_fill():
+    doc = bundle()
+    del doc["settlement_receipts"]
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "exactly_ten_settlement_receipts_required"
+
+
+def test_settlement_payout_must_match_the_cash_release_payout():
+    doc = bundle()
+    doc["settlement_receipts"][0]["payout"] = "0"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "settlement_payout_mismatch"
+
+
+def test_unconfirmed_or_non_independent_account_evidence_fails_closed():
+    for field, value, reason in (
+        ("status", "pending", "authenticated_event_not_confirmed"),
+        ("cash_reconciled", False, "cash_reconciliation_not_confirmed"),
+        ("independent_checkpoint", False, "independent_checkpoint_not_confirmed"),
+    ):
+        doc = bundle()
+        doc["events"][0][field] = value
+        result = validate_bundle_document(doc)
+        assert result["gate_passed"] is False
+        assert result["failure_reason"] == reason
 
 
 def test_strategy_binding_must_match_frozen_h30_config():

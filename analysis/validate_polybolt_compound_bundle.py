@@ -218,12 +218,58 @@ def _depth_snapshots(
     return out, None
 
 
+def _settlement_receipts(
+    document: dict[str, Any],
+    windows: dict[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], str | None]:
+    """Index one independently captured settlement proof per fill."""
+    receipts = document.get("settlement_receipts")
+    if not isinstance(receipts, list) or len(receipts) != REQUIRED_FILLS:
+        return {}, "exactly_ten_settlement_receipts_required"
+    out: dict[str, dict[str, Any]] = {}
+    for receipt in receipts:
+        if not isinstance(receipt, dict):
+            return {}, "invalid_settlement_receipt"
+        try:
+            receipt_id = _text(receipt.get("receipt_id"), "settlement_receipt_id")
+            sequence = receipt.get("sequence_no")
+            if type(sequence) is not int or not 1 <= sequence <= REQUIRED_FILLS:
+                return {}, "settlement_receipt_sequence_invalid"
+            market_id = _text(receipt.get("market_id"), "settlement_market_id")
+            settled_ms = receipt.get("settled_ts_ms")
+            if not _integer(settled_ms):
+                return {}, "settlement_timestamp_invalid"
+            payload_hash = _hash(receipt.get("raw_payload_sha256"), "settlement_raw_payload_sha256")
+            payout = _decimal(receipt.get("payout"), "settlement_payout")
+        except ValueError as exc:
+            return {}, str(exc)
+        window = windows.get(market_id)
+        if window is None:
+            return {}, "settlement_receipt_market_unknown"
+        if payout < 0:
+            return {}, "settlement_payout_negative"
+        if receipt_id in out:
+            return {}, "duplicate_settlement_receipt_id"
+        out[receipt_id] = {
+            "receipt_id": receipt_id,
+            "sequence_no": sequence,
+            "market_id": market_id,
+            "settled_ts_ms": settled_ms,
+            "raw_payload_sha256": payload_hash,
+            "payout": payout,
+        }
+    if {row["sequence_no"] for row in out.values()} != set(range(1, REQUIRED_FILLS + 1)):
+        return {}, "settlement_receipt_sequence_coverage_mismatch"
+    return out, None
+
+
 def _validate_same_ledger(
     document: dict[str, Any],
     events: list[dict[str, Any]],
     windows: dict[str, dict[str, Any]],
     source_by_ref: dict[tuple[str, str, int], dict[str, Any]],
     depth_by_ref: dict[tuple[str, str], dict[str, Any]],
+    settlement_by_id: dict[str, dict[str, Any]],
     *,
     required_fills: int,
 ) -> str | None:
@@ -296,6 +342,12 @@ def _validate_same_ledger(
                 return "ledger_id_mismatch"
             if _text(row.get("chain_id"), "event_chain_id") != chain_id:
                 return "chain_id_mismatch"
+            if row.get("status") != "confirmed":
+                return "authenticated_event_not_confirmed"
+            if row.get("cash_reconciled") is not True:
+                return "cash_reconciliation_not_confirmed"
+            if row.get("independent_checkpoint") is not True:
+                return "independent_checkpoint_not_confirmed"
             sequence = row.get("sequence_no")
             if type(sequence) is not int or sequence < 1 or sequence > REQUIRED_FILLS:
                 return "sequence_no_invalid"
@@ -384,6 +436,16 @@ def _validate_same_ledger(
             # a later entry or for the closing-balance reconciliation.
             if receipt["release_ts_ms"] <= entry_ms:
                 return "cash_release_before_entry"
+            settlement_id = _text(row.get("settlement_receipt_id"), "settlement_receipt_id")
+            settlement = settlement_by_id.get(settlement_id)
+            if settlement is None:
+                return "settlement_receipt_not_in_bundle"
+            if settlement["sequence_no"] != sequence or settlement["market_id"] != market_id:
+                return "settlement_receipt_link_mismatch"
+            if settlement["settled_ts_ms"] < entry_ms:
+                return "settlement_before_entry"
+            if settlement["settled_ts_ms"] > release_ms:
+                return "settlement_after_cash_release"
             entry_cost = _decimal(row.get("entry_cost"), "entry_cost")
             fee = _decimal(row.get("fee"), "fee")
             payout = _decimal(row.get("payout"), "payout")
@@ -424,6 +486,8 @@ def _validate_same_ledger(
                 return "taker_fee_amount_mismatch"
             if receipt["amount"] != payout or receipt["release_ts_ms"] != release_ms:
                 return "cash_release_amount_mismatch"
+            if settlement["payout"] != payout:
+                return "settlement_payout_mismatch"
             due = Decimal("0")
             due_receipt_ids: set[str] = set()
             for prior in ordered:
@@ -486,6 +550,9 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
     depth_by_ref, depth_error = _depth_snapshots(document, windows)
     if depth_error:
         return _fail(depth_error, event_count=len(events), source_event_count=len(source_events))
+    settlement_by_id, settlement_error = _settlement_receipts(document, windows)
+    if settlement_error:
+        return _fail(settlement_error, event_count=len(events), source_event_count=len(source_events))
     account_market_ids: set[str] = set()
     for row in events:
         if not isinstance(row, dict) or not isinstance(row.get("market_id"), str) or row.get("market_id") not in windows:
@@ -526,6 +593,7 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
         windows,
         source_by_ref,
         depth_by_ref,
+        settlement_by_id,
         required_fills=required_fills,
     )
     if ledger_failure:
@@ -559,6 +627,7 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
         "source_reconnect_segments": manifest["reconnect_segments"],
         "market_window_count": len(windows),
         "depth_snapshot_count": len(depth_by_ref),
+        "settlement_receipt_count": len(settlement_by_id),
         "fills": int(result.get("fills", 0)),
         "consecutive": bool(result.get("consecutive", False)),
         "paper_replay_passed": bool(result.get("paper_replay_passed", False)),
@@ -572,6 +641,7 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
         "cash_amounts_reconciled": True,
         "source_fill_references_verified": True,
         "depth_evidence_verified": True,
+        "settlement_evidence_verified": True,
     }
 
 
