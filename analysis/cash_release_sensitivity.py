@@ -41,11 +41,16 @@ def simulate_cash_locked(
     min_order_shares: float = 5.0,
     minimum_free_cash_after_entry: float = 0.0,
     single_position_only: bool = False,
+    minimum_capacity_ratio: float | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     if not math.isfinite(float(min_order_shares)) or float(min_order_shares) < 0:
         raise ValueError("min_order_shares must be finite and non-negative")
     if not math.isfinite(float(minimum_free_cash_after_entry)) or float(minimum_free_cash_after_entry) < 0:
         raise ValueError("minimum_free_cash_after_entry must be finite and non-negative")
+    if minimum_capacity_ratio is not None and (
+        not math.isfinite(float(minimum_capacity_ratio)) or float(minimum_capacity_ratio) <= 0
+    ):
+        raise ValueError("minimum_capacity_ratio must be finite and positive")
     d = df.sort_values("first_quote_ts").reset_index(drop=True)
     side = d[f"{strategy}_side"].fillna("skip").astype(str).to_numpy()
     minute = d[f"{strategy}_minute"].to_numpy(dtype=int)
@@ -95,6 +100,7 @@ def simulate_cash_locked(
     blocked_cash = 0
     blocked_pending = 0
     blocked_single_position = 0
+    blocked_capacity_ratio = 0
     last_now = None
 
     def release_until(now: float) -> None:
@@ -131,8 +137,14 @@ def simulate_cash_locked(
         target_cost = cash * max(fraction[i], 0.0)
         cost = min(target_cost, cash, capacity)
         required_cost = max(float(min_cost), float(min_order_shares) * float(fill_price[i]))
+        required_shares = required_cost / float(fill_price[i])
+        required_fee = study.trade_fee_usd(required_shares, float(fill_price[i]), fee_mode, fee_rate, fee_exponent)
+        required_cash = required_cost + required_fee
         if cash < required_cost or capacity < required_cost:
             blocked_cash += 1
+            continue
+        if minimum_capacity_ratio is not None and capacity / required_cash < float(minimum_capacity_ratio) - 1e-12:
+            blocked_capacity_ratio += 1
             continue
         cost = min(max(cost, required_cost), cash, capacity)
         if not math.isfinite(cost) or cost < float(min_cost) or fill_price[i] <= 0:
@@ -209,6 +221,8 @@ def simulate_cash_locked(
         "blocked_pending_events": int(blocked_pending),
         "single_position_only": bool(single_position_only),
         "blocked_single_position_events": int(blocked_single_position),
+        "minimum_capacity_ratio": None if minimum_capacity_ratio is None else float(minimum_capacity_ratio),
+        "blocked_capacity_ratio_events": int(blocked_capacity_ratio),
         "profit_factor": float(wins / abs(losses)) if losses else float("nan"),
         "win_rate": float(sum(x > 0 for x in realized) / len(realized)) if realized else float("nan"),
         "settlement_seconds": SETTLEMENT_SECONDS,

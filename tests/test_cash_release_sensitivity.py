@@ -134,6 +134,22 @@ class CashReleaseSensitivityTests(unittest.TestCase):
         self.assertEqual(metrics["blocked_single_position_events"], 1)
         self.assertTrue(metrics["single_position_only"])
 
+    def test_relative_capacity_gate_uses_fee_aware_minimum_cash(self):
+        _, metrics = simulate_cash_locked(
+            self.frame(),
+            "classic_early_drop_down_mean_positive",
+            ExecutionConfig(),
+            10.0,
+            5.0,
+            600.0,
+            fee_mode="polymarket_taker",
+            fee_rate=0.0,
+            minimum_capacity_ratio=6.0,
+        )
+        self.assertEqual(metrics["trades"], 0)
+        self.assertEqual(metrics["blocked_capacity_ratio_events"], 2)
+        self.assertEqual(metrics["minimum_capacity_ratio"], 6.0)
+
 
 if __name__ == "__main__":
     unittest.main()
