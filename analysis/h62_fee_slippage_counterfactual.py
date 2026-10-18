@@ -42,6 +42,7 @@ SOURCE_COMMIT = "bbda5f2050685f63153621a54641ebdfab943487"
 STRATEGY = "v1_active_fill_mix"
 FROZEN_H61_FAILED_CELLS = (
     (1, "nominal"),
+    (1, "stress"),
     (2, "nominal"),
     (2, "stress"),
     (5, "nominal"),
@@ -132,7 +133,7 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
     else:
         root_cause = "No H61 failure cell passes any zero-fee or zero-slippage counterfactual; the blocker is signal/regime instability rather than the modeled fee/slippage cost."
     summary = {
-        "format": "old-clean-h62-fee-slippage-counterfactual-v1",
+        "format": "old-clean-h62-fee-slippage-counterfactual-retry1-v1",
         "source_root": str(source_root),
         "source_commit": source_commit,
         "observed_source_commit": observed,
