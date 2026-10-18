@@ -32,7 +32,7 @@ def _paper(*, stable: bool) -> dict:
     }
 
 
-def _state(*, stable: bool, binding: bool) -> dict:
+def _state(*, stable: bool, binding: bool, receipts: bool = False) -> dict:
     return {
         "actual_fills": 10 if binding else 0,
         "live_orders_enabled": False,
@@ -40,6 +40,12 @@ def _state(*, stable: bool, binding: bool) -> dict:
             "authenticated_owner_scoped_bundle_available": binding,
             "btc_five_minute_bundle_available": binding,
             "verified_canary_fills": 10 if binding else 0,
+            "owner_scoped_settlement_rows": 10 if receipts else 0,
+            "owner_scoped_cash_release_rows": 10 if receipts else 0,
+            "owner_scoped_balance_checkpoint_rows": 10 if receipts else 0,
+            "settlement_evidence_verified": receipts,
+            "cash_release_evidence_verified": receipts,
+            "balance_checkpoint_verified": receipts,
         },
         "latest_orderfilled_binding_audit": {
             "verification": {
@@ -57,15 +63,21 @@ def _state(*, stable: bool, binding: bool) -> dict:
 
 class CompoundReadinessContractTest(unittest.TestCase):
     def test_all_gates_are_required(self):
-        report = build_report(_state(stable=True, binding=True), _paper(stable=True))
+        report = build_report(_state(stable=True, binding=True, receipts=True), _paper(stable=True))
         self.assertTrue(report["settlement_evidence"]["ready"])
         self.assertTrue(report["canary_ready"])
 
     def test_block_stress_cannot_be_bypassed_by_receipts(self):
-        report = build_report(_state(stable=False, binding=True), _paper(stable=False))
+        report = build_report(_state(stable=False, binding=True, receipts=True), _paper(stable=False))
         self.assertTrue(report["settlement_evidence"]["ready"])
         self.assertFalse(report["canary_ready"])
         self.assertIn("paper_block_stress_unstable", report["hard_blockers"])
+
+    def test_receipt_components_are_independent_gates(self):
+        report = build_report(_state(stable=True, binding=True), _paper(stable=True))
+        self.assertTrue(report["orderfilled_binding"]["ready"])
+        self.assertFalse(report["settlement_evidence"]["ready"])
+        self.assertIn("cash_release_receipts_missing_or_unverified", report["hard_blockers"])
 
     def test_synthetic_binding_is_not_admissible(self):
         report = build_report(_state(stable=True, binding=False), _paper(stable=True))

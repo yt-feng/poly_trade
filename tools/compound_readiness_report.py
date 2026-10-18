@@ -156,12 +156,30 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
     actual = state.get("actual_fills")
     if type(verified) is not int or type(actual) is not int:
         raise ValueError("FILL_COUNTS_MUST_BE_INTEGERS")
+    evidence_counts = {
+        "settlement": receipt.get("owner_scoped_settlement_rows", 0),
+        "cash_release": receipt.get("owner_scoped_cash_release_rows", 0),
+        "balance_checkpoint": receipt.get("owner_scoped_balance_checkpoint_rows", 0),
+    }
+    if any(type(value) is not int for value in evidence_counts.values()):
+        raise ValueError("RECEIPT_EVIDENCE_COUNTS_MUST_BE_INTEGERS")
+    evidence_flags = {
+        "settlement": receipt.get("settlement_evidence_verified") is True,
+        "cash_release": receipt.get("cash_release_evidence_verified") is True,
+        "balance_checkpoint": receipt.get("balance_checkpoint_verified") is True,
+    }
+    evidence_ready = {
+        key: evidence_flags[key] and evidence_counts[key] == 10
+        for key in evidence_counts
+    }
+    all_evidence_ready = all(evidence_ready.values())
     settlement_evidence_ready = (
         owner_bundle
         and btc_bundle
         and verified >= 10
         and actual >= 10
         and orderfilled["ready"]
+        and all_evidence_ready
     )
     # A pooled prefix can hide a contiguous time block that cannot produce ten
     # fills or loses cash.  Real receipts do not repair that paper instability;
@@ -180,6 +198,9 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
         hard_blockers.append("onchain_orderfilled_binding_missing_or_unverified")
     if not frontier["block_stress_stable"]:
         hard_blockers.append("paper_block_stress_unstable")
+    for key, ready in evidence_ready.items():
+        if not ready:
+            hard_blockers.append(f"{key}_receipts_missing_or_unverified")
     return {
         "format": "compound-readiness-report-v1",
         "source_scope": "existing_state_and_paper_artifact_only",
@@ -192,6 +213,9 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
             "btc_five_minute_bundle": btc_bundle,
             "actual_fills": actual,
             "verified_canary_fills": verified,
+            "evidence_counts": evidence_counts,
+            "evidence_verified": evidence_flags,
+            "evidence_ready": evidence_ready,
             "ready": settlement_evidence_ready,
         },
         "canary_ready": canary_ready,

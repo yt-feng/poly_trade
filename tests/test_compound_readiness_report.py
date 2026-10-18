@@ -25,7 +25,7 @@ def paper_artifact(*, block_failure: bool = True) -> dict:
     }
 
 
-def state(*, bundle: bool = False, fills: int = 0, binding: bool = False) -> dict:
+def state(*, bundle: bool = False, fills: int = 0, binding: bool = False, receipts: bool = False) -> dict:
     return {
         "actual_fills": fills,
         "live_orders_enabled": False,
@@ -33,6 +33,12 @@ def state(*, bundle: bool = False, fills: int = 0, binding: bool = False) -> dic
             "authenticated_owner_scoped_bundle_available": bundle,
             "btc_five_minute_bundle_available": bundle,
             "verified_canary_fills": fills,
+            "owner_scoped_settlement_rows": 10 if receipts else 0,
+            "owner_scoped_cash_release_rows": 10 if receipts else 0,
+            "owner_scoped_balance_checkpoint_rows": 10 if receipts else 0,
+            "settlement_evidence_verified": receipts,
+            "cash_release_evidence_verified": receipts,
+            "balance_checkpoint_verified": receipts,
         },
         "latest_orderfilled_binding_audit": {
             "verification": {
@@ -58,14 +64,14 @@ def test_report_separates_pooled_prefix_from_block_stress_and_receipts():
 
 
 def test_report_can_only_be_ready_with_ten_settled_fills_and_consistent_protocol():
-    report = build_report(state(bundle=True, fills=10, binding=True), paper_artifact(block_failure=False))
+    report = build_report(state(bundle=True, fills=10, binding=True, receipts=True), paper_artifact(block_failure=False))
     assert report["paper_frontier"]["pooled_frontier_consistent"] is True
     assert report["settlement_evidence"]["ready"] is True
     assert report["canary_ready"] is True
 
 
 def test_block_stress_blocks_canary_admission_even_with_real_settlement_evidence():
-    report = build_report(state(bundle=True, fills=10, binding=True), paper_artifact(block_failure=True))
+    report = build_report(state(bundle=True, fills=10, binding=True, receipts=True), paper_artifact(block_failure=True))
     assert report["settlement_evidence"]["ready"] is True
     assert report["canary_ready"] is False
     assert report["paper_frontier"]["block_stress_stable"] is False
@@ -79,6 +85,15 @@ def test_report_fails_closed_when_binding_audit_is_absent():
     assert report["orderfilled_binding"]["ready"] is False
     assert report["settlement_evidence"]["ready"] is False
     assert "onchain_orderfilled_binding_missing_or_unverified" in report["hard_blockers"]
+
+
+def test_report_fails_closed_when_receipt_components_are_absent():
+    report = build_report(state(bundle=True, fills=10, binding=True), paper_artifact(block_failure=False))
+    assert report["orderfilled_binding"]["ready"] is True
+    assert report["settlement_evidence"]["ready"] is False
+    assert "settlement_receipts_missing_or_unverified" in report["hard_blockers"]
+    assert "cash_release_receipts_missing_or_unverified" in report["hard_blockers"]
+    assert "balance_checkpoint_receipts_missing_or_unverified" in report["hard_blockers"]
 
 
 def test_report_fails_closed_when_binding_is_not_explicitly_non_synthetic():
