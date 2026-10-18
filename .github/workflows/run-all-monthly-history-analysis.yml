@@ -90,7 +90,16 @@ jobs:
           git add reports/all_monthly_runs_5m_research reports/strategy_definitions_all.md
           if ! git diff --cached --quiet; then
             git commit -m 'Update all monthly_runs 5m strategy research outputs [skip ci]'
-            git push
+            for attempt in 1 2 3 4 5; do
+              git fetch origin main
+              git rebase origin/main
+              if git push origin HEAD:main; then
+                exit 0
+              fi
+              sleep $((attempt * 2))
+            done
+            echo 'Unable to publish generated outputs after five fast-forward retries.' >&2
+            exit 1
           else
             echo 'No output changes to commit.'
           fi
