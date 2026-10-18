@@ -28,6 +28,7 @@ def paper_artifact(*, block_failure: bool = True) -> dict:
 def state(*, bundle: bool = False, fills: int = 0, binding: bool = False, receipts: bool = False) -> dict:
     return {
         "actual_fills": fills,
+        "same_ledger_compounding_rows": 10 if binding else 0,
         "live_orders_enabled": False,
         "receipt_boundary_status": {
             "authenticated_owner_scoped_bundle_available": bundle,
@@ -94,6 +95,15 @@ def test_report_fails_closed_when_receipt_components_are_absent():
     assert "settlement_receipts_missing_or_unverified" in report["hard_blockers"]
     assert "cash_release_receipts_missing_or_unverified" in report["hard_blockers"]
     assert "balance_checkpoint_receipts_missing_or_unverified" in report["hard_blockers"]
+
+
+def test_report_fails_closed_when_same_ledger_row_count_is_not_exactly_ten():
+    fixture = state(bundle=True, fills=10, binding=True, receipts=True)
+    fixture["same_ledger_compounding_rows"] = 9
+    report = build_report(fixture, paper_artifact(block_failure=False))
+    assert report["orderfilled_binding"]["ready"] is True
+    assert report["settlement_evidence"]["ready"] is False
+    assert "same_ledger_compounding_rows_missing_or_not_exactly_ten" in report["hard_blockers"]
 
 
 def test_report_fails_closed_when_binding_is_not_explicitly_non_synthetic():

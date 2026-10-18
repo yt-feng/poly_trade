@@ -156,6 +156,10 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
     actual = state.get("actual_fills")
     if type(verified) is not int or type(actual) is not int:
         raise ValueError("FILL_COUNTS_MUST_BE_INTEGERS")
+    ledger_rows = state.get("same_ledger_compounding_rows")
+    if type(ledger_rows) is not int:
+        raise ValueError("SAME_LEDGER_COMPOUNDING_ROWS_MUST_BE_INTEGER")
+    same_ledger_ready = ledger_rows == 10
     evidence_counts = {
         "settlement": receipt.get("owner_scoped_settlement_rows", 0),
         "cash_release": receipt.get("owner_scoped_cash_release_rows", 0),
@@ -179,6 +183,7 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
         and verified >= 10
         and actual >= 10
         and orderfilled["ready"]
+        and same_ledger_ready
         and all_evidence_ready
     )
     # A pooled prefix can hide a contiguous time block that cannot produce ten
@@ -194,6 +199,8 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
         hard_blockers.append("authenticated_owner_scoped_btc_five_minute_bundle_missing")
     if verified < 10 or actual < 10:
         hard_blockers.append("ten_verified_same_ledger_fills_missing")
+    if not same_ledger_ready:
+        hard_blockers.append("same_ledger_compounding_rows_missing_or_not_exactly_ten")
     if not orderfilled["ready"]:
         hard_blockers.append("onchain_orderfilled_binding_missing_or_unverified")
     if not frontier["block_stress_stable"]:
@@ -206,6 +213,11 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
         "source_scope": "existing_state_and_paper_artifact_only",
         "required_fills": 10,
         "same_ledger_contract": "one chronological evolving cash ledger; no reset or concatenation",
+        "same_ledger": {
+            "rows": ledger_rows,
+            "required_rows": 10,
+            "ready": same_ledger_ready,
+        },
         "paper_frontier": frontier,
         "orderfilled_binding": orderfilled,
         "settlement_evidence": {

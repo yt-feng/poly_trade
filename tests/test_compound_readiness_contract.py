@@ -35,6 +35,7 @@ def _paper(*, stable: bool) -> dict:
 def _state(*, stable: bool, binding: bool, receipts: bool = False) -> dict:
     return {
         "actual_fills": 10 if binding else 0,
+        "same_ledger_compounding_rows": 10 if binding else 0,
         "live_orders_enabled": False,
         "receipt_boundary_status": {
             "authenticated_owner_scoped_bundle_available": binding,
@@ -78,6 +79,13 @@ class CompoundReadinessContractTest(unittest.TestCase):
         self.assertTrue(report["orderfilled_binding"]["ready"])
         self.assertFalse(report["settlement_evidence"]["ready"])
         self.assertIn("cash_release_receipts_missing_or_unverified", report["hard_blockers"])
+
+    def test_same_ledger_count_is_independent_gate(self):
+        state = _state(stable=True, binding=True, receipts=True)
+        state["same_ledger_compounding_rows"] = 9
+        report = build_report(state, _paper(stable=True))
+        self.assertFalse(report["settlement_evidence"]["ready"])
+        self.assertIn("same_ledger_compounding_rows_missing_or_not_exactly_ten", report["hard_blockers"])
 
     def test_synthetic_binding_is_not_admissible(self):
         report = build_report(_state(stable=True, binding=False), _paper(stable=True))
