@@ -93,18 +93,29 @@ def _orderfilled_frontier(state: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("ORDERFILLED_BINDING_AUDIT_REQUIRED")
     verification = audit.get("verification")
     decision = audit.get("decision")
-    if not isinstance(verification, dict) or not isinstance(decision, dict):
-        raise ValueError("ORDERFILLED_BINDING_AUDIT_SHAPE_REQUIRED")
-    owner_scope = verification.get("current_owner_bundle_available") is True
-    synthetic_only = verification.get("synthetic_only") is True
-    same_ledger_rows = decision.get("same_ledger_compounding_rows")
+    if isinstance(verification, dict) and isinstance(decision, dict):
+        # Full binding-review.json shape.
+        owner_scope = verification.get("current_owner_bundle_available") is True
+        synthetic_only = verification.get("synthetic_only") is True
+        same_ledger_rows = decision.get("same_ledger_compounding_rows")
+        canary_ready = decision.get("canary_ready") is True
+        boundary = audit.get("evidence_boundary")
+    else:
+        # active-episode.json stores a compact, already-sanitized summary.
+        # Missing row counts remain zero; the summary can never manufacture
+        # an admissible ten-row binding.
+        owner_scope = audit.get("current_owner_bundle_available") is True
+        synthetic_only = audit.get("synthetic_only") is True
+        same_ledger_rows = audit.get("same_ledger_compounding_rows", 0)
+        canary_ready = audit.get("canary_ready") is True
+        boundary = audit.get("evidence_boundary")
     if type(same_ledger_rows) is not int:
         raise ValueError("ORDERFILLED_SAME_LEDGER_ROWS_MUST_BE_INTEGER")
     ready = (
         owner_scope
         and not synthetic_only
         and same_ledger_rows == 10
-        and decision.get("canary_ready") is True
+        and canary_ready
     )
     return {
         "reported": True,
@@ -113,8 +124,7 @@ def _orderfilled_frontier(state: dict[str, Any]) -> dict[str, Any]:
         "same_ledger_rows": same_ledger_rows,
         "ready": ready,
         "synthetic_only": synthetic_only,
-        "evidence_boundary": audit.get("evidence_boundary")
-        or "binding_reported_without_evidence_boundary",
+        "evidence_boundary": boundary or "binding_reported_without_evidence_boundary",
     }
 
 
