@@ -12,6 +12,7 @@ import argparse
 import base64
 import binascii
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -69,18 +70,31 @@ def validate_dispatch(mode: str, frozen_input_b64: str | None, initial_cash: flo
     expected = frozen.get("sha256")
     payload = dict(frozen)
     payload.pop("sha256", None)
-    if expected != digest(payload) or frozen.get("version") != VERSION:
+    try:
+        integrity_ok = expected == digest(payload)
+        protocol_ok = frozen.get("protocol_sha256") == digest(protocol_contract())
+    except Exception as exc:
+        raise PreflightError("FROZEN_MODEL_INTEGRITY_MISMATCH") from exc
+    if not integrity_ok or frozen.get("version") != VERSION:
         raise PreflightError("FROZEN_MODEL_INTEGRITY_MISMATCH")
-    if frozen.get("protocol_sha256") != digest(protocol_contract()):
+    if not protocol_ok:
         raise PreflightError("FROZEN_MODEL_PROTOCOL_CHANGED")
     if frozen.get("initial_cash") != initial_cash:
         raise PreflightError("FROZEN_INITIAL_CASH_CHANGED")
+    if "model" not in frozen or "threshold" not in frozen:
+        raise PreflightError("FROZEN_EPISODE_INVALID")
+    begin = frozen.get("forward_min_window_start_ms")
+    if type(begin) is not int or begin < 0:
+        raise PreflightError("FROZEN_EPISODE_INVALID")
+    threshold = frozen.get("threshold")
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not math.isfinite(threshold):
+        raise PreflightError("FROZEN_EPISODE_INVALID")
     if frozen.get("kind") == "research_challenger":
         try:
             validate_research_challenger(frozen)
-        except (TypeError, ValueError) as exc:
+        except Exception as exc:
             raise PreflightError("FROZEN_EPISODE_INVALID") from exc
-    elif frozen.get("kind") not in (None, ""):
+    elif frozen.get("kind") is not None:
         raise PreflightError("FROZEN_KIND_INVALID")
     return {"mode": mode, "forward_input_checked": True}
 

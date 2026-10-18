@@ -57,6 +57,20 @@ class DispatchPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(PreflightError, "FROZEN_INITIAL_CASH_CHANGED"):
             validate_dispatch("forward", encode(payload))
 
+    def test_forward_rejects_missing_episode_structure(self):
+        payload = frozen_payload()
+        del payload["forward_min_window_start_ms"]
+        payload["sha256"] = digest({k: v for k, v in payload.items() if k != "sha256"})
+        with self.assertRaisesRegex(PreflightError, "FROZEN_EPISODE_INVALID"):
+            validate_dispatch("forward", encode(payload))
+
+    def test_forward_rejects_unknown_kind(self):
+        payload = frozen_payload()
+        payload["kind"] = "live"
+        payload["sha256"] = digest({k: v for k, v in payload.items() if k != "sha256"})
+        with self.assertRaisesRegex(PreflightError, "FROZEN_KIND_INVALID"):
+            validate_dispatch("forward", encode(payload))
+
     def test_unknown_mode_is_rejected(self):
         with self.assertRaisesRegex(PreflightError, "RESEARCH_MODE_INVALID"):
             validate_dispatch("live", None)
