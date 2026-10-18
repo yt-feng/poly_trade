@@ -144,3 +144,25 @@ def test_equal_entry_timestamps_are_not_a_chronological_chain():
     assert result["gate_passed"] is False
     assert result["fills"] == 1
     assert result["failure_reason"] == "events_not_chronological"
+
+
+def test_two_reset_ledgers_cannot_be_concatenated_when_identity_is_present():
+    first = event(0)
+    second = event(1)
+    for row in (first, second):
+        row["ledger_id"] = "ledger-1"
+        row["chain_id"] = "chain-1"
+    second["ledger_id"] = "ledger-2"
+    result = evaluate_compound_chain(
+        [first, second], required_fills=2, evidence_mode="paper_upper_bound"
+    )
+    assert result["fills"] == 1
+    assert result["failure_reason"] == "ledger_id_mismatch"
+
+
+def test_partial_ledger_identity_is_not_silently_ignored():
+    row = event(0)
+    row["ledger_id"] = "ledger-1"
+    result = evaluate_compound_chain([row], required_fills=1, evidence_mode="paper_upper_bound")
+    assert result["fills"] == 0
+    assert result["failure_reason"] == "ledger_identity_incomplete"

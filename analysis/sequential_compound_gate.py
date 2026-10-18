@@ -72,6 +72,11 @@ def evaluate_compound_chain(
     pending: list[tuple[Decimal, Decimal]] = []
     previous_entry: Decimal | None = None
     stopped_after_required = False
+    # Paper rows normally do not carry account identities.  When a caller
+    # does provide them, preserve the same-ledger contract instead of silently
+    # accepting two reset ledgers concatenated into one ten-row sequence.
+    ledger_id: str | None = None
+    chain_id: str | None = None
 
     for index, event in enumerate(events, start=1):
         if stop_after_required_fills and len(rows) >= required_fills:
@@ -80,6 +85,21 @@ def evaluate_compound_chain(
         if not isinstance(event, dict):
             failure_reason = "invalid_event"
             break
+        supplied_ledger = str(event.get("ledger_id", "")).strip()
+        supplied_chain = str(event.get("chain_id", "")).strip()
+        if supplied_ledger or supplied_chain:
+            if not supplied_ledger or not supplied_chain:
+                failure_reason = "ledger_identity_incomplete"
+                break
+            if ledger_id is None:
+                ledger_id = supplied_ledger
+                chain_id = supplied_chain
+            elif supplied_ledger != ledger_id:
+                failure_reason = "ledger_id_mismatch"
+                break
+            elif supplied_chain != chain_id:
+                failure_reason = "chain_id_mismatch"
+                break
         status = str(event.get("status", "")).lower()
         accepted_statuses = {"confirmed"} if evidence_mode == "authenticated" else {"confirmed", "paper"}
         if status not in accepted_statuses:
