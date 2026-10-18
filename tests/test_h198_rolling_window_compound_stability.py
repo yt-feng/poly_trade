@@ -7,7 +7,7 @@ import h198_rolling_window_compound_stability as h198
 
 
 def test_rolling_windows_overlap_without_reordering_or_concatenation():
-    windows = h198.rolling_windows(["r1", "r2", "r3", "r4"], window_runs=3)
+    windows = h198.rolling_windows(["r1", "r2", "r3", "r4"], window_runs=3, stride=1)
     assert [window["runs"] for window in windows] == [["r1", "r2", "r3"], ["r2", "r3", "r4"]]
     assert windows[0]["start_run"] == "r1"
     assert windows[1]["end_run"] == "r4"
@@ -20,3 +20,12 @@ def test_rolling_windows_reject_invalid_size():
         assert str(exc) == "INSUFFICIENT_RUNS_FOR_WINDOW"
     else:
         raise AssertionError("expected insufficient-run failure")
+
+
+def test_rolling_windows_reject_invalid_stride():
+    try:
+        h198.rolling_windows(["r1", "r2", "r3"], window_runs=2, stride=0)
+    except ValueError as exc:
+        assert str(exc) == "WINDOW_STRIDE_MUST_BE_POSITIVE"
+    else:
+        raise AssertionError("expected invalid-stride failure")

@@ -3,9 +3,11 @@
 H197 showed that a registered strategy can pass an aggregate holdout prefix
 while its non-overlapping chronological blocks lose opportunity continuity.
 H198 measures that failure mode without changing the signal, fitting a model,
-collecting data, or selecting on holdout: every already-registered candidate
-is replayed in every predeclared overlapping 12-run window under the frozen
-fee, depth, share-floor and cash-release contract.
+collecting data, or selecting on holdout: the frozen H30 candidate and the
+already-registered H197 challenger are replayed in predeclared overlapping
+12-run windows under the frozen fee, depth, share-floor and cash-release
+contract. The narrowed pair keeps the audit within a bounded cloud budget;
+it is a diagnostic comparison, not a new strategy search.
 
 Each window starts a fresh diagnostic $10 ledger. Windows are never
 concatenated and their counts are not Canary fills. This is a stability
@@ -33,13 +35,17 @@ SOURCE_COMMIT = "bbda5f2050685f63153621a54641ebdfab943487"
 INITIAL_CASH = 10.0
 REQUIRED_FILLS = 10
 WINDOW_RUNS = 12
+WINDOW_STRIDE = 4
 ROBUST_WINDOW_FRACTION = 0.80
+AUDIT_CANDIDATES = ("h30_move_uncertainty", "classic_breakout_up")
 
 
-def rolling_windows(runs: list[str], window_runs: int = WINDOW_RUNS) -> list[dict[str, Any]]:
+def rolling_windows(runs: list[str], window_runs: int = WINDOW_RUNS, stride: int = WINDOW_STRIDE) -> list[dict[str, Any]]:
     """Return overlapping chronological windows without resetting run order."""
     if window_runs <= 0:
         raise ValueError("WINDOW_RUNS_MUST_BE_POSITIVE")
+    if stride <= 0:
+        raise ValueError("WINDOW_STRIDE_MUST_BE_POSITIVE")
     if len(runs) < window_runs:
         raise ValueError("INSUFFICIENT_RUNS_FOR_WINDOW")
     return [
@@ -49,7 +55,7 @@ def rolling_windows(runs: list[str], window_runs: int = WINDOW_RUNS) -> list[dic
             "end_run": str(runs[index + window_runs - 1]),
             "runs": [str(name) for name in runs[index : index + window_runs]],
         }
-        for index in range(len(runs) - window_runs + 1)
+        for index in range(0, len(runs) - window_runs + 1, stride)
     ]
 
 
@@ -82,7 +88,10 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
     ).strip()
     if observed != source_commit:
         raise RuntimeError(f"SOURCE_COMMIT_MISMATCH:{observed}:{source_commit}")
-    frame, runs = registry.prepare(source_root, list(registry.CANDIDATES))
+    unknown = sorted(set(AUDIT_CANDIDATES) - set(registry.CANDIDATES))
+    if unknown:
+        raise RuntimeError(f"AUDIT_CANDIDATE_NOT_REGISTERED:{unknown}")
+    frame, runs = registry.prepare(source_root, list(AUDIT_CANDIDATES))
     if len(runs) != 83:
         raise RuntimeError(f"SOURCE_SNAPSHOT_RUN_COUNT_MISMATCH:{len(runs)}")
     test_runs = runs[4:]
@@ -90,7 +99,7 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
 
     rows: list[dict[str, Any]] = []
     for window in windows:
-        for candidate in registry.CANDIDATES:
+        for candidate in AUDIT_CANDIDATES:
             for slippage in h197.SLIPPAGES:
                 for depth_floor in h197.DEPTH_FLOORS:
                     rows.append({
@@ -103,12 +112,12 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
 
     cell_summaries = [
         _cell_summary(rows, candidate, slippage, depth_floor)
-        for candidate in registry.CANDIDATES
+        for candidate in AUDIT_CANDIDATES
         for slippage in h197.SLIPPAGES
         for depth_floor in h197.DEPTH_FLOORS
     ]
     candidate_summaries: list[dict[str, Any]] = []
-    for candidate in registry.CANDIDATES:
+    for candidate in AUDIT_CANDIDATES:
         cells = [row for row in cell_summaries if row["candidate"] == candidate]
         candidate_summaries.append({
             "candidate": candidate,
@@ -127,11 +136,12 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
         "observed_source_commit": observed,
         "complete_runs": len(runs),
         "feature_rows": len(frame),
-        "candidate_count": len(registry.CANDIDATES),
-        "candidates": list(registry.CANDIDATES),
+        "candidate_count": len(AUDIT_CANDIDATES),
+        "candidates": list(AUDIT_CANDIDATES),
         "window_count": len(windows),
         "window_runs": WINDOW_RUNS,
-        "selection_rule": "none; every already-registered candidate is audited in all predeclared overlapping chronological windows; no holdout selection or tuning",
+        "window_stride": WINDOW_STRIDE,
+        "selection_rule": "none; the frozen H30 candidate and the already-registered H197 challenger are audited in all predeclared overlapping chronological windows; no holdout selection or tuning",
         "robust_window_gate": f"at least {ROBUST_WINDOW_FRACTION:.0%} of rolling windows are ten-fill growth-positive in each fee/depth cell; diagnostic only and does not promote a strategy",
         "cell_summaries": cell_summaries,
         "candidate_summaries": candidate_summaries,
