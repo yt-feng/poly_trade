@@ -5,6 +5,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import subprocess
 
 import pandas as pd
 
@@ -44,7 +45,12 @@ def chronological_blocks(runs: list[str], sizes: tuple[int, ...]) -> list[list[s
     return blocks
 
 
-def evaluate(source_root: Path, output: Path) -> dict[str, object]:
+def evaluate(source_root: Path, output: Path, source_commit: str | None = None) -> dict[str, object]:
+    observed_source_commit = subprocess.check_output(
+        ["git", "-C", str(source_root.parent.parent), "rev-parse", "HEAD"], text=True
+    ).strip()
+    if source_commit is not None and observed_source_commit != source_commit:
+        raise RuntimeError(f"SOURCE_COMMIT_MISMATCH:{observed_source_commit}:{source_commit}")
     features, _coverage, runs = study.prepare_data(source_root)
     gated = filtered_frame(features, STRATEGY, FILTER)
     test_runs = runs[4:]
@@ -81,6 +87,7 @@ def evaluate(source_root: Path, output: Path) -> dict[str, object]:
     meta = {
         "format": "old-data-causal-path-efficiency-cash-stress-v1",
         "source_root": str(source_root), "complete_runs": len(runs), "feature_rows": len(features),
+        "source_commit": source_commit, "observed_source_commit": observed_source_commit,
         "strategy": STRATEGY, "filter": "path_efficiency_first2m >= 0.50",
         "selection_runs": len(selection_runs), "holdout_runs": len(holdout_runs),
         "holdout_block_sizes": list(HOLDOUT_BLOCK_SIZES),
@@ -100,8 +107,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--source-commit")
     args = parser.parse_args()
-    evaluate(args.source_root, args.output)
+    evaluate(args.source_root, args.output, source_commit=args.source_commit)
 
 
 if __name__ == "__main__":
