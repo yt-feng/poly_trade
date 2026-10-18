@@ -6,7 +6,7 @@ on:
       mode:
         description: 'Run the standard report or one sealed old-data audit'
         type: choice
-        options: [systematic, book_pressure, quantml_small_cash, history_cooldown_cash, path_efficiency_strict, path_efficiency_threshold_grid, path_efficiency_long_selection, maker_path_shadow, registry_small_cash, registry_stable_selection, nested_walk_forward_registry, execution_aware_old_clean_candidate, compound_old_clean, causal_label_state_audit, quality_aligned_subset_sensitivity, inventory_toxicity_shadow, prefix_only_compound_audit, capital_floor_grid]
+        options: [systematic, book_pressure, quantml_small_cash, history_cooldown_cash, path_efficiency_strict, path_efficiency_threshold_grid, path_efficiency_long_selection, maker_path_shadow, registry_small_cash, registry_stable_selection, nested_walk_forward_registry, execution_aware_old_clean_candidate, compound_old_clean, causal_label_state_audit, quality_aligned_subset_sensitivity, inventory_toxicity_shadow, prefix_only_compound_audit, execution_contract_prefix_sensitivity, capital_floor_grid]
         default: systematic
   push:
     branches:
@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   build-all-monthly-clob-systematic:
-    if: github.event_name != 'workflow_dispatch' || (inputs.mode != 'book_pressure' && inputs.mode != 'quantml_small_cash' && inputs.mode != 'history_cooldown_cash' && inputs.mode != 'path_efficiency_strict' && inputs.mode != 'path_efficiency_threshold_grid' && inputs.mode != 'path_efficiency_long_selection' && inputs.mode != 'maker_path_shadow' && inputs.mode != 'registry_small_cash' && inputs.mode != 'registry_stable_selection' && inputs.mode != 'nested_walk_forward_registry' && inputs.mode != 'execution_aware_old_clean_candidate' && inputs.mode != 'compound_old_clean' && inputs.mode != 'causal_label_state_audit' && inputs.mode != 'quality_aligned_subset_sensitivity' && inputs.mode != 'inventory_toxicity_shadow' && inputs.mode != 'prefix_only_compound_audit' && inputs.mode != 'capital_floor_grid')
+    if: github.event_name != 'workflow_dispatch' || (inputs.mode != 'book_pressure' && inputs.mode != 'quantml_small_cash' && inputs.mode != 'history_cooldown_cash' && inputs.mode != 'path_efficiency_strict' && inputs.mode != 'path_efficiency_threshold_grid' && inputs.mode != 'path_efficiency_long_selection' && inputs.mode != 'maker_path_shadow' && inputs.mode != 'registry_small_cash' && inputs.mode != 'registry_stable_selection' && inputs.mode != 'nested_walk_forward_registry' && inputs.mode != 'execution_aware_old_clean_candidate' && inputs.mode != 'compound_old_clean' && inputs.mode != 'causal_label_state_audit' && inputs.mode != 'quality_aligned_subset_sensitivity' && inputs.mode != 'inventory_toxicity_shadow' && inputs.mode != 'prefix_only_compound_audit' && inputs.mode != 'execution_contract_prefix_sensitivity' && inputs.mode != 'capital_floor_grid')
     runs-on: ubuntu-latest
 
     steps:
@@ -1212,6 +1212,91 @@ jobs:
       - name: Remove runner-local plaintext
         if: always()
         run: rm -rf "$RUNNER_TEMP/old-data-h53-prefix-only" sealed-delivery
+
+  execution-contract-prefix-sensitivity:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'execution_contract_prefix_sensitivity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H54 documented execution-contract prefix sensitivity
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h54-execution-contract"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h54_execution_contract_prefix_sensitivity.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h54-execution-contract-prefix-sensitivity-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h54-execution-contract" sealed-delivery
 
   capital-floor-grid-audit:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'capital_floor_grid'
