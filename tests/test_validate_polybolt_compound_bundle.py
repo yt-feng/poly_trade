@@ -60,7 +60,7 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
     entry_ms = START + (i - 1) * 10_000 + 1_000
     release_ms = entry_ms + 5_000
     before = Decimal("10") + Decimal("0.26") * (i - 1)
-    after = before - Decimal("4.14")
+    after = before - Decimal("5.175")
     digest = hashlib.sha256(f"event-{i}".encode()).hexdigest()
     return {
         "owner": "owner-1",
@@ -81,12 +81,12 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
         "independent_checkpoint": True,
         "entry_ts_ms": entry_ms,
         "cash_available_ts_ms": release_ms,
-        "entry_cost": "4",
-        "shares": "8",
+        "entry_cost": "5",
+        "shares": "10",
         "price": "0.5",
-        "fee": "0.14",
-        "payout": "4.40",
-        "released_cash_since_previous_entry": "0" if i == 1 else "4.40",
+        "fee": "0.175",
+        "payout": "5.435",
+        "released_cash_since_previous_entry": "0" if i == 1 else "5.435",
         "balance_before": format(before, "f"),
         "balance_after": format(after, "f"),
         "source_ref": {
@@ -130,12 +130,12 @@ def bundle(events=None, source=None):
             "slug": "btc-updown-5m-1800000000",
             "window_start_ms": START,
             "window_end_ms": START + 300_000,
-            "min_order_size_unit": "shares",
+            "min_order_size_unit": "USDC",
             "min_order_size": "5",
             "tick_size": "0.01",
         }],
         "cash_release_receipts": [
-            {"receipt_id": f"cash-release-{i}", "sequence_no": i, "amount": "4.40", "release_ts_ms": START + (i - 1) * 10_000 + 6_000}
+            {"receipt_id": f"cash-release-{i}", "sequence_no": i, "amount": "5.435", "release_ts_ms": START + (i - 1) * 10_000 + 6_000}
             for i in range(1, 11)
         ],
         "settlement_receipts": [
@@ -145,7 +145,7 @@ def bundle(events=None, source=None):
                 "market_id": MARKET_ID,
                 "settled_ts_ms": START + (i - 1) * 10_000 + 5_000,
                 "raw_payload_sha256": hashlib.sha256(f"settlement-{i}".encode()).hexdigest(),
-                "payout": "4.40",
+                "payout": "5.435",
             }
             for i in range(1, 11)
         ],
@@ -166,19 +166,27 @@ def test_supplied_source_and_cash_chain_pass_offline_consistency_only():
     assert "owner-1" not in str(result)
 
 
-def test_share_floor_allows_entry_cost_below_five_dollars():
+def test_minimum_notional_contract_accepts_five_dollar_entry():
     result = validate_bundle_document(bundle())
     assert result["offline_consistency_passed"] is True
 
 
-def test_market_share_floor_is_enforced():
+def test_market_notional_floor_is_enforced():
     doc = bundle()
     doc["events"][0]["shares"] = "4"
     doc["events"][0]["entry_cost"] = "2"
     doc["events"][0]["fee"] = "0.056"
     result = validate_bundle_document(doc)
     assert result["offline_consistency_passed"] is False
-    assert result["failure_reason"] == "shares_below_market_minimum"
+    assert result["failure_reason"] == "entry_cost_below_market_minimum_notional"
+
+
+def test_share_unit_claim_is_rejected_when_notional_unit_is_required():
+    doc = bundle()
+    doc["market_windows"][0]["min_order_size_unit"] = "shares"
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "minimum_order_size_unit_must_be_usdc_notional"
 
 
 def test_executed_price_must_follow_market_tick_size():
@@ -427,7 +435,7 @@ def test_source_must_cover_every_account_market():
     doc["market_windows"].append({
         "market_id": "m-2", "asset": "btc", "slug": "btc-updown-5m-1800000300",
         "window_start_ms": START + 300_000, "window_end_ms": START + 600_000,
-        "min_order_size_unit": "shares", "min_order_size": "5", "tick_size": "0.01",
+        "min_order_size_unit": "USDC", "min_order_size": "5", "tick_size": "0.01",
     })
     doc["events"][0]["market_id"] = "m-2"
     result = validate_bundle_document(doc)

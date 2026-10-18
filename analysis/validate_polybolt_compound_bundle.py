@@ -37,7 +37,7 @@ REQUIRED_FILLS = 10
 FROZEN_EXECUTION_ROLE = "TAKER"
 FROZEN_TAKER_FEE_RATE = Decimal("0.07")
 FEE_AMOUNT_TOLERANCE = Decimal("0.000001")
-FROZEN_MINIMUM_ORDER_SIZE_UNIT = "shares"
+FROZEN_MINIMUM_ORDER_SIZE_UNIT = "USDC"
 FROZEN_MINIMUM_ORDER_SIZE = Decimal("5")
 MINIMUM_ENTRY_COST_FOR_LEDGER = Decimal("0.0000001")
 FROZEN_STRATEGY_ID = "h30_move_uncertainty"
@@ -135,7 +135,7 @@ def _market_windows(document: dict[str, Any]) -> tuple[dict[str, dict[str, Any]]
         if item.get("asset") != "btc":
             return {}, "btc_asset_required"
         if item.get("min_order_size_unit") != FROZEN_MINIMUM_ORDER_SIZE_UNIT:
-            return {}, "minimum_order_size_unit_must_be_shares"
+            return {}, "minimum_order_size_unit_must_be_usdc_notional"
         try:
             min_order_size = _decimal(item.get("min_order_size"), "min_order_size")
             tick_size = _decimal(item.get("tick_size"), "tick_size")
@@ -478,8 +478,8 @@ def _validate_same_ledger(
                 return "zero_fee_not_admissible"
             if shares <= 0:
                 return "shares_must_be_positive"
-            if shares < window["min_order_size"]:
-                return "shares_below_market_minimum"
+            if entry_cost < window["min_order_size"]:
+                return "entry_cost_below_market_minimum_notional"
             if depth["available_shares"] < shares:
                 return "depth_available_shares_insufficient"
             if price <= 0 or price >= 1:
@@ -620,9 +620,10 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
     result = reconcile_authenticated_chain(
         reconcile_events,
         owner=owner,
-        # The CLOB minimum is a share quantity.  The market-window check above
-        # enforces that floor; this ledger floor only rejects zero-cost
-        # arithmetic and must not reintroduce a $5 notional rule.
+        # The market-window check above enforces the current documented $5
+        # USDC notional floor before this compatibility reconciler runs.  This
+        # tiny ledger floor only rejects zero-cost arithmetic and must not
+        # weaken or duplicate the market constraint.
         minimum_order=str(MINIMUM_ENTRY_COST_FOR_LEDGER),
         required_fills=REQUIRED_FILLS,
     )
