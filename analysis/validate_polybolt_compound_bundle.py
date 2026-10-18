@@ -7,6 +7,7 @@ reads credentials, submits orders, or turns public observations into fills.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from decimal import Decimal, InvalidOperation
@@ -30,6 +31,20 @@ FEE_AMOUNT_TOLERANCE = Decimal("0.000001")
 FROZEN_MINIMUM_ORDER_SIZE_UNIT = "shares"
 FROZEN_MINIMUM_ORDER_SIZE = Decimal("5")
 MINIMUM_ENTRY_COST_FOR_LEDGER = Decimal("0.0000001")
+FROZEN_STRATEGY_ID = "h30_move_uncertainty"
+FROZEN_STRATEGY_VERSION = "h54-execution-contract-prefix-v1"
+FROZEN_STRATEGY_CONFIG = {
+    "candidate": FROZEN_STRATEGY_ID,
+    "score": "btc_move_2m * (1 - 2*abs(mid_up_prob_2m - 0.5))",
+    "low_threshold": "-12.702899999999412",
+    "high_threshold": "13.257220000004239",
+    "entry_minute": 2,
+    "fraction": "0.04",
+    "required_fills": 10,
+}
+FROZEN_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
+    json.dumps(FROZEN_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
 
 
 def _fail(reason: str, *, event_count: int = 0, source_event_count: int = 0) -> dict[str, Any]:
@@ -62,6 +77,23 @@ def _text(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field}_required")
     return value.strip()
+
+
+def _validate_strategy_binding(document: dict[str, Any]) -> str | None:
+    strategy = document.get("strategy")
+    if not isinstance(strategy, dict):
+        return "strategy_binding_required"
+    if strategy.get("id") != FROZEN_STRATEGY_ID:
+        return "strategy_id_not_frozen"
+    if strategy.get("version") != FROZEN_STRATEGY_VERSION:
+        return "strategy_version_not_frozen"
+    try:
+        digest = _text(strategy.get("config_sha256"), "strategy_config_sha256").lower()
+    except ValueError as exc:
+        return str(exc)
+    if digest != FROZEN_STRATEGY_CONFIG_SHA256:
+        return "strategy_config_digest_mismatch"
+    return None
 
 
 def _market_windows(document: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], str | None]:
@@ -156,6 +188,7 @@ def _validate_same_ledger(
     seen_source_refs: set[tuple[str, str, int]] = set()
     seen_checkpoints: set[str] = set()
     seen_receipts: set[str] = set()
+    seen_strategy_refs: set[str] = set()
     previous_after = initial_cash
     previous_checkpoint = starting_checkpoint
     previous_entry_ms: int | None = None
@@ -230,6 +263,13 @@ def _validate_same_ledger(
             if checkpoint in seen_checkpoints:
                 return "duplicate_balance_checkpoint_id"
             seen_checkpoints.add(checkpoint)
+            strategy_ref = _text(row.get("strategy_decision_ref"), "strategy_decision_ref")
+            strategy_digest = _text(row.get("strategy_decision_sha256"), "strategy_decision_sha256").lower()
+            if strategy_ref in seen_strategy_refs:
+                return "strategy_decision_ref_reused"
+            if not re.fullmatch(r"[0-9a-f]{64}", strategy_digest):
+                return "strategy_decision_hash_invalid"
+            seen_strategy_refs.add(strategy_ref)
             if _text(row.get("previous_checkpoint_id"), "previous_checkpoint_id") != previous_checkpoint:
                 return "previous_checkpoint_link_mismatch"
             receipt_id = _text(row.get("cash_release_receipt_id"), "cash_release_receipt_id")
@@ -325,6 +365,9 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
         return _fail("invalid_required_fills")
     if document.get("required_fills") != REQUIRED_FILLS or required_fills != REQUIRED_FILLS:
         return _fail("required_fills_fixed_at_ten", event_count=len(document.get("events", [])) if isinstance(document.get("events"), list) else 0)
+    strategy_error = _validate_strategy_binding(document)
+    if strategy_error:
+        return _fail(strategy_error, event_count=len(document.get("events", [])) if isinstance(document.get("events"), list) else 0)
     owner = document.get("owner")
     if not isinstance(owner, str) or not owner.strip():
         return _fail("bundle_owner_required")

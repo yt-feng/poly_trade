@@ -5,7 +5,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
-from validate_polybolt_compound_bundle import validate_bundle_document
+from validate_polybolt_compound_bundle import (
+    FROZEN_STRATEGY_CONFIG_SHA256,
+    FROZEN_STRATEGY_ID,
+    FROZEN_STRATEGY_VERSION,
+    validate_bundle_document,
+)
 
 
 START = 1_800_000_000_000
@@ -72,6 +77,8 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
             "raw_payload_sha256": digest,
             "event_ms": START + (i - 1) * 1_000,
         },
+        "strategy_decision_ref": f"decision-{i}",
+        "strategy_decision_sha256": hashlib.sha256(f"decision-{i}".encode()).hexdigest(),
     }
 
 
@@ -86,6 +93,11 @@ def bundle(events=None, source=None):
         "initial_cash": "10",
         "closing_balance": "12.60",
         "closing_balance_checkpoint_id": "closing",
+        "strategy": {
+            "id": FROZEN_STRATEGY_ID,
+            "version": FROZEN_STRATEGY_VERSION,
+            "config_sha256": FROZEN_STRATEGY_CONFIG_SHA256,
+        },
         "market_windows": [{
             "market_id": MARKET_ID,
             "asset": "btc",
@@ -145,6 +157,22 @@ def test_market_constraints_are_required():
     result = validate_bundle_document(doc)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "tick_size_must_be_finite_decimal"
+
+
+def test_strategy_binding_must_match_frozen_h30_config():
+    doc = bundle()
+    doc["strategy"]["id"] = "other-strategy"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "strategy_id_not_frozen"
+
+
+def test_strategy_decision_reference_and_hash_are_required_per_fill():
+    doc = bundle()
+    del doc["events"][0]["strategy_decision_sha256"]
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "strategy_decision_sha256_required"
 
 
 def test_two_independent_ledgers_cannot_be_concatenated():
