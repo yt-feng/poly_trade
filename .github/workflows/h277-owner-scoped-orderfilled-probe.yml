@@ -39,6 +39,10 @@ jobs:
       - name: Install bounded probe dependencies
         run: |
           python -m pip install -r requirements-vault.txt eth-account
+          sdk_commit="$(git ls-remote https://github.com/Polymarket/py-sdk.git refs/heads/main | cut -f1)"
+          test "${#sdk_commit}" -eq 40
+          echo "POLY_SDK_COMMIT=$sdk_commit" >> "$GITHUB_ENV"
+          python -m pip install "git+https://github.com/Polymarket/py-sdk.git@$sdk_commit"
       - name: Derive private-runner owner labels and run read-only probe
         env:
           POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
@@ -46,6 +50,7 @@ jobs:
           WINDOW_BLOCKS: ${{ inputs.window_blocks }}
           CHUNK_BLOCKS: ${{ inputs.chunk_blocks }}
           MAX_LOGS: ${{ inputs.max_logs }}
+          POLY_SDK_COMMIT: ${{ env.POLY_SDK_COMMIT }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
         run: |
@@ -55,11 +60,29 @@ jobs:
           python - "$PRIVATE_DIR/owners.json" <<'PY'
           import json, os, sys
           from eth_account import Account
+          from polymarket import SecureClient
+          from analysis.h279_authenticated_lifecycle_capture import (
+              _bounded_items,
+              _derive_credentials,
+              _public_data_wallet,
+          )
           output = []
           for label, env_name in (("polymarket", "POLYMARKET_PRIVATE_KEY"), ("btc5m", "BTC5M_POLYMARKET_PRIVATE_KEY")):
               key = os.environ.get(env_name, "").strip()
               if key:
-                  output.append({"label": label, "address": Account.from_key(key).address})
+                  signer = Account.from_key(key)
+                  credentials = _derive_credentials(key)
+                  client = SecureClient.create(
+                      private_key=key,
+                      wallet=signer.address,
+                      credentials=credentials,
+                  )
+                  try:
+                      trades, _ = _bounded_items(client.list_account_trades())
+                      address, source = _public_data_wallet(trades, client.wallet)
+                  finally:
+                      client.close()
+                  output.append({"label": label, "address": address, "source": source})
           if not output:
               raise SystemExit("no private runner key available")
           json.dump(output, open(sys.argv[1], "w"), separators=(",", ":"))
@@ -108,7 +131,7 @@ jobs:
         if: always()
         run: |
           echo '## H277 owner-scoped public OrderFilled probe' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Private runner keys were used only to derive owner labels for a read-only public-chain join.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Existing authenticated account-trade GET rows were used to derive proxy/owner labels before the read-only public-chain join.' >> "$GITHUB_STEP_SUMMARY"
           echo '- Raw owner identities and event details remain in the encrypted research vault.' >> "$GITHUB_STEP_SUMMARY"
           echo '- No order, cancellation, redemption, balance read, or live execution was enabled.' >> "$GITHUB_STEP_SUMMARY"
       - name: Remove runner-local plaintext and owner material
