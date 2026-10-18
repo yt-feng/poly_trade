@@ -20,10 +20,17 @@ from urllib.request import Request, urlopen
 
 POLYGON_RPC_URL = "https://polygon-rpc.com"
 V1_ORDER_FILLED_TOPIC = "0xd0a08e8c493f9c94f29311604c9de1b4e8c8d4c06bd0c789af57f2d65bfec0f6"
+V2_ORDER_FILLED_TOPIC = "0xd543adfd945773f1a62f74f0ee55a5e3b9b1a28262980ba90b1a89f2ea84d8ee"
 V1_EXCHANGE_ADDRESSES = (
     "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e",
     "0xc5d563a36ae78145c45a50134d48a1215220f80a",
 )
+V2_EXCHANGE_ADDRESSES = (
+    "0xe111180000d2663c0091e4f400237545b87b996b",
+    "0xe2222d279d744050d28e00520010520000310f59",
+)
+DEFAULT_EXCHANGE_ADDRESSES = V1_EXCHANGE_ADDRESSES + V2_EXCHANGE_ADDRESSES
+ORDER_FILLED_TOPICS = (V1_ORDER_FILLED_TOPIC, V2_ORDER_FILLED_TOPIC)
 FINALITY_BUFFER_BLOCKS = 256
 DEFAULT_WINDOW_BLOCKS = 2048
 DEFAULT_CHUNK_BLOCKS = 200
@@ -184,7 +191,7 @@ def probe(
     window_blocks: int = DEFAULT_WINDOW_BLOCKS,
     chunk_blocks: int = DEFAULT_CHUNK_BLOCKS,
     max_logs: int = DEFAULT_MAX_LOGS,
-    addresses: Iterable[str] = V1_EXCHANGE_ADDRESSES,
+    addresses: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Fetch a bounded finalized log window and return decoded records."""
     if window_blocks <= 0 or chunk_blocks <= 0 or max_logs <= 0:
@@ -201,7 +208,8 @@ def probe(
     requested_from = max(0, requested_to - window_blocks + 1) if from_block is None else int(from_block)
     if requested_from < 0 or requested_from > requested_to:
         raise ValueError("invalid block range")
-    addresses_list = tuple(sorted({str(address).lower() for address in addresses if str(address)}))
+    address_source = DEFAULT_EXCHANGE_ADDRESSES if addresses is None else addresses
+    addresses_list = tuple(sorted({str(address).lower() for address in address_source if str(address)}))
     if not addresses_list:
         raise ValueError("at least one exchange address is required")
     logs: dict[str, dict[str, Any]] = {}
@@ -213,14 +221,21 @@ def probe(
             result = _rpc(
                 rpc_url,
                 "eth_getLogs",
-                [{"address": address, "topics": [V1_ORDER_FILLED_TOPIC], "fromBlock": hex(start), "toBlock": hex(end)}],
+                [{"address": address, "topics": [list(ORDER_FILLED_TOPICS)], "fromBlock": hex(start), "toBlock": hex(end)}],
                 chunks + 10,
             )
             chunks += 1
             if not isinstance(result, list):
                 raise RuntimeError("eth_getLogs_result_invalid")
             for log in result:
-                decoded = decode_v1_log(log)
+                topics = log.get("topics") if isinstance(log, dict) else None
+                event_topic = _topic(topics[0]) if isinstance(topics, list) and topics else None
+                if event_topic == V1_ORDER_FILLED_TOPIC:
+                    decoded = decode_v1_log(log)
+                elif event_topic == V2_ORDER_FILLED_TOPIC:
+                    decoded = decode_v2_log(log, topic=V2_ORDER_FILLED_TOPIC)
+                else:
+                    raise RuntimeError("unsupported_orderfilled_topic")
                 logs[decoded["event_id"]] = decoded
                 if len(logs) > max_logs:
                     raise RuntimeError("max_logs_exceeded")
@@ -245,7 +260,8 @@ def probe(
         "from_block": requested_from,
         "to_block": requested_to,
         "addresses": list(addresses_list),
-        "topic": V1_ORDER_FILLED_TOPIC,
+        "topics": list(ORDER_FILLED_TOPICS),
+        "exchange_versions": ["v1", "v2"],
         "chunk_blocks": chunk_blocks,
         "rpc_log_chunk_count": chunks,
         "record_count": len(records),

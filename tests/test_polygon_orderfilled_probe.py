@@ -5,6 +5,7 @@ import pytest
 import analysis.polygon_orderfilled_probe as probe
 from analysis.polygon_orderfilled_probe import (
     V1_ORDER_FILLED_TOPIC,
+    V2_ORDER_FILLED_TOPIC,
     decode_v1_log,
     decode_v2_log,
 )
@@ -42,8 +43,7 @@ def test_decode_v1_rejects_wrong_topic_or_short_data():
 
 
 def test_decode_v2_keeps_explicit_side_and_token_id():
-    topic = "0x" + "bb" * 32
-    result = decode_v2_log(log(topic, [0, 987, 2000000, 1000000, 0, 0, 0], block=101), topic=topic, block_timestamp=456)
+    result = decode_v2_log(log(V2_ORDER_FILLED_TOPIC, [0, 987, 2000000, 1000000, 0, 0, 0], block=101), topic=V2_ORDER_FILLED_TOPIC, block_timestamp=456)
     assert result["exchange_version"] == "v2"
     assert result["side"] == "0"
     assert result["token_id"] == "987"
@@ -65,4 +65,27 @@ def test_rpc_uses_json_headers_and_exposes_bounded_http_status(monkeypatch):
     assert seen["headers"]["Content-type"] == "application/json"
     assert seen["headers"]["User-agent"] == probe.RPC_USER_AGENT
     assert seen["timeout"] == 30
+
+
+def test_probe_defaults_to_v1_and_v2_exchange_sources(monkeypatch):
+    calls = []
+
+    def fake_rpc(url, method, params, request_id):
+        calls.append((method, params))
+        if method == "eth_blockNumber":
+            return "0x10000"
+        if method == "eth_getBlockByNumber":
+            return {"number": "0x10000"}
+        if method == "eth_getLogs":
+            return []
+        raise AssertionError(method)
+
+    monkeypatch.setattr(probe, "_rpc", fake_rpc)
+    result = probe.probe(from_block=0xFF00, to_block=0xFF01, window_blocks=2, chunk_blocks=200)
+    filters = [params[0] for method, params in calls if method == "eth_getLogs"]
+    assert len(filters) == len(probe.DEFAULT_EXCHANGE_ADDRESSES)
+    assert {item["address"] for item in filters} == set(probe.DEFAULT_EXCHANGE_ADDRESSES)
+    assert all(item["topics"] == [list(probe.ORDER_FILLED_TOPICS)] for item in filters)
+    assert result["topics"] == list(probe.ORDER_FILLED_TOPICS)
+    assert result["exchange_versions"] == ["v1", "v2"]
 
