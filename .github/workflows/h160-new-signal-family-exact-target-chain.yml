@@ -45,7 +45,7 @@ jobs:
           set -euo pipefail
           PRIVATE_DIR="$RUNNER_TEMP/old-data-h160"
           mkdir -m 700 "$PRIVATE_DIR"
-          python -u analysis/h160_fraction_ladder_exact_target_chain.py \
+          python -u analysis/h160_new_signal_family_exact_target_chain.py \
             --source-root source_poly/data/monthly_runs \
             --source-commit "$SOURCE_DATA_COMMIT" \
             --output "$PRIVATE_DIR/results" \
