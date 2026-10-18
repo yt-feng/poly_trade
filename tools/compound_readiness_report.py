@@ -163,7 +163,14 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
         and actual >= 10
         and orderfilled["ready"]
     )
-    canary_ready = frontier["pooled_frontier_consistent"] and settlement_evidence_ready
+    # A pooled prefix can hide a contiguous time block that cannot produce ten
+    # fills or loses cash.  Real receipts do not repair that paper instability;
+    # the frozen candidate must pass both pooled and block-stress gates.
+    canary_ready = (
+        frontier["pooled_frontier_consistent"]
+        and frontier["block_stress_stable"]
+        and settlement_evidence_ready
+    )
     hard_blockers = []
     if not owner_bundle or not btc_bundle:
         hard_blockers.append("authenticated_owner_scoped_btc_five_minute_bundle_missing")
@@ -171,6 +178,8 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
         hard_blockers.append("ten_verified_same_ledger_fills_missing")
     if not orderfilled["ready"]:
         hard_blockers.append("onchain_orderfilled_binding_missing_or_unverified")
+    if not frontier["block_stress_stable"]:
+        hard_blockers.append("paper_block_stress_unstable")
     return {
         "format": "compound-readiness-report-v1",
         "source_scope": "existing_state_and_paper_artifact_only",

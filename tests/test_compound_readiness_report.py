@@ -64,11 +64,12 @@ def test_report_can_only_be_ready_with_ten_settled_fills_and_consistent_protocol
     assert report["canary_ready"] is True
 
 
-def test_block_stress_is_diagnostic_when_real_settlement_evidence_exists():
+def test_block_stress_blocks_canary_admission_even_with_real_settlement_evidence():
     report = build_report(state(bundle=True, fills=10, binding=True), paper_artifact(block_failure=True))
     assert report["settlement_evidence"]["ready"] is True
-    assert report["canary_ready"] is True
+    assert report["canary_ready"] is False
     assert report["paper_frontier"]["block_stress_stable"] is False
+    assert "paper_block_stress_unstable" in report["hard_blockers"]
 
 
 def test_report_fails_closed_when_binding_audit_is_absent():
