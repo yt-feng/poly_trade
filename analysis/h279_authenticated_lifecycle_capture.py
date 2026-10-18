@@ -47,6 +47,25 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
 
+def _failure_code(error: BaseException) -> str:
+    """Return a bounded, non-sensitive class for an encrypted failure report."""
+    text = str(error).lower()
+    name = type(error).__name__.lower()
+    if "429" in text or "rate" in text and "limit" in text:
+        return "provider_rate_limit"
+    if "401" in text or "403" in text or "unauthor" in text or "signature" in text:
+        return "authentication_rejected"
+    if "timeout" in text or "timed out" in text:
+        return "provider_timeout"
+    if "connection" in text or "dns" in text or "network" in text:
+        return "provider_connection"
+    if "parse" in name or "validation" in name or "shape" in text:
+        return "response_shape_or_validation"
+    if "import" in name or "module" in text:
+        return "sdk_import"
+    return "capture_exception"
+
+
 def _bounded_items(paginator: Any, limit: int = MAX_ROWS) -> tuple[list[Any], bool]:
     items: list[Any] = []
     iterator = paginator.iter_items()
@@ -166,9 +185,28 @@ def main() -> None:
     parser.add_argument("--sdk-commit", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    keys = json.loads(args.keys_file.read_text(encoding="utf-8"))
-    result = capture(keys, sdk_commit=args.sdk_commit)
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        keys = json.loads(args.keys_file.read_text(encoding="utf-8"))
+        result = capture(keys, sdk_commit=args.sdk_commit)
+    except Exception as error:
+        result = {
+            "format": "h279-authenticated-lifecycle-capture-failure-v1",
+            "failure_code": _failure_code(error),
+            "failure_type": type(error).__name__,
+            "failure_digest": _digest(f"{type(error).__name__}:{error}"),
+            "sdk_commit": args.sdk_commit,
+            "strategy_evaluated": False,
+            "new_data_collected": False,
+            "model_refit": False,
+            "actual_fills": 0,
+            "verified_canary_fills": 0,
+            "same_ledger_compounding_rows": 0,
+            "live_orders_enabled": False,
+        }
+        args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps({"status": "failed", "failure_code": result["failure_code"]}, sort_keys=True))
+        raise
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({
         "status": "computed",

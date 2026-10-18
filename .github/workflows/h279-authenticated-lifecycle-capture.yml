@@ -70,10 +70,10 @@ jobs:
           recipient=research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
           research_vault.validate_recipient(recipient, recipient_id)
           capture_rc=int(os.environ.get('CAPTURE_RC','1'))
-          if capture_rc == 0:
+          if (private/'report.json').exists():
               report=json.loads((private/'report.json').read_text())
-              status='complete'
-              failed_stage=None
+              status='complete' if capture_rc == 0 else 'failed'
+              failed_stage=None if capture_rc == 0 else 'research'
           else:
               report={
                   'format':'h279-authenticated-lifecycle-capture-failure-v1',

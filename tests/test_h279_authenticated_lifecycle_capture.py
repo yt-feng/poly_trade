@@ -61,3 +61,9 @@ def test_jsonable_handles_sdk_models_without_serializing_private_key():
     value = h279._jsonable(Model())
     assert value == {"status": "CONFIRMED", "size": "5"}
     assert "private_key" not in json.dumps(value)
+
+
+def test_failure_code_is_bounded_and_non_sensitive():
+    error = RuntimeError("HTTP 401 unauthorized for https://example.invalid/account")
+    assert h279._failure_code(error) == "authentication_rejected"
+    assert "example.invalid" not in h279._failure_code(error)
