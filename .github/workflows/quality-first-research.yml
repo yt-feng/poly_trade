@@ -4,9 +4,11 @@ on:
     paths:
       - '.github/workflows/quality-first-research.yml'
       - 'tools/run_quality_first_research.py'
+      - 'tools/research_dispatch_preflight.py'
       - 'tools/*quality_first_journal.py'
       - '.github/workflows/sealed-journal-persist.yml'
       - 'tests/test_persist_quality_first_journal.py'
+      - 'tests/test_research_dispatch_preflight.py'
       - 'analysis/quality_first_*.py'
       - 'tests/test_quality_first*.py'
   workflow_dispatch:
@@ -72,7 +74,23 @@ concurrency:
   group: quality-first-research-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  dispatch-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate dispatch envelope before research
+        env:
+          RESEARCH_MODE: ${{ inputs.research_mode || 'discovery' }}
+          FROZEN_INPUT_B64: ${{ secrets.QUALITY_FIRST_FROZEN_INPUT_B64 }}
+        run: python tools/research_dispatch_preflight.py --mode "$RESEARCH_MODE"
   contract:
+    needs: dispatch-preflight
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -87,6 +105,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_quality_first*.py' -v
           python -m unittest discover -s tests -p 'test_persist_quality_first_journal.py' -v
+          python -m unittest discover -s tests -p 'test_research_dispatch_preflight.py' -v
   research:
     if: github.event_name == 'workflow_dispatch'
     needs: contract
