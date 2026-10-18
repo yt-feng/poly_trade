@@ -118,7 +118,10 @@ def evaluate_compound_chain(
         if cost < floor or fee < 0 or payout < 0 or available_ts < entry_ts:
             failure_reason = "invalid_event_constraints"
             break
-        if previous_entry is not None and entry_ts < previous_entry:
+        # A compound Canary is a chronological chain.  Equal timestamps do
+        # not establish which fill funded the next entry, so they must fail
+        # closed instead of being treated as an ordered pair.
+        if previous_entry is not None and entry_ts <= previous_entry:
             failure_reason = "events_not_chronological"
             break
         previous_entry = entry_ts

@@ -134,3 +134,13 @@ def test_events_must_be_chronological():
     result = evaluate_compound_chain([first, second], required_fills=2)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "events_not_chronological"
+
+
+def test_equal_entry_timestamps_are_not_a_chronological_chain():
+    first = event(0)
+    second = event(1)
+    second["entry_ts"] = first["entry_ts"]
+    result = evaluate_compound_chain([first, second], required_fills=2)
+    assert result["gate_passed"] is False
+    assert result["fills"] == 1
+    assert result["failure_reason"] == "events_not_chronological"
