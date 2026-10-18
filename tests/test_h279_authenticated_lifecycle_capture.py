@@ -67,3 +67,22 @@ def test_failure_code_is_bounded_and_non_sensitive():
     error = RuntimeError("HTTP 401 unauthorized for https://example.invalid/account")
     assert h279._failure_code(error) == "authentication_rejected"
     assert "example.invalid" not in h279._failure_code(error)
+
+
+def test_public_data_wallet_prefers_authenticated_trade_address():
+    rows = [
+        {"maker_address": "0x" + "a" * 40},
+        {"maker_address": "0x" + "a" * 40},
+        {"maker_address": "0x" + "b" * 40},
+    ]
+    wallet, source = h279._public_data_wallet(rows, "0x" + "c" * 40)
+    assert wallet == "0x" + "a" * 40
+    assert source == "account_trade_address"
+
+
+def test_public_data_wallet_falls_back_to_sdk_wallet():
+    wallet, source = h279._public_data_wallet(
+        [{"owner": "internal-id"}], "0x" + "c" * 40
+    )
+    assert wallet == "0x" + "c" * 40
+    assert source == "client_wallet_fallback"

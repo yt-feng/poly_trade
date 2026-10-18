@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -52,6 +53,36 @@ def _jsonable(value: Any) -> Any:
 
 def _digest(value: Any) -> str:
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+
+
+_HEX_WALLET = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+
+def _public_data_wallet(account_trades: list[Any], fallback: Any) -> tuple[str, str]:
+    """Choose the public Data API wallet from authenticated trade evidence.
+
+    The SDK's ``client.wallet`` is the signing EOA in this capture.  Account
+    trade rows carry the proxy/owner address in ``maker_address`` for the
+    observed taker flow; querying the EOA can therefore return an empty public
+    history even when the authenticated account has trades.  Use the most
+    frequent valid address from those rows and retain the SDK wallet only as a
+    bounded fallback when no address is exposed.
+    """
+    counts: dict[str, int] = {}
+    for row in account_trades:
+        if not isinstance(row, dict):
+            continue
+        for key in ("maker_address", "owner_address", "wallet_address"):
+            value = str(row.get(key) or "").strip().lower()
+            if _HEX_WALLET.fullmatch(value):
+                counts[value] = counts.get(value, 0) + 1
+                break
+    if counts:
+        return max(counts.items(), key=lambda item: (item[1], item[0]))[0], "account_trade_address"
+    value = str(fallback or "").strip().lower()
+    if not _HEX_WALLET.fullmatch(value):
+        raise ValueError("public_data_wallet_unavailable")
+    return value, "client_wallet_fallback"
 
 
 def _failure_code(error: BaseException) -> str:
@@ -137,8 +168,11 @@ def _capture_one(label: str, private_key: str, sdk_commit: str) -> dict[str, Any
         # an enum.  Use the documented wire value directly.
         balance = client.get_balance_allowance(asset_type="COLLATERAL")
         raw_balance = _jsonable(balance)
+        public_wallet, public_wallet_source = _public_data_wallet(
+            account_trades, client.wallet
+        )
         try:
-            public_data = capture_public_data(str(client.wallet))
+            public_data = capture_public_data(public_wallet)
         except Exception as error:
             # Public Data API availability is useful corroboration, but its
             # failure must not erase the authenticated CLOB receipt bundle.
@@ -158,6 +192,8 @@ def _capture_one(label: str, private_key: str, sdk_commit: str) -> dict[str, Any
             "label": label,
             "signer_address_sha256": _digest(signer.address.lower()),
             "wallet_address_sha256": _digest(str(client.wallet).lower()),
+            "public_data_wallet_address_sha256": _digest(public_wallet),
+            "public_data_wallet_source": public_wallet_source,
             "sdk_commit": sdk_commit,
             "auth_flow": "GET /auth/derive-api-key; no credential creation",
             "account_trades": [_jsonable(item) for item in account_trades],
