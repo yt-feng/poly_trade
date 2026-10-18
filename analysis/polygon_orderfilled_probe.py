@@ -28,6 +28,12 @@ FINALITY_BUFFER_BLOCKS = 256
 DEFAULT_WINDOW_BLOCKS = 2048
 DEFAULT_CHUNK_BLOCKS = 200
 DEFAULT_MAX_LOGS = 2000
+RPC_USER_AGENT = "poly-trade-orderfilled-probe/1.0"
+RPC_HEADERS = {
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "User-Agent": RPC_USER_AGENT,
+}
 
 
 def _hex_int(value: Any, field: str) -> int:
@@ -147,11 +153,16 @@ def decode_v2_log(log: dict[str, Any], *, topic: str, block_timestamp: int | Non
 
 def _rpc(url: str, method: str, params: list[Any], request_id: int) -> Any:
     body = json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}).encode()
-    request = Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    request = Request(url, data=body, headers=RPC_HEADERS, method="POST")
     try:
         with urlopen(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+    except HTTPError as exc:
+        # Keep the provider's bounded status visible to CI without exposing the
+        # endpoint response body or URL.  This distinguishes access policy from
+        # decode, range, and strategy failures.
+        raise RuntimeError(f"polygon_rpc_http_{int(exc.code)}") from exc
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         raise RuntimeError("polygon_rpc_transport_failed") from exc
     if not isinstance(payload, dict) or payload.get("error") is not None:
         raise RuntimeError("polygon_rpc_error")
