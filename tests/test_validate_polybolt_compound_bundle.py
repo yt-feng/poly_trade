@@ -7,10 +7,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 from validate_polybolt_compound_bundle import validate_bundle_document
 
 
-def account_event(i: int, market_id: str = "m-1") -> dict[str, object]:
+START = 1_800_000_000_000
+MARKET_ID = "m-1"
+
+
+def source_event(seq: int, market_id: str = MARKET_ID, *, event_ms: int | None = None) -> dict[str, object]:
+    timestamp = START + (seq - 1) * 1_000 if event_ms is None else event_ms
+    digest = hashlib.sha256(f"event-{seq}".encode()).hexdigest()
+    return {
+        "market_id": market_id,
+        "topic": "prices.crypto.twap",
+        "type": "update",
+        "timestamp": timestamp,
+        "seq": seq,
+        "dropped": 0,
+        "authenticated": True,
+        "received_ms": timestamp + 100,
+        "connection_id": "conn-a",
+        "sequence_scope": "capture-a/conn-a",
+        "capture_id": "capture-a",
+        "raw_payload_sha256": digest,
+        "payload": {"symbol": "btcusd", "timestamp": timestamp, "value": "100.0", "windowSeconds": 60},
+    }
+
+
+def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain-1") -> dict[str, object]:
+    entry_ms = START + (i - 1) * 10_000 + 1_000
+    release_ms = entry_ms + 5_000
+    before = 10 + (i - 1) * 0.5
+    after = before - 5
+    digest = hashlib.sha256(f"event-{i}".encode()).hexdigest()
     return {
         "owner": "owner-1",
-        "market_id": market_id,
+        "ledger_id": ledger_id,
+        "chain_id": chain_id,
+        "sequence_no": i,
+        "previous_checkpoint_id": "opening" if i == 1 else f"balance-{i - 1}",
+        "market_id": MARKET_ID,
         "status": "confirmed",
         "trade_id": f"trade-{i}",
         "transaction_ref": f"tx-{i}",
@@ -19,40 +52,48 @@ def account_event(i: int, market_id: str = "m-1") -> dict[str, object]:
         "balance_checkpoint_id": f"balance-{i}",
         "cash_reconciled": True,
         "independent_checkpoint": True,
-        "entry_ts": str(i * 100),
-        "cash_available_ts": str(i * 100 + 10),
+        "entry_ts_ms": entry_ms,
+        "cash_available_ts_ms": release_ms,
         "entry_cost": "5",
         "fee": "0",
         "payout": "5.50",
-    }
-
-
-def source_event(seq: int, market_id: str = "m-1") -> dict[str, object]:
-    ts = 1_800_000_000_100 + (seq - 1) * 1000
-    return {
-        "market_id": market_id,
-        "topic": "prices.crypto.twap",
-        "type": "update",
-        "timestamp": ts,
-        "seq": seq,
-        "dropped": 0,
-        "authenticated": True,
-        "received_ms": ts + 100,
-        "connection_id": "conn-a",
-        "sequence_scope": "capture-a/conn-a",
-        "capture_id": "capture-a",
-        "raw_payload_sha256": hashlib.sha256(f"event-{seq}".encode()).hexdigest(),
-        "payload": {"symbol": "btcusd", "timestamp": ts, "value": "100.0", "windowSeconds": 60},
+        "released_cash_since_previous_entry": "0" if i == 1 else "5.50",
+        "balance_before": str(before),
+        "balance_after": str(after),
+        "source_ref": {
+            "market_id": MARKET_ID,
+            "capture_id": "capture-a",
+            "seq": i,
+            "raw_payload_sha256": digest,
+            "event_ms": START + (i - 1) * 1_000,
+        },
     }
 
 
 def bundle(events=None, source=None):
     return {
-        "schema": "authenticated-polybolt-compound-bundle-v1",
+        "schema": "authenticated-polybolt-compound-bundle-v2",
+        "required_fills": 10,
         "owner": "owner-1",
-        "market_windows": [{"market_id": "m-1", "asset": "btc", "slug": "btc-updown-5m-1800000000", "window_start_ms": 1_800_000_000_000, "window_end_ms": 1_800_000_300_000}],
-        "source_events": [source_event(i) for i in range(1, 4)] if source is None else source,
-        "events": [account_event(i) for i in range(10)] if events is None else events,
+        "ledger_id": "ledger-1",
+        "chain_id": "chain-1",
+        "starting_checkpoint_id": "opening",
+        "initial_cash": "10",
+        "closing_balance": "15.0",
+        "closing_balance_checkpoint_id": "closing",
+        "market_windows": [{
+            "market_id": MARKET_ID,
+            "asset": "btc",
+            "slug": "btc-updown-5m-1800000000",
+            "window_start_ms": START,
+            "window_end_ms": START + 300_000,
+        }],
+        "cash_release_receipts": [
+            {"receipt_id": f"cash-release-{i}", "sequence_no": i, "amount": "5.50", "release_ts_ms": START + (i - 1) * 10_000 + 6_000}
+            for i in range(1, 11)
+        ],
+        "source_events": [source_event(i) for i in range(1, 11)] if source is None else source,
+        "events": [account_event(i) for i in range(1, 11)] if events is None else events,
     }
 
 
@@ -61,8 +102,47 @@ def test_polybolt_source_and_authenticated_cash_chain_admit_together():
     assert result["gate_passed"] is True
     assert result["source_continuity_ok"] is True
     assert result["fills"] == 10
+    assert result["same_ledger_identity_verified"] is True
+    assert result["cash_amounts_reconciled"] is True
     assert result["market_window_count"] == 1
     assert "owner-1" not in str(result)
+
+
+def test_two_independent_ledgers_cannot_be_concatenated():
+    doc = bundle()
+    doc["events"][5]["ledger_id"] = "ledger-2"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "ledger_id_mismatch"
+
+
+def test_sequence_reset_and_checkpoint_link_fail_closed():
+    doc = bundle()
+    doc["events"][5]["sequence_no"] = 5
+    assert validate_bundle_document(doc)["failure_reason"] == "sequence_no_must_be_exactly_one_to_ten"
+    doc = bundle()
+    doc["events"][4]["previous_checkpoint_id"] = "unrelated"
+    assert validate_bundle_document(doc)["failure_reason"] == "previous_checkpoint_link_mismatch"
+
+
+def test_numeric_balance_mismatch_is_not_hidden_by_boolean_checkpoint_flags():
+    doc = bundle()
+    doc["events"][3]["balance_after"] = "999"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "balance_after_arithmetic_mismatch"
+
+
+def test_source_is_bound_to_each_fill_and_must_precede_entry():
+    doc = bundle()
+    after_entry = doc["events"][0]["entry_ts_ms"] + 1
+    doc["source_events"][0]["timestamp"] = after_entry
+    doc["source_events"][0]["received_ms"] = after_entry + 100
+    doc["source_events"][0]["payload"]["timestamp"] = after_entry
+    doc["events"][0]["source_ref"]["event_ms"] = after_entry
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "source_event_after_entry"
 
 
 def test_source_gap_blocks_even_when_account_chain_is_valid():
@@ -73,12 +153,28 @@ def test_source_gap_blocks_even_when_account_chain_is_valid():
     assert result["source_continuity_ok"] is False
 
 
+def test_market_slug_epoch_and_window_identity_are_exact():
+    doc = bundle()
+    doc["market_windows"][0]["slug"] = "btc-updown-5m-1800000001"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "btc_slug_window_start_mismatch"
+
+
 def test_non_btc_five_minute_market_cannot_enter():
     doc = bundle()
     doc["market_windows"][0]["slug"] = "btc-updown-15m-1800000000"
     result = validate_bundle_document(doc)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "btc_five_minute_slug_required"
+
+
+def test_required_fills_cannot_be_lowered_to_a_lucky_prefix():
+    doc = bundle()
+    doc["required_fills"] = 1
+    result = validate_bundle_document(doc, required_fills=1)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "required_fills_fixed_at_ten"
 
 
 def test_missing_source_or_market_identity_fails_closed():
@@ -92,7 +188,10 @@ def test_missing_source_or_market_identity_fails_closed():
 
 def test_source_must_cover_every_account_market():
     doc = bundle()
-    doc["market_windows"].append({"market_id": "m-2", "asset": "btc", "slug": "btc-updown-5m-1800000300", "window_start_ms": 1_800_000_300_000, "window_end_ms": 1_800_000_600_000})
+    doc["market_windows"].append({
+        "market_id": "m-2", "asset": "btc", "slug": "btc-updown-5m-1800000300",
+        "window_start_ms": START + 300_000, "window_end_ms": START + 600_000,
+    })
     doc["events"][0]["market_id"] = "m-2"
     result = validate_bundle_document(doc)
     assert result["gate_passed"] is False
