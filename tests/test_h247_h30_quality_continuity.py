@@ -21,8 +21,7 @@ def frame():
             "overround_median_first2m": [0.02, 0.02, 0.02],
             "buy_up_size_2m": [160, 10, 200],
             "buy_down_size_2m": [10, 160, 200],
-            "bid_depth_up_2m": [160, 10, 200],
-            "bid_depth_down_2m": [10, 160, 200],
+            "bid_depth_imbalance_updown_2m": [0.20, -0.20, 0.0],
         }
     )
 

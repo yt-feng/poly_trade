@@ -2,7 +2,7 @@
 
 The H30 direction and thresholds stay frozen.  This experiment adds only
 features visible before entry: quote count, side-specific spread, overround,
-buy-side size and bid depth.  The quote-count floor is the median of the
+buy-side size and direction-aligned book pressure.  The quote-count floor is the median of the
 selection20 signal rows and is frozen before any outcome or cash replay is
 read.  No future labels, settlement fields or account receipts are used.
 
@@ -43,7 +43,7 @@ HOLDOUT_BLOCK_SIZES = (12, 12, 12, 12, 11)
 QUALITY_SPREAD_MAX = 0.04
 QUALITY_OVERROUND_MAX = 0.03
 QUALITY_SIDE_SIZE_MIN = 150.0
-QUALITY_BID_DEPTH_MIN = 150.0
+QUALITY_BOOK_ALIGNMENT_MIN = 0.0
 CANDIDATE = "h30_move_uncertainty"
 STRATEGY = "h247_h30_quality_continuity"
 
@@ -75,14 +75,15 @@ def _side_quality(frame: pd.DataFrame) -> pd.DataFrame:
     down = side.eq("buy_down")
     spread = pd.Series(np.nan, index=frame.index, dtype=float)
     size = pd.Series(np.nan, index=frame.index, dtype=float)
-    depth = pd.Series(np.nan, index=frame.index, dtype=float)
+    alignment = pd.Series(np.nan, index=frame.index, dtype=float)
     spread.loc[up] = pd.to_numeric(frame.loc[up, "spread_up_median_first2m"], errors="coerce")
     spread.loc[down] = pd.to_numeric(frame.loc[down, "spread_down_median_first2m"], errors="coerce")
     size.loc[up] = pd.to_numeric(frame.loc[up, "buy_up_size_2m"], errors="coerce")
     size.loc[down] = pd.to_numeric(frame.loc[down, "buy_down_size_2m"], errors="coerce")
-    depth.loc[up] = pd.to_numeric(frame.loc[up, "bid_depth_up_2m"], errors="coerce")
-    depth.loc[down] = pd.to_numeric(frame.loc[down, "bid_depth_down_2m"], errors="coerce")
-    return pd.DataFrame({"spread": spread, "size": size, "depth": depth}, index=frame.index)
+    imbalance = pd.to_numeric(frame["bid_depth_imbalance_updown_2m"], errors="coerce")
+    alignment.loc[up] = imbalance.loc[up]
+    alignment.loc[down] = -imbalance.loc[down]
+    return pd.DataFrame({"spread": spread, "size": size, "book_alignment": alignment}, index=frame.index)
 
 
 def apply_quality_gate(frame: pd.DataFrame, quote_count_min: float) -> pd.DataFrame:
@@ -97,7 +98,7 @@ def apply_quality_gate(frame: pd.DataFrame, quote_count_min: float) -> pd.DataFr
         & quality["spread"].le(QUALITY_SPREAD_MAX)
         & overround.le(QUALITY_OVERROUND_MAX)
         & quality["size"].ge(QUALITY_SIDE_SIZE_MIN)
-        & quality["depth"].ge(QUALITY_BID_DEPTH_MIN)
+        & quality["book_alignment"].ge(QUALITY_BOOK_ALIGNMENT_MIN)
     )
     out[f"{STRATEGY}_side"] = out[f"{CANDIDATE}_side"].where(keep, "skip")
     out[f"{STRATEGY}_minute"] = out[f"{CANDIDATE}_minute"]
@@ -200,7 +201,7 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
             "quote_count_first2m_min": quote_min,
             "selection_only_calibration": True,
             "spread_max": QUALITY_SPREAD_MAX, "overround_max": QUALITY_OVERROUND_MAX,
-            "side_buy_size_min": QUALITY_SIDE_SIZE_MIN, "side_bid_depth_min": QUALITY_BID_DEPTH_MIN,
+            "side_buy_size_min": QUALITY_SIDE_SIZE_MIN, "book_alignment_min": QUALITY_BOOK_ALIGNMENT_MIN,
             "fields_are_pre_entry_only": True,
         },
         "selection_rows": selection_rows, "holdout_rows": holdout_rows, "holdout_block_rows": block_rows,
