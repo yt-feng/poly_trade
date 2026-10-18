@@ -6,14 +6,16 @@ from analysis.maker_compound_receipt_contract import validate_maker_compound_cha
 
 def maker_event(i: int, **updates):
     sequence = i
-    before = Decimal("10") + (sequence - 1) * Decimal("0.51")
+    before = Decimal("10") + (sequence - 1) * Decimal("0.61")
     value = {
-        "owner": "0xmaker",
+        "owner": "owner-key",
+        "maker_address": "0xmaker",
         "ledger_id": "maker-ledger-1",
         "chain_id": "maker-chain-1",
         "sequence_no": sequence,
         "previous_checkpoint_id": "opening" if sequence == 1 else f"balance-{sequence - 1}",
         "status": "confirmed",
+        "trade_status": "TRADE_STATUS_CONFIRMED",
         "trade_id": f"trade-{sequence}",
         "transaction_ref": f"0xtx{sequence}",
         "settlement_receipt_id": f"settlement-{sequence}",
@@ -25,8 +27,8 @@ def maker_event(i: int, **updates):
         "cash_available_ts": str(sequence * 100 + 10),
         "entry_cost": "5",
         "fee": "0",
-        "payout": "5.51",
-        "released_cash_since_previous_entry": "0" if sequence == 1 else "5.51",
+        "payout": "5.61",
+        "released_cash_since_previous_entry": "0" if sequence == 1 else "5.61",
         "balance_before": str(before),
         "balance_after": str(before - Decimal("5")),
         "market_id": "m1",
@@ -36,12 +38,17 @@ def maker_event(i: int, **updates):
         "orderfilled_event_id": f"0xtx{sequence}:1",
         "order_id": f"order-{sequence}",
         "post_only_accepted": True,
-        "order_status": "FILLED",
+        "order_status": "MATCHED",
+        "trader_side": "MAKER",
         "fee_rate": "0",
         "settlement_payout": "5.50",
-        "rebate_amount": "0.01",
+        "rebate_amount": "0.11",
         "rebate_status": "CONFIRMED",
-        "rebate_receipt_id": f"rebate-{sequence}",
+        "rebate_batch_id": "rebate-day-1",
+        "rebate_receipt_id": "rebate-receipt-day-1",
+        "rebate_batch_amount": "1.10",
+        "rebate_allocated_amount": "0.11",
+        "rebate_available_ts": str(sequence * 100 + 10),
     }
     value.update(updates)
     return value
@@ -72,10 +79,11 @@ class MakerCompoundReceiptContractTest(unittest.TestCase):
         result = validate_maker_compound_chain(
             events,
             fills,
-            owner="0xmaker",
+            owner="owner-key",
+            maker_address="0xmaker",
             starting_checkpoint_id="opening",
             closing_balance_checkpoint_id="closing",
-            closing_balance="15.10",
+            closing_balance="16.10",
         )
         self.assertTrue(result["offline_consistency_passed"])
         self.assertTrue(result["paper_replay_passed"])
@@ -90,10 +98,11 @@ class MakerCompoundReceiptContractTest(unittest.TestCase):
         result = validate_maker_compound_chain(
             events,
             fills,
-            owner="0xmaker",
+            owner="owner-key",
+            maker_address="0xmaker",
             starting_checkpoint_id="opening",
             closing_balance_checkpoint_id="closing",
-            closing_balance="15.10",
+            closing_balance="16.10",
         )
         self.assertEqual(result["failure_reason"], "maker_event_contract_failed")
         self.assertIn("execution_role_must_be_maker", {x["reason"] for x in result["issues"]})
@@ -104,10 +113,11 @@ class MakerCompoundReceiptContractTest(unittest.TestCase):
         result = validate_maker_compound_chain(
             events,
             fills,
-            owner="0xmaker",
+            owner="owner-key",
+            maker_address="0xmaker",
             starting_checkpoint_id="opening",
             closing_balance_checkpoint_id="closing",
-            closing_balance="15.10",
+            closing_balance="16.10",
         )
         self.assertIn("post_only_acceptance_required", {x["reason"] for x in result["issues"]})
 
@@ -117,10 +127,11 @@ class MakerCompoundReceiptContractTest(unittest.TestCase):
         result = validate_maker_compound_chain(
             events,
             fills,
-            owner="0xmaker",
+            owner="owner-key",
+            maker_address="0xmaker",
             starting_checkpoint_id="opening",
             closing_balance_checkpoint_id="closing",
-            closing_balance="15.10",
+            closing_balance="16.10",
         )
         self.assertEqual(result["failure_reason"], "maker_orderfilled_binding_failed")
         self.assertIn("maker_owner_mismatch", {x["reason"] for x in result["issues"]})
@@ -131,10 +142,11 @@ class MakerCompoundReceiptContractTest(unittest.TestCase):
         result = validate_maker_compound_chain(
             events,
             fills,
-            owner="0xmaker",
+            owner="owner-key",
+            maker_address="0xmaker",
             starting_checkpoint_id="opening",
             closing_balance_checkpoint_id="closing",
-            closing_balance="15.10",
+            closing_balance="16.10",
         )
         self.assertIn("settlement_plus_rebate_mismatch", {x["reason"] for x in result["issues"]})
 
