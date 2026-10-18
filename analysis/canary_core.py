@@ -29,6 +29,53 @@ def fee_per_share(p, rate, exponent=1):
         raise ValueError('Unknown fee model or invalid price/rate')
     return float(Decimal(str(rate))*Decimal(str(p))*(1-Decimal(str(p))))
 
+def user_trade_evidence(event):
+    """Normalize one authenticated user-stream trade without inventing a fill.
+
+    Public quote or market-stream messages do not identify our order or its
+    execution role.  Only the authenticated ``user`` trade payload can be
+    counted as an account fill.  The function is deliberately pure and does
+    not contact an API or imply settlement from a matched event.
+    """
+    if not isinstance(event, dict) or event.get('topic') != 'user' or event.get('type') != 'trade':
+        return None
+    payload = event.get('payload')
+    if not isinstance(payload, dict):
+        return None
+    trade_id = payload.get('id')
+    order_id = payload.get('takerOrderId')
+    asset_id = payload.get('assetId')
+    role = str(payload.get('traderSide') or '').upper()
+    if role not in ('MAKER', 'TAKER'):
+        role = 'UNKNOWN'
+    size = number(payload.get('size'))
+    price = number(payload.get('price'))
+    timestamp = number(payload.get('timestamp'))
+    status = str(payload.get('status') or '')
+    matched_statuses = {
+        'TRADE_STATUS_MATCHED', 'TRADE_STATUS_MATCHED_NOT_BROADCASTED',
+        'TRADE_STATUS_MINED', 'TRADE_STATUS_CONFIRMED',
+    }
+    if not trade_id or not order_id or not asset_id or size is None or size <= 0:
+        return None
+    if price is None or not 0 < price < 1 or timestamp is None:
+        return None
+    if status not in matched_statuses:
+        return {
+            'trade_id': str(trade_id), 'order_id': str(order_id),
+            'asset_id': str(asset_id), 'role': role, 'size': size,
+            'price': price, 'status': status, 'matched': False,
+            'settled': status in ('TRADE_STATUS_MINED', 'TRADE_STATUS_CONFIRMED'),
+            'transaction_hash': payload.get('transactionHash'),
+        }
+    return {
+        'trade_id': str(trade_id), 'order_id': str(order_id),
+        'asset_id': str(asset_id), 'role': role, 'size': size,
+        'price': price, 'status': status, 'matched': True,
+        'settled': status in ('TRADE_STATUS_MINED', 'TRADE_STATUS_CONFIRMED'),
+        'transaction_hash': payload.get('transactionHash'),
+    }
+
 def official_winner(label, row):
     """Only an observed market_resolved message for this exact market is a label."""
     if label.get('kind')!='market_resolved': return None

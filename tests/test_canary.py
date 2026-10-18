@@ -101,6 +101,35 @@ class Labels(unittest.TestCase):
     def test_name_conflict(self):
         x=self.valid();x['payload']['winning_outcome']='Down';self.assertIsNone(official_winner(x,fixture(80)))
 
+class UserTradeEvidence(unittest.TestCase):
+    def event(self, **payload):
+        base={'topic':'user','type':'trade','payload':{
+            'id':'trade-1','takerOrderId':'order-1','assetId':'asset-1',
+            'size':'5','price':'0.52','status':'TRADE_STATUS_CONFIRMED',
+            'traderSide':'MAKER','timestamp':START+1000,
+            'transactionHash':'0xabc'}}
+        base['payload'].update(payload)
+        return base
+
+    def test_confirmed_maker_fill_is_explicit(self):
+        result=user_trade_evidence(self.event())
+        self.assertEqual(result['role'],'MAKER')
+        self.assertTrue(result['matched']);self.assertTrue(result['settled'])
+
+    def test_unknown_role_is_not_promoted_to_maker(self):
+        result=user_trade_evidence(self.event(traderSide=None))
+        self.assertEqual(result['role'],'UNKNOWN');self.assertTrue(result['matched'])
+
+    def test_market_event_cannot_count_as_account_fill(self):
+        self.assertIsNone(user_trade_evidence({'topic':'market','type':'last_trade_price','payload':{}}))
+
+    def test_failed_trade_is_retained_but_not_matched(self):
+        result=user_trade_evidence(self.event(status='TRADE_STATUS_FAILED'))
+        self.assertFalse(result['matched']);self.assertFalse(result['settled'])
+
+    def test_invalid_amount_is_rejected(self):
+        self.assertIsNone(user_trade_evidence(self.event(size='0')))
+
 class Execution(unittest.TestCase):
     def test_new_quote_only(self):
         rows=[fixture(i)for i in range(10)];times=[r['sample_ms']for r in rows]

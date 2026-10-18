@@ -100,7 +100,11 @@ def build_snapshot(quotes: pd.DataFrame, minute: int) -> pd.DataFrame:
         if snap.empty:
             continue
         row = snap.iloc[-1]
-        target = first_non_null(g["target_price"])
+        # The legacy collector can populate target_price after the decision
+        # prefix.  Use only the first target already visible at this snapshot;
+        # otherwise the feature would leak a later metadata response.
+        target_values = g.loc[g["ts_utc"] <= row["ts_utc"], "target_price"].dropna()
+        target = np.nan if target_values.empty else target_values.iloc[0]
         final = last_non_null(g["final_price"])
         if pd.isna(target) or pd.isna(final):
             continue
@@ -259,6 +263,86 @@ def state_prob(hist: pd.DataFrame, row: pd.Series, side: str) -> Tuple[float, in
     return np.nan, 0
 
 
+class RollingStateIndex:
+    """Incremental equivalent of ``state_prob`` for chronological replay.
+
+    The previous implementation rebuilt boolean DataFrame subsets for every
+    market.  Each state now keeps its exponentially decayed sum, weight and
+    observation count, so a row is incorporated once and queried in O(1).
+    """
+
+    DECAY = 0.5 ** (1.0 / 20.0)
+
+    def __init__(self) -> None:
+        self.up = {name: {} for name in ("m2", "m4", "imb", "regime", "all")}
+        self.down = {name: {} for name in ("m2", "imb_liq", "regime", "all")}
+
+    @staticmethod
+    def _value(value):
+        return None if pd.isna(value) else str(value)
+
+    def _update(self, table, key, value):
+        if key is None or any(part is None for part in key):
+            return
+        total, weight, count = table.get(key, (0.0, 0.0, 0))
+        table[key] = (total * self.DECAY + float(value), weight * self.DECAY + 1.0, count + 1)
+
+    def update(self, row: pd.Series) -> None:
+        regime = self._value(row.get("regime"))
+        m2 = self._value(row.get("move_bucket_m2"))
+        m4 = self._value(row.get("move_bucket_m4"))
+        up2 = self._value(row.get("up_price_bucket_m2"))
+        up4 = self._value(row.get("up_price_bucket_m4"))
+        down2 = self._value(row.get("down_price_bucket_m2"))
+        imb = self._value(row.get("imb_sign_m2"))
+        liq = self._value(row.get("liq_sign_down_m2"))
+        outcome = float(row["outcome_up"])
+        self._update(self.up["m2"], (regime, m2, up2), outcome)
+        self._update(self.up["m4"], (regime, m4, up4), outcome)
+        self._update(self.up["imb"], (regime, imb), outcome)
+        self._update(self.up["regime"], (regime,), outcome)
+        self._update(self.up["all"], (), outcome)
+        self._update(self.down["m2"], (regime, m2, down2), 1.0 - outcome)
+        self._update(self.down["imb_liq"], (regime, imb, liq), 1.0 - outcome)
+        self._update(self.down["regime"], (regime,), 1.0 - outcome)
+        self._update(self.down["all"], (), 1.0 - outcome)
+
+    @staticmethod
+    def _read(table, key) -> Tuple[float, int]:
+        if key is None or any(part is None for part in key):
+            return np.nan, 0
+        total, weight, count = table.get(key, (0.0, 0.0, 0))
+        if count < 12 or weight <= 0:
+            return np.nan, 0
+        return total / weight, int(count)
+
+    def probability(self, row: pd.Series, side: str) -> Tuple[float, int]:
+        regime = self._value(row.get("regime"))
+        m2 = self._value(row.get("move_bucket_m2"))
+        m4 = self._value(row.get("move_bucket_m4"))
+        imb = self._value(row.get("imb_sign_m2"))
+        if side == "buy_up":
+            keys = [
+                (self.up["m2"], (regime, m2, self._value(row.get("up_price_bucket_m2")))),
+                (self.up["m4"], (regime, m4, self._value(row.get("up_price_bucket_m4")))),
+                (self.up["imb"], (regime, imb)),
+                (self.up["regime"], (regime,)),
+                (self.up["all"], ()),
+            ]
+        else:
+            keys = [
+                (self.down["m2"], (regime, m2, self._value(row.get("down_price_bucket_m2")))),
+                (self.down["imb_liq"], (regime, imb, self._value(row.get("liq_sign_down_m2")))),
+                (self.down["regime"], (regime,)),
+                (self.down["all"], ()),
+            ]
+        for table, key in keys:
+            probability, support = self._read(table, key)
+            if support:
+                return probability, support
+        return np.nan, 0
+
+
 def candidate_micro_trades(row: pd.Series) -> List[Tuple[str, str, int, float, float]]:
     cands = []
     m1, m2, m4 = row.get("move_m1", np.nan), row.get("move_m2", np.nan), row.get("move_m4", np.nan)
@@ -275,15 +359,24 @@ def candidate_micro_trades(row: pd.Series) -> List[Tuple[str, str, int, float, f
     return cands
 
 
-def choose_fairprob(hist: pd.DataFrame, row: pd.Series, mode: str, fee: float) -> Dict[str, object]:
+def choose_fairprob(hist: pd.DataFrame | None, row: pd.Series, mode: str, fee: float,
+                    fee_mode: str = "polymarket_taker", fee_exponent: float = 1.0,
+                    state_index: RollingStateIndex | None = None) -> Dict[str, object]:
     best = {"strategy": "skip", "side": "skip", "entry_minute": -1, "market_price": np.nan, "fair_prob": np.nan, "edge": np.nan, "support": 0}
     best_score = -1e9
     for micro, side, minute, price, spread in candidate_micro_trades(row):
-        fair_prob, support = state_prob(hist, row, side)
+        fair_prob, support = (state_index.probability(row, side)
+                              if state_index is not None else state_prob(hist, row, side))
         if pd.isna(fair_prob):
             continue
         edge = float(fair_prob - price)
-        margin = fee + 0.02 + min(max(spread, 0.0), 0.05)
+        # Convert the configured taker rate into a per-share cost at the
+        # candidate price.  The historical code treated ``fee`` as a flat
+        # per-share debit, which overstated crypto taker costs and made this
+        # discovery path inconsistent with the execution walk-forward.
+        fee_per_share = (fee if fee_mode == "flat_per_share" else
+                         fee * (price ** fee_exponent) * (1.0 - price))
+        margin = fee_per_share + 0.02 + min(max(spread, 0.0), 0.05)
         if mode == "hist_fairprob_conservative":
             margin += 0.02
         if mode == "hist_fairprob_robust":
@@ -304,39 +397,56 @@ def choose_fairprob(hist: pd.DataFrame, row: pd.Series, mode: str, fee: float) -
     return best
 
 
-def choose_trade(hist: pd.DataFrame, row: pd.Series, strategy: str, fee: float) -> Dict[str, object]:
+def choose_trade(hist: pd.DataFrame | None, row: pd.Series, strategy: str, fee: float,
+                 fee_mode: str = "polymarket_taker", fee_exponent: float = 1.0,
+                 state_index: RollingStateIndex | None = None) -> Dict[str, object]:
     if strategy.startswith("hist_fairprob_"):
-        return choose_fairprob(hist, row, strategy, fee)
+        return choose_fairprob(hist, row, strategy, fee, fee_mode=fee_mode,
+                               fee_exponent=fee_exponent,
+                               state_index=state_index)
     side, minute = choose_static(row, strategy)
     return {"strategy": strategy, "side": side, "entry_minute": minute, "market_price": np.nan, "fair_prob": np.nan, "edge": np.nan, "support": np.nan}
 
 
-def payout(row: pd.Series, side: str, minute: int, fee: float) -> Tuple[float, float, float]:
+def payout(row: pd.Series, side: str, minute: int, fee: float,
+           fee_mode: str = "polymarket_taker", fee_exponent: float = 1.0) -> Tuple[float, float, float]:
     if side == "buy_up":
         price = row[f"buy_up_price_m{minute}"]
         size = row[f"buy_up_size_m{minute}"]
-        pnl_per_share = row["outcome_up"] - price - fee
+        fee_per_share = fee if fee_mode == "flat_per_share" else fee * (price ** fee_exponent) * (1.0 - price)
+        pnl_per_share = row["outcome_up"] - price - fee_per_share
     else:
         price = row[f"buy_down_price_m{minute}"]
         size = row[f"buy_down_size_m{minute}"]
-        pnl_per_share = (1.0 - row["outcome_up"]) - price - fee
+        fee_per_share = fee if fee_mode == "flat_per_share" else fee * (price ** fee_exponent) * (1.0 - price)
+        pnl_per_share = (1.0 - row["outcome_up"]) - price - fee_per_share
     return float(price), float(size), float(pnl_per_share)
 
 
-def simulate_strategy(df: pd.DataFrame, strategy: str, frac: float, fee: float) -> pd.DataFrame:
+def simulate_strategy(df: pd.DataFrame, strategy: str, frac: float, fee: float,
+                      fee_mode: str = "polymarket_taker", fee_exponent: float = 1.0) -> pd.DataFrame:
     bankroll, peak, max_dd = 100.0, 100.0, 0.0
     rows = []
     df = df.sort_values("first_quote_ts").reset_index(drop=True)
+    state_index = RollingStateIndex() if strategy.startswith("hist_fairprob_") else None
     for i in range(len(df)):
         row = df.iloc[i]
-        hist = df.iloc[:i].copy()
-        if len(hist) < 50:
+        if i < 50:
+            if state_index is not None:
+                state_index.update(row)
             continue
-        choice = choose_trade(hist, row, strategy, fee)
+        choice = choose_trade(None, row, strategy, fee, fee_mode=fee_mode,
+                              fee_exponent=fee_exponent,
+                              state_index=state_index)
+        if state_index is not None:
+            # Incorporate the current outcome only after its decision has been
+            # made, preserving the original no-lookahead ordering.
+            state_index.update(row)
         side, minute = str(choice["side"]), int(choice["entry_minute"])
         if side == "skip" or minute < 0:
             continue
-        price, size_avail, pnl_per_share = payout(row, side, minute, fee)
+        price, size_avail, pnl_per_share = payout(
+            row, side, minute, fee, fee_mode=fee_mode, fee_exponent=fee_exponent)
         if pd.isna(price) or pd.isna(size_avail) or price <= 0:
             continue
         target_cost = min(bankroll * frac, bankroll, float(size_avail) * float(price))
@@ -480,7 +590,12 @@ def markdown_table(df: pd.DataFrame, rows: int = 30) -> str:
     show = df.head(rows).copy()
     num_cols = show.select_dtypes(include=[np.number]).columns
     show[num_cols] = show[num_cols].round(4)
-    return show.to_markdown(index=False)
+    try:
+        return show.to_markdown(index=False)
+    except ImportError:
+        # Keep report generation self-contained in the bundled runtime; the
+        # CSV artifacts remain the authoritative machine-readable output.
+        return "```text\n" + show.to_string(index=False) + "\n```"
 
 
 def build_report(coverage: pd.DataFrame, summary: pd.DataFrame, finalists_run: pd.DataFrame) -> str:
@@ -549,6 +664,9 @@ def main() -> None:
     parser.add_argument("--source-root", type=str, required=True)
     parser.add_argument("--report-dir", type=str, required=True)
     parser.add_argument("--fee", type=float, default=0.01)
+    parser.add_argument("--fee-mode", choices=("polymarket_taker", "flat_per_share"),
+                        default="polymarket_taker")
+    parser.add_argument("--fee-exponent", type=float, default=1.0)
     args = parser.parse_args()
 
     raw, run_cover = read_all_monthly_runs(Path(args.source_root))
@@ -559,7 +677,8 @@ def main() -> None:
     logs = []
     for strategy in STATIC_STRATEGIES:
         for frac in FIXED_FRACS:
-            lg = simulate_strategy(wide, strategy, frac, args.fee)
+            lg = simulate_strategy(wide, strategy, frac, args.fee,
+                                   fee_mode=args.fee_mode, fee_exponent=args.fee_exponent)
             if not lg.empty:
                 logs.append(lg)
     logs_df = pd.concat(logs, ignore_index=True) if logs else pd.DataFrame()

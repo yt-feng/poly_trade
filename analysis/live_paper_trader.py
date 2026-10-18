@@ -664,6 +664,10 @@ def side_min_order_size(row: Dict[str, object], side: str) -> float:
     return base.size_from_row(row, "min_order_size_up" if side == "buy_up" else "min_order_size_down")
 
 
+def side_tick_size(row: Dict[str, object], side: str) -> float:
+    return base.size_from_row(row, "tick_size_up" if side == "buy_up" else "tick_size_down")
+
+
 def state_default(args: argparse.Namespace, model_payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "started_at": datetime.now(UTC).isoformat(),
@@ -684,19 +688,26 @@ def state_default(args: argparse.Namespace, model_payload: Dict[str, Any]) -> Di
         "pending_orders": [],
         "open_positions": [],
         "traded_slugs": [],
+        "signaled_slugs": [],
         "last_final_by_slug": {},
         "target_by_slug": {},
         "execution_mode": args.execution_mode,
         "live_orders": [],
         "live_order_count_by_day": {},
         "live_notional_by_day": {},
+        "live_order_acceptance_count_by_day": {},
+        "live_order_acceptance_notional_by_day": {},
         "model": model_payload.get("metadata", {}),
     }
 
 
 def load_state(path: Path, args: argparse.Namespace, model_payload: Dict[str, Any]) -> Dict[str, Any]:
     if path.exists() and not args.reset_state:
-        return json.loads(path.read_text(encoding="utf-8"))
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state.setdefault("signaled_slugs", [])
+        state.setdefault("live_order_acceptance_count_by_day", {})
+        state.setdefault("live_order_acceptance_notional_by_day", {})
+        return state
     return state_default(args, model_payload)
 
 
@@ -870,6 +881,11 @@ class LivePaperEngine:
     def append_event(self, row: Dict[str, Any]) -> None:
         append_csv(self.report_dir / "paper_events.csv", EVENT_FIELDS, row)
 
+    def mark_slug_signaled(self, slug: str) -> None:
+        signaled = set(self.state.get("signaled_slugs", []))
+        signaled.add(slug)
+        self.state["signaled_slugs"] = sorted(signaled)
+
     def mark_slug_traded(self, slug: str) -> None:
         traded = set(self.state.get("traded_slugs", []))
         traded.add(slug)
@@ -885,6 +901,8 @@ class LivePaperEngine:
             signal_price=float(order["signal_price"]),
             max_adverse_slippage=float(order["max_adverse_slippage"]),
             min_order_size=side_min_order_size(snap, str(order["side"])),
+            tick_size=side_tick_size(snap, str(order["side"])),
+            fee_rate=float(self.args.fee),
             settings=self.live_settings,
         )
 
@@ -901,12 +919,12 @@ class LivePaperEngine:
             return "blocked_daily_notional_cap"
         return ""
 
-    def record_live_acceptance(self, plan: live_execution.LiveOrderPlan, now: datetime, result: Dict[str, Any]) -> None:
+    def record_order_acceptance(self, plan: live_execution.LiveOrderPlan, now: datetime, result: Dict[str, Any]) -> None:
         if not result.get("live_order_ok"):
             return
         day = now.astimezone(BJ).date().isoformat()
-        count_by_day = self.state.setdefault("live_order_count_by_day", {})
-        notional_by_day = self.state.setdefault("live_notional_by_day", {})
+        count_by_day = self.state.setdefault("live_order_acceptance_count_by_day", {})
+        notional_by_day = self.state.setdefault("live_order_acceptance_notional_by_day", {})
         count_by_day[day] = int(count_by_day.get(day, 0)) + 1
         notional_by_day[day] = float(notional_by_day.get(day, 0.0)) + fnum(plan.amount_usd, 0.0)
 
@@ -942,7 +960,7 @@ class LivePaperEngine:
         self.append_event(event)
         if self.execution_mode == "paper":
             self.state["pending_orders"].append(order)
-            self.mark_slug_traded(info.slug)
+            self.mark_slug_signaled(info.slug)
             return
 
         plan = self.build_live_order_plan(order, snap, info)
@@ -966,16 +984,19 @@ class LivePaperEngine:
                 result = self.live_executor.place_buy_market_order(plan)
                 execution_event.update(result)
                 execution_event["status"] = str(result.get("live_order_status") or execution_event["status"])
-                self.record_live_acceptance(plan, now, result)
+                self.record_order_acceptance(plan, now, result)
+                trade_ids = str(result.get("live_trade_ids") or "").strip()
+                if result.get("live_order_ok") and trade_ids:
+                    self.mark_slug_traded(info.slug)
         self.append_event(execution_event)
         self.state.setdefault("live_orders", []).append(
             {key: execution_event.get(key, "") for key in ("event_ts", "event_type", "status", "slug", "side", "live_order_local_id", "live_order_id", "live_order_ok", "live_amount_usd", "live_max_price", "live_order_error")}
         )
         self.state["live_orders"] = self.state["live_orders"][-100:]
-        self.mark_slug_traded(info.slug)
+        self.mark_slug_signaled(info.slug)
 
     def maybe_signal(self, market: Dict[str, object], snap: Dict[str, object], info: MarketInfo) -> None:
-        if info.slug in set(self.state.get("traded_slugs", [])):
+        if info.slug in set(self.state.get("traded_slugs", [])) or info.slug in set(self.state.get("signaled_slugs", [])):
             return
         entry_ts = snap.get("ts_utc")
         start_ts = market.get("market_start_ts")
@@ -1005,11 +1026,26 @@ class LivePaperEngine:
         now = snap.get("ts_utc")
         if not isinstance(now, datetime):
             return
+        snapshot_slug = str(snap.get("slug") or "")
         remaining: List[Dict[str, Any]] = []
         for order in self.state.get("pending_orders", []):
             due = read_iso(str(order.get("due_ts", "")))
             if due is None or now < due:
                 remaining.append(order)
+                continue
+            if not snapshot_slug or str(order.get("slug") or "") != snapshot_slug:
+                event = dict(order)
+                event.update({
+                    "event_ts": event_now(),
+                    "event_type": "fill_check",
+                    "status": "stale_market_window",
+                    "fill_cost": 0.0,
+                    "shares": 0.0,
+                    "fill_ratio": 0.0,
+                    "bankroll_after": self.state["bankroll"],
+                    "reason": "pending order slug does not match the current snapshot slug",
+                })
+                self.append_event(event)
                 continue
             side = str(order["side"])
             paper_price, paper_size = side_price_size(snap, side)
@@ -1038,6 +1074,7 @@ class LivePaperEngine:
                         )
                         self.state["open_positions"].append(position)
                         self.state["fills"] = int(self.state.get("fills", 0)) + 1
+                        self.mark_slug_traded(str(order.get("slug", "")))
                     else:
                         status = "zero_size"
                 else:

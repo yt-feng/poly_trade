@@ -1,0 +1,111 @@
+name: polygon-orderfilled-probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      window_blocks:
+        description: 'Bounded finalized Polygon block window'
+        required: false
+        default: '2048'
+      chunk_blocks:
+        description: 'eth_getLogs block chunk'
+        required: false
+        default: '200'
+      max_logs:
+        description: 'Fail closed above this decoded event count'
+        required: false
+        default: '2000'
+      rpc_url:
+        description: 'Read-only Polygon JSON-RPC endpoint'
+        required: false
+        default: 'https://polygon-rpc.com'
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate decoder and join contracts
+        run: |
+          python -m pip install -r requirements-vault.txt pytest
+          python -m pytest -q \
+            tests/test_polygon_orderfilled_probe.py \
+            tests/test_onchain_orderfilled_normalizer.py \
+            tests/test_authoritative_orderfilled_quote_join.py \
+            tests/test_sequential_compound_gate.py
+
+      - name: Fetch bounded finalized OrderFilled logs
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/polygon-orderfilled-probe"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/polygon_orderfilled_probe.py \
+            --output "$PRIVATE_DIR/probe.json" \
+            --rpc-url '${{ inputs.rpc_url }}' \
+            --window-blocks '${{ inputs.window_blocks }}' \
+            --chunk-blocks '${{ inputs.chunk_blocks }}' \
+            --max-logs '${{ inputs.max_logs }}' \
+            > "$PRIVATE_DIR/probe-summary.json"
+
+      - name: Seal only encrypted probe result
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/polygon-orderfilled-probe"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'polygon-orderfilled-probe-sealed-v1',
+              'probe': json.loads((private / 'probe.json').read_text()),
+              'summary': (private / 'probe-summary.json').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+              'live_orders_enabled': False,
+              'actual_fills': 0,
+              'verified_canary_fills': 0,
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': False, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted probe result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/polygon-orderfilled-probe" sealed-delivery
+

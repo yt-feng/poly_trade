@@ -1,0 +1,130 @@
+name: current-capture-public-trade-flow
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tags:
+        description: 'Comma-separated completed capture-v2 release tags; no capture is started'
+        required: false
+        default: 'capture-v2-39001221743-1,capture-v2-39016179031-1,capture-v2-39031421720-1,capture-v2-39048347506-1'
+      tte_center:
+        description: 'Seconds before expiry for the fixed decision snapshot'
+        required: false
+        default: '50'
+      tte_width:
+        description: 'Half-width of the fixed decision window'
+        required: false
+        default: '5'
+      window_seconds:
+        description: 'Fixed causal public-trade lookback window'
+        required: false
+        default: '60'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: current-capture-public-trade-flow
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+      RELEASE_TAGS: ${{ inputs.release_tags }}
+      TTE_CENTER: ${{ inputs.tte_center }}
+      TTE_WIDTH: ${{ inputs.tte_width }}
+      WINDOW_SECONDS: ${{ inputs.window_seconds }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-vault.txt
+      - name: Download only already-completed capture archives
+        run: |
+          set -euo pipefail
+          input_tags="$RELEASE_TAGS"
+          test -n "$input_tags"
+          old_ifs="$IFS"
+          IFS=','
+          read -r -a tags <<< "$input_tags"
+          IFS="$old_ifs"
+          test "${#tags[@]}" -ge 1
+          mkdir -p "$RUNNER_TEMP/capture-input"
+          for tag in "${tags[@]}"; do
+            case "$tag" in
+              capture-v2-[0-9]*-[0-9]*) ;;
+              *) echo 'invalid capture release tag' >&2; exit 2 ;;
+            esac
+            dest="$RUNNER_TEMP/capture-input/$tag"
+            mkdir -p "$dest"
+            gh release download "$tag" -R yt-feng/poly \
+              -p 'raw-*.jsonl.gz' -p 'snapshots-*.jsonl.gz' -p 'labels-*.jsonl.gz' \
+              -D "$dest" >/dev/null
+          done
+      - name: Run causal public-trade-flow audit without printing findings
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/audit-output"
+          python -u analysis/current_capture_public_trade_flow.py \
+            --input "$RUNNER_TEMP/capture-input" \
+            --tte-center "$TTE_CENTER" --tte-width "$TTE_WIDTH" \
+            --window-seconds "$WINDOW_SECONDS" \
+            --output "$RUNNER_TEMP/audit-output/result.json" \
+            > "$RUNNER_TEMP/audit-output/runner.stdout" 2> "$RUNNER_TEMP/audit-output/runner.stderr"
+      - name: Seal result and publish only ciphertext
+        run: |
+          set -euo pipefail
+          test -n "$RESEARCH_RECIPIENT_ID"
+          mkdir -p sealed-delivery
+          python - <<'PY'
+          import datetime, hashlib, json, os
+          from pathlib import Path
+          result = json.loads(Path(os.environ['RUNNER_TEMP'] + '/audit-output/result.json').read_text())
+          payload = {
+              'schema_version': 1,
+              'kind': 'sealed_research_work_summary',
+              'generated_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'experiment': 'existing_capture_public_trade_flow_candidate',
+              'release_tags': [x for x in os.environ['RELEASE_TAGS'].split(',') if x],
+              'code_commit': os.environ.get('GITHUB_SHA'),
+              'result': result,
+              'actual_fills': 0,
+              'verified_canary_fills': 0,
+              'new_capture_collected': False,
+              'live_orders_enabled': False,
+              'official_outcomes_are_execution_receipts': False,
+              'result_sha256': hashlib.sha256(Path(os.environ['RUNNER_TEMP'] + '/audit-output/result.json').read_bytes()).hexdigest(),
+          }
+          Path(os.environ['RUNNER_TEMP'] + '/sealed-payload.json').write_text(json.dumps(payload, sort_keys=True, indent=2) + '\n')
+          PY
+          python tools/research_vault.py seal \
+            --input "$RUNNER_TEMP/sealed-payload.json" \
+            --output sealed-delivery/part-0000.vault \
+            --recipient research_vault/recipient.json \
+            --recipient-id "$RESEARCH_RECIPIENT_ID" \
+            > "$RUNNER_TEMP/seal.stdout"
+          cat > sealed-delivery/status.json <<'EOF'
+          {"live_orders_enabled":false,"plaintext_published":false,"sealed_parts":1,"stage":"sealed_delivery","status":"complete","strategy_evaluated":true,"version":1}
+          EOF
+          python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+      - name: Upload generic delivery status only
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-first-sealed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: sealed-delivery/status.json
+          retention-days: 14

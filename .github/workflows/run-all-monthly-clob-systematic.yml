@@ -2,6 +2,12 @@ name: Build all monthly_runs CLOB systematic research
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run the standard report or one sealed old-data audit'
+        type: choice
+        options: [systematic, book_pressure, quantml_small_cash, history_cooldown_cash, path_efficiency_strict, path_efficiency_threshold_grid, path_efficiency_long_selection, maker_path_shadow, registry_small_cash, registry_stable_selection, nested_walk_forward_registry, execution_aware_old_clean_candidate, compound_old_clean, h104_old_clean_compound_variants, causal_label_state_audit, quality_aligned_subset_sensitivity, inventory_toxicity_shadow, prefix_only_compound_audit, execution_contract_prefix_sensitivity, tick_depth_prefix_audit, rolling_window_stability, causal_loss_window_diagnostic, robust_walk_forward_selection, registry_same_ledger_rolling_audit, fast_focused_registry_verification, runner_up_holdout_only, fee_slippage_counterfactual, high_confidence_gate, high_confidence_failure_diagnostic, execution_economics, consensus_gate, capital_floor_grid, h90_random_forest, h91_stability_first]
+        default: systematic
   push:
     branches:
       - main
@@ -9,6 +15,33 @@ on:
       - 'analysis/all_monthly_clob_systematic_research.py'
       - 'analysis/all_monthly_clob_systematic_research_v2.py'
       - 'analysis/all_monthly_clob_systematic_research_v3.py'
+      - 'analysis/causal_quantml_small_cash.py'
+      - 'analysis/causal_path_efficiency_strict_holdout.py'
+      - 'analysis/causal_path_efficiency_long_selection.py'
+      - 'analysis/maker_path_efficiency_shadow.py'
+      - 'analysis/maker_shadow_chain.py'
+      - 'analysis/registry_small_cash_holdout.py'
+      - 'analysis/h104_old_clean_compound_variants.py'
+      - 'analysis/registry_block_stability_holdout.py'
+      - 'analysis/nested_walk_forward_registry.py'
+      - 'analysis/execution_aware_old_clean_candidate.py'
+      - 'analysis/cash_release_sensitivity.py'
+      - 'analysis/h55_tick_depth_prefix_audit.py'
+      - 'analysis/h56_rolling_window_stability.py'
+      - 'analysis/h57_causal_loss_window_diagnostic.py'
+      - 'analysis/h58_robust_walk_forward_selection.py'
+      - 'analysis/h59_registry_same_ledger_rolling_audit.py'
+      - 'analysis/h60_fast_focused_registry_verification.py'
+      - 'analysis/h61_runner_up_holdout_only.py'
+      - 'analysis/h62_fee_slippage_counterfactual.py'
+      - 'analysis/h62_missing_cell_retry.py'
+      - 'analysis/h64_high_confidence_gate.py'
+      - 'analysis/h65_high_confidence_failure_diagnostic.py'
+      - 'analysis/h66_execution_economics.py'
+      - 'analysis/h66_aggregate.py'
+      - 'analysis/h67_consensus_gate.py'
+      - 'analysis/h90_random_forest_small_cash.py'
+      - 'analysis/h91_random_forest_stability_first.py'
       - '.github/workflows/run-all-monthly-clob-systematic.yml'
       - 'requirements.txt'
 
@@ -17,6 +50,7 @@ permissions:
 
 jobs:
   build-all-monthly-clob-systematic:
+    if: github.event_name != 'workflow_dispatch' || (inputs.mode != 'book_pressure' && inputs.mode != 'quantml_small_cash' && inputs.mode != 'history_cooldown_cash' && inputs.mode != 'path_efficiency_strict' && inputs.mode != 'path_efficiency_threshold_grid' && inputs.mode != 'path_efficiency_long_selection' && inputs.mode != 'maker_path_shadow' && inputs.mode != 'registry_small_cash' && inputs.mode != 'registry_stable_selection' && inputs.mode != 'nested_walk_forward_registry' && inputs.mode != 'execution_aware_old_clean_candidate' && inputs.mode != 'compound_old_clean' && inputs.mode != 'h104_old_clean_compound_variants' && inputs.mode != 'causal_label_state_audit' && inputs.mode != 'quality_aligned_subset_sensitivity' && inputs.mode != 'inventory_toxicity_shadow' && inputs.mode != 'prefix_only_compound_audit' && inputs.mode != 'execution_contract_prefix_sensitivity' && inputs.mode != 'tick_depth_prefix_audit' && inputs.mode != 'rolling_window_stability' && inputs.mode != 'causal_loss_window_diagnostic' && inputs.mode != 'robust_walk_forward_selection' && inputs.mode != 'registry_same_ledger_rolling_audit' && inputs.mode != 'fast_focused_registry_verification' && inputs.mode != 'runner_up_holdout_only' && inputs.mode != 'fee_slippage_counterfactual' && inputs.mode != 'high_confidence_gate' && inputs.mode != 'high_confidence_failure_diagnostic' && inputs.mode != 'execution_economics' && inputs.mode != 'consensus_gate' && inputs.mode != 'capital_floor_grid' && inputs.mode != 'h90_random_forest' && inputs.mode != 'h91_stability_first')
     runs-on: ubuntu-latest
 
     steps:
@@ -96,3 +130,2854 @@ jobs:
           else
             echo 'No output changes to commit.'
           fi
+
+  book-pressure-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'book_pressure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run frozen old-data comparison and seal it in the runner
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-book-pressure"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/causal_path_book_pressure_alignment.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-data-causal-book-pressure-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-book-pressure" sealed-delivery
+
+  quantml-small-cash-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'quantml_small_cash'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run predeclared quantML interaction under the small-cash contract
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-quantml-small-cash"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/causal_quantml_small_cash.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-data-causal-quantml-small-cash-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-quantml-small-cash" sealed-delivery
+
+  history-cooldown-cash-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'history_cooldown_cash'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run registered history-gated candidate under the strict cash contract
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-history-cooldown-cash"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/causal_history_cooldown_cash.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-data-causal-history-cooldown-cash-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-history-cooldown-cash" sealed-delivery
+
+  path-efficiency-strict-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'path_efficiency_strict'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run frozen path-efficiency candidate under strict holdout cash contract
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-path-efficiency-strict"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/causal_path_efficiency_strict_holdout.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-data-causal-path-efficiency-strict-holdout-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-path-efficiency-strict" sealed-delivery
+
+  path-efficiency-threshold-grid-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'path_efficiency_threshold_grid'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run predeclared path-efficiency threshold grid
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-path-efficiency-threshold-grid"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/causal_path_efficiency_threshold_grid.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          committed = research_vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          if recipient_id != committed['recipient_id'] or recipient != committed:
+              raise SystemExit('recipient variable does not match committed recipient')
+          payload = {
+              'format': 'old-data-causal-path-efficiency-threshold-grid-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-path-efficiency-threshold-grid" sealed-delivery
+
+  path-efficiency-long-selection-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'path_efficiency_long_selection'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run predeclared long-selection compound threshold audit
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-path-efficiency-long-selection"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/causal_path_efficiency_long_selection.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          committed = research_vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          if recipient_id != committed['recipient_id'] or recipient != committed:
+              raise SystemExit('recipient variable does not match committed recipient')
+          payload = {
+              'format': 'old-data-causal-path-efficiency-long-selection-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-path-efficiency-long-selection" sealed-delivery
+
+  maker-path-shadow-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'maker_path_shadow'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run old-data maker path shadow upper bound
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-maker-path-shadow"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/maker_path_efficiency_shadow.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-data-maker-path-efficiency-shadow-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          trade_logs = private / 'results/trade_logs.csv'
+          if trade_logs.exists():
+              payload['trade_logs_csv'] = trade_logs.read_text()
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-maker-path-shadow" sealed-delivery
+
+  registry-small-cash-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'registry_small_cash'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run pre-registered strategy registry under strict small-cash contract
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-registry-small-cash"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/registry_small_cash_holdout.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-data-registered-strategy-small-cash-holdout-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'candidate_metrics_csv': (private / 'results/candidate_metrics.csv').read_text(),
+              'selection_metrics_csv': (private / 'results/selection_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          selected = private / 'results/selected_metrics.csv'
+          if selected.exists():
+              payload['selected_metrics_csv'] = selected.read_text()
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-registry-small-cash" sealed-delivery
+
+  compound-old-clean-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'compound_old_clean'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pytest
+
+      - name: Validate compound ledger and OrderFilled normalizer
+        run: |
+          python -m pytest -q \
+            tests/test_sequential_compound_gate.py \
+            tests/test_onchain_orderfilled_normalizer.py \
+            tests/test_authoritative_orderfilled_quote_join.py \
+            tests/test_authoritative_orderfilled_source_audit.py \
+            tests/test_polymarket_receipt_adapter.py
+
+      - name: Run old-clean single-account compound replay
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-compound-replay"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/compound_old_clean_replay.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-single-account-compound-replay-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'compound_metrics_csv': (private / 'results/compound_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-compound-replay" sealed-delivery
+
+  h104-old-clean-compound-variants:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'h104_old_clean_compound_variants'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy
+
+      - name: Run one-build ten-variant same-ledger audit
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h104-old-clean-compound-variants"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h104_old_clean_compound_variants.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-compound-price-cap-variants-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'variant_metrics_csv': (private / 'results/variant_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/h104-old-clean-compound-variants" sealed-delivery
+
+  causal-label-state-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'causal_label_state_audit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy
+
+      - name: Run causal label and clock coverage audit on old clean data
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-causal-label-state"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h50_causal_label_state_audit.py \
+            --source-root source_poly/data/monthly_runs \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-causal-label-state-audit-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'quality_by_split_csv': (private / 'results/quality_by_split.csv').read_text(),
+              'quality_by_run_csv': (private / 'results/quality_by_run.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': False, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-causal-label-state" sealed-delivery
+
+  quality-aligned-subset-sensitivity:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'quality_aligned_subset_sensitivity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H51 quality-aligned old-clean sensitivity audit
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h51-quality-aligned"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h51_quality_aligned_subset_sensitivity.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h51-quality-aligned-subset-sensitivity-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'quality_counts_csv': (private / 'results/quality_counts.csv').read_text(),
+              'quality_by_run_csv': (private / 'results/quality_by_run.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h51-quality-aligned" sealed-delivery
+
+  inventory-toxicity-shadow:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'inventory_toxicity_shadow'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H52 inventory and toxicity shadow audit
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h52-inventory-toxicity"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h52_inventory_toxicity_shadow.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h52-inventory-toxicity-shadow-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h52-inventory-toxicity" sealed-delivery
+
+  prefix-only-compound-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'prefix_only_compound_audit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H53 exact-ten same-ledger prefix audit
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h53-prefix-only"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h53_prefix_only_compound_audit.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h53-prefix-only-compound-audit-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h53-prefix-only" sealed-delivery
+
+  execution-contract-prefix-sensitivity:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'execution_contract_prefix_sensitivity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H54 documented execution-contract prefix sensitivity
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h54-execution-contract"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h54_execution_contract_prefix_sensitivity.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h54-execution-contract-prefix-sensitivity-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h54-execution-contract" sealed-delivery
+
+  tick-depth-prefix-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'tick_depth_prefix_audit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H55 tick-size and observed-depth prefix audit
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h55-tick-depth"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h55_tick_depth_prefix_audit.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h55-tick-depth-prefix-audit-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h55-tick-depth" sealed-delivery
+
+  rolling-window-stability-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'rolling_window_stability'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H56 rolling-window stability audit
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h56-rolling-window"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h56_rolling_window_stability.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h56-rolling-window-stability-audit-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h56-rolling-window" sealed-delivery
+
+  causal-loss-window-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'causal_loss_window_diagnostic'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H57 causal loss-window diagnostic
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h57-loss-window"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h57_causal_loss_window_diagnostic.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h57-causal-loss-window-diagnostic-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'selection_metrics_csv': (private / 'results/selection_metrics.csv').read_text(),
+              'holdout_metrics_csv': (private / 'results/holdout_metrics.csv').read_text(),
+              'baseline_event_diagnostics_csv': (private / 'results/baseline_event_diagnostics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h57-loss-window" sealed-delivery
+
+  high-confidence-gate:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'high_confidence_gate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H64 predeclared high-confidence gate screen
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h64-high-confidence"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h64_high_confidence_gate.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h64-high-confidence-gate-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'selection_metrics_csv': (private / 'results/selection_metrics.csv').read_text(),
+              'holdout_metrics_csv': (private / 'results/holdout_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h64-high-confidence" sealed-delivery
+
+  high-confidence-failure-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'high_confidence_failure_diagnostic'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H65 predeclared high-confidence gate screen
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h65-high-confidence-failure"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h65_high_confidence_failure_diagnostic.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h65-high-confidence-failure-diagnostic-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'selection_metrics_csv': (private / 'results/selection_metrics.csv').read_text(),
+              'holdout_metrics_csv': (private / 'results/holdout_metrics.csv').read_text(),
+              'failure_diagnostics_csv': (private / 'results/failure_diagnostics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h65-high-confidence-failure" sealed-delivery
+
+  h66-execution-economics-matrix:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'execution_economics'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        track: [raw_edge, quote_quality, path_quality, combined]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Run H66 execution-economics track
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          TRACK: ${{ matrix.track }}
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h66-$TRACK"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h66_execution_economics.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --track "$TRACK" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          results = private / 'results'
+          payload = {
+              'format': 'old-clean-h66-execution-economics-track-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((results / 'meta.json').read_text()),
+              'selection_metrics_csv': (results / 'selection_metrics.csv').read_text(),
+              'holdout_metrics_csv': (results / 'holdout_metrics.csv').read_text(),
+              'entry_eligibility_csv': (results / 'entry_eligibility.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT'], 'track': os.environ['TRACK']},
+          }
+          sealed = research_vault.seal(research_vault.canonical(payload), recipient, recipient_id)
+          research_vault.write_new(private / ('part-' + os.environ['TRACK'] + '.vault'), sealed, 0o600)
+          PY
+
+      - name: Upload encrypted H66 track part
+        uses: actions/upload-artifact@v4
+        with:
+          name: h66-track-${{ matrix.track }}
+          path: ${{ runner.temp }}/old-data-h66-${{ matrix.track }}/part-${{ matrix.track }}.vault
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h66-${{ matrix.track }}"
+
+  h66-execution-economics-seal:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'execution_economics'
+    needs: h66-execution-economics-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download encrypted H66 track parts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: h66-track-*
+          path: sealed-parts
+          merge-multiple: true
+
+      - name: Assemble encrypted H66 delivery
+        run: |
+          set -euo pipefail
+          mkdir -m 700 sealed-delivery
+          for track in raw_edge quote_quality path_quality combined; do
+            test -s "sealed-parts/part-$track.vault"
+          done
+          cp sealed-parts/part-raw_edge.vault sealed-delivery/part-0000.vault
+          cp sealed-parts/part-quote_quality.vault sealed-delivery/part-0001.vault
+          cp sealed-parts/part-path_quality.vault sealed-delivery/part-0002.vault
+          cp sealed-parts/part-combined.vault sealed-delivery/part-0003.vault
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          Path('sealed-delivery/status.json').write_bytes(json.dumps({
+              'version': 1, 'status': 'complete', 'stage': 'sealed_delivery',
+              'strategy_evaluated': True, 'live_orders_enabled': False,
+              'plaintext_published': False, 'sealed_parts': 4
+          }, separators=(',', ':'), sort_keys=True).encode() + b'\n')
+          PY
+
+      - name: Publish only encrypted H66 research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf sealed-parts sealed-delivery
+
+  consensus-gate:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'consensus_gate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Run H67 predeclared consensus gate
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h67-consensus"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h67_consensus_gate.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          results = private / 'results'
+          payload = {
+              'format': 'old-clean-h67-consensus-gate-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((results / 'meta.json').read_text()),
+              'selection_metrics_csv': (results / 'selection_metrics.csv').read_text(),
+              'holdout_metrics_csv': (results / 'holdout_metrics.csv').read_text(),
+              'signal_counts_csv': (results / 'signal_counts.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted H67 research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h67-consensus" sealed-delivery
+
+  robust-walk-forward-selection:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'robust_walk_forward_selection'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H58 robust walk-forward selection
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h58-robust-selection"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h58_robust_walk_forward_selection.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h58-robust-walk-forward-selection-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'selection_block_metrics_csv': (private / 'results/selection_block_metrics.csv').read_text(),
+              'holdout_metrics_csv': (private / 'results/holdout_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h58-robust-selection" sealed-delivery
+
+  registry-same-ledger-rolling-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'registry_same_ledger_rolling_audit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest scikit-learn
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H59 registry same-ledger rolling audit
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h59-registry-rolling"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h59_registry_same_ledger_rolling_audit.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h59-registry-same-ledger-rolling-audit-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'selection_block_metrics_csv': (private / 'results/selection_block_metrics.csv').read_text(),
+              'holdout_metrics_csv': (private / 'results/holdout_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h59-registry-rolling" sealed-delivery
+
+  fast-focused-registry-verification:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'fast_focused_registry_verification'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest scikit-learn
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H60 fast focused registry verification
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h60-fast-focused"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h60_fast_focused_registry_verification.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h60-fast-focused-registry-verification-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'selection_block_metrics_csv': (private / 'results/selection_block_metrics.csv').read_text(),
+              'holdout_metrics_csv': (private / 'results/holdout_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h60-fast-focused" sealed-delivery
+
+  runner-up-holdout-only:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'runner_up_holdout_only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest scikit-learn
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H61 runner-up holdout-only verification
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h61-runner-up"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h61_runner_up_holdout_only.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h61-runner-up-holdout-only-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'holdout_metrics_csv': (private / 'results/holdout_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h61-runner-up" sealed-delivery
+
+  fee-slippage-counterfactual:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'fee_slippage_counterfactual'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest scikit-learn
+
+      - name: Validate sequential compound gate
+        run: python -m pytest -q tests/test_sequential_compound_gate.py tests/test_path_efficiency_compound_audit.py
+
+      - name: Run H62 fee and slippage counterfactual audit
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h62-counterfactual"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h62_missing_cell_retry.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h62-fee-slippage-counterfactual-retry1-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'counterfactual_metrics_csv': (private / 'results/counterfactual_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-h62-counterfactual" sealed-delivery
+
+  capital-floor-grid-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'capital_floor_grid'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pytest
+
+      - name: Validate capital-floor grid helpers
+        run: python -m pytest -q tests/test_capital_floor_grid.py tests/test_sequential_compound_gate.py
+
+      - name: Run predeclared capital and fee protocol grid on old clean data
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-capital-floor-grid"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/capital_floor_grid.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-capital-floor-protocol-grid-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'selected_protocol_cells_csv': (private / 'results/selected_protocol_cells.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-capital-floor-grid" sealed-delivery
+
+  registry-stable-selection-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'registry_stable_selection'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run block-stability-first registry selection on old data
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-registry-stable-selection"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/registry_block_stability_holdout.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-data-registered-strategy-block-stability-holdout-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'candidate_metrics_csv': (private / 'results/candidate_metrics.csv').read_text(),
+              'selection_metrics_csv': (private / 'results/selection_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          selected = private / 'results/selected_metrics.csv'
+          if selected.exists():
+              payload['selected_metrics_csv'] = selected.read_text()
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-registry-stable-selection" sealed-delivery
+
+  nested-walk-forward-registry:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'nested_walk_forward_registry'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run nested walk-forward on old clean data
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-nested-walk-forward"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/nested_walk_forward_registry.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-data-nested-walk-forward-registry-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'train_validation_metrics_csv': (private / 'results/train_validation_metrics.csv').read_text(),
+              'nested_test_metrics_csv': (private / 'results/nested_test_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-nested-walk-forward" sealed-delivery
+
+  execution-aware-old-clean-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'execution_aware_old_clean_candidate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run cost-aware candidate on old clean data
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-execution-aware-candidate"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/execution_aware_old_clean_candidate.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-data-execution-aware-cost-floor-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'train_validation_metrics_csv': (private / 'results/train_validation_metrics.csv').read_text(),
+              'test_metrics_csv': (private / 'results/test_metrics.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/old-data-execution-aware-candidate" sealed-delivery
+
+  h90-random-forest:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'h90_random_forest'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run H90 causal Random Forest on old clean data
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h90-old-clean-random-forest"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h90_random_forest_small_cash.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h90-random-forest-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'grid_csv': (private / 'results/grid.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/h90-old-clean-random-forest" sealed-delivery
+
+  h91-stability-first:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'h91_stability_first'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout clean-data source repository
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: bbda5f2050685f63153621a54641ebdfab943487
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt
+
+      - name: Run H91 stability-first selection on old clean data
+        env:
+          PYTHONUNBUFFERED: '1'
+          SOURCE_DATA_COMMIT: bbda5f2050685f63153621a54641ebdfab943487
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h91-old-clean-stability-first"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h91_random_forest_stability_first.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'old-clean-h91-random-forest-stability-first-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'meta': json.loads((private / 'results/meta.json').read_text()),
+              'grid_csv': (private / 'results/grid.csv').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish only encrypted research delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/h91-old-clean-stability-first" sealed-delivery

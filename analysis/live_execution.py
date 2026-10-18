@@ -53,13 +53,17 @@ def money_text(value: Union[Decimal, float, str], places: str = "0.01") -> str:
     return str(dec.quantize(Decimal(places), rounding=ROUND_DOWN))
 
 
-def price_text(value: Union[Decimal, float, str]) -> str:
+def price_text(value: Union[Decimal, float, str], tick_size: Union[Decimal, float, str]) -> str:
     try:
         dec = Decimal(str(value))
+        tick = Decimal(str(tick_size))
     except InvalidOperation as exc:
         raise LiveExecutionError(f"invalid price value: {value!r}") from exc
-    dec = max(Decimal("0.01"), min(Decimal("0.99"), dec))
-    return str(dec.quantize(Decimal("0.01"), rounding=ROUND_DOWN))
+    if tick <= 0 or tick >= 1:
+        raise LiveExecutionError(f"invalid tick size: {tick_size!r}")
+    dec = max(tick, min(Decimal("1") - tick, dec))
+    rounded = (dec / tick).to_integral_value(rounding=ROUND_DOWN) * tick
+    return format(rounded, "f")
 
 
 @dataclass(frozen=True)
@@ -108,6 +112,9 @@ class LiveOrderPlan:
     max_price: str
     order_type: str
     estimated_shares: str
+    estimated_fee_usdc: str
+    net_shares_after_fee: str
+    tick_size: str
     min_order_size: str
     blocked_reason: str = ""
 
@@ -120,8 +127,61 @@ class LiveOrderPlan:
             "live_max_spend_usd": self.max_spend_usd,
             "live_max_price": self.max_price,
             "live_estimated_shares": self.estimated_shares,
+            "live_estimated_fee_usdc": self.estimated_fee_usdc,
+            "live_net_shares_after_fee": self.net_shares_after_fee,
+            "live_tick_size": self.tick_size,
             "live_min_order_size": self.min_order_size,
             "reason": self.blocked_reason,
+        }
+
+
+@dataclass(frozen=True)
+class LiveSellPlan:
+    """Plan-only sell boundary; it never submits or cancels an order."""
+
+    local_order_id: str
+    slug: str
+    side: str
+    token_id: str
+    shares: str
+    limit_price: str
+    tick_size: str
+    min_order_size: str
+    blocked_reason: str = ""
+
+    def event_fields(self) -> Dict[str, Any]:
+        return {
+            "live_sell_local_id": self.local_order_id,
+            "slug": self.slug,
+            "side": self.side,
+            "token_id": self.token_id,
+            "live_sell_shares": self.shares,
+            "live_sell_limit_price": self.limit_price,
+            "live_tick_size": self.tick_size,
+            "live_min_order_size": self.min_order_size,
+            "status": "planned" if not self.blocked_reason else self.blocked_reason,
+            "orders_submitted": False,
+        }
+
+
+@dataclass(frozen=True)
+class LiveRedeemPlan:
+    """Plan-only redeem boundary; official resolution and cash receipts stay external."""
+
+    local_redeem_id: str
+    condition_id: str
+    token_ids: str
+    shares: str
+    blocked_reason: str = ""
+
+    def event_fields(self) -> Dict[str, Any]:
+        return {
+            "live_redeem_local_id": self.local_redeem_id,
+            "condition_id": self.condition_id,
+            "token_ids": self.token_ids,
+            "live_redeem_shares": self.shares,
+            "status": "planned" if not self.blocked_reason else self.blocked_reason,
+            "orders_submitted": False,
         }
 
 
@@ -135,17 +195,21 @@ def build_buy_market_plan(
     signal_price: float,
     max_adverse_slippage: float,
     min_order_size: float,
+    tick_size: float,
+    fee_rate: float = 0.07,
     settings: LiveExecutionSettings,
 ) -> LiveOrderPlan:
     capped_amount = min(Decimal(str(intended_cost)), settings.max_order_usd)
     amount = Decimal(money_text(capped_amount))
-    max_price = Decimal(price_text(Decimal(str(signal_price)) + Decimal(str(max_adverse_slippage))))
+    max_price = Decimal(price_text(Decimal(str(signal_price)) + Decimal(str(max_adverse_slippage)), tick_size))
     estimated_shares = Decimal("0") if max_price <= 0 else amount / max_price
+    fee = estimated_shares * Decimal(str(fee_rate)) * max_price * (Decimal("1") - max_price)
+    net_shares_after_fee = estimated_shares
     min_size = Decimal(str(min_order_size)) if min_order_size and min_order_size > 0 else Decimal("0")
     blocked = ""
     if amount <= 0:
         blocked = "blocked_zero_amount"
-    elif min_size > 0 and estimated_shares < min_size:
+    elif min_size > 0 and net_shares_after_fee < min_size:
         blocked = "blocked_min_order_size"
     return LiveOrderPlan(
         local_order_id=local_order_id,
@@ -154,10 +218,72 @@ def build_buy_market_plan(
         token_id=token_id,
         amount_usd=money_text(amount),
         max_spend_usd=money_text(amount),
-        max_price=price_text(max_price),
+        max_price=price_text(max_price, tick_size),
         order_type=settings.order_type,
         estimated_shares=money_text(estimated_shares),
+        estimated_fee_usdc=money_text(fee),
+        net_shares_after_fee=money_text(net_shares_after_fee),
+        tick_size=str(Decimal(str(tick_size))),
         min_order_size=money_text(min_size),
+        blocked_reason=blocked,
+    )
+
+
+def build_sell_limit_plan(
+    *,
+    local_order_id: str,
+    slug: str,
+    side: str,
+    token_id: str,
+    shares: float,
+    limit_price: float,
+    tick_size: float,
+    min_order_size: float,
+) -> LiveSellPlan:
+    """Build a sell plan for receipt validation without exposing submission."""
+    size = Decimal(str(shares))
+    minimum = Decimal(str(min_order_size)) if min_order_size and min_order_size > 0 else Decimal("0")
+    price = price_text(Decimal(str(limit_price)), tick_size)
+    blocked = ""
+    if size <= 0:
+        blocked = "blocked_zero_sell_size"
+    elif minimum > 0 and size < minimum:
+        blocked = "blocked_sell_min_order_size"
+    return LiveSellPlan(
+        local_order_id=local_order_id,
+        slug=slug,
+        side=side,
+        token_id=token_id,
+        shares=money_text(size),
+        limit_price=price,
+        tick_size=str(Decimal(str(tick_size))),
+        min_order_size=money_text(minimum),
+        blocked_reason=blocked,
+    )
+
+
+def build_redeem_plan(
+    *,
+    local_redeem_id: str,
+    condition_id: str,
+    token_ids: list[str],
+    shares: float,
+    official_resolution_ref: str = "",
+) -> LiveRedeemPlan:
+    """Build a redeem plan only after an external official resolution reference exists."""
+    size = Decimal(str(shares))
+    blocked = ""
+    if not condition_id.strip() or not token_ids:
+        blocked = "blocked_missing_resolution_identity"
+    elif not official_resolution_ref.strip():
+        blocked = "blocked_missing_official_resolution_receipt"
+    elif size <= 0:
+        blocked = "blocked_zero_redeem_size"
+    return LiveRedeemPlan(
+        local_redeem_id=local_redeem_id,
+        condition_id=condition_id,
+        token_ids=",".join(str(x) for x in token_ids),
+        shares=money_text(size),
         blocked_reason=blocked,
     )
 
