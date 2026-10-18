@@ -40,6 +40,7 @@ def simulate_cash_locked(
     fee_exponent: float = 1.0,
     min_order_shares: float = 5.0,
     minimum_free_cash_after_entry: float = 0.0,
+    single_position_only: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
     if not math.isfinite(float(min_order_shares)) or float(min_order_shares) < 0:
         raise ValueError("min_order_shares must be finite and non-negative")
@@ -93,6 +94,7 @@ def simulate_cash_locked(
     logs: list[dict] = []
     blocked_cash = 0
     blocked_pending = 0
+    blocked_single_position = 0
     last_now = None
 
     def release_until(now: float) -> None:
@@ -114,6 +116,14 @@ def simulate_cash_locked(
         if cooldown > 0:
             cooldown -= 1
             blocked_pending += 1
+            continue
+        # Execution-contract diagnostic: when enabled, the account may not
+        # open another position while any prior position remains unsettled and
+        # its reserved cash is unavailable.  This keeps one chronological
+        # compounding ledger and tests whether overlapping locks are the
+        # binding cause of small-account starvation.
+        if single_position_only and positions:
+            blocked_single_position += 1
             continue
         if len(recent_trades) >= study.MAX_TRADES_PER_WINDOW or not eligible[i]:
             continue
@@ -197,6 +207,8 @@ def simulate_cash_locked(
         "locked_positions_at_observation_end": int(locked_at_observation_end),
         "blocked_cash_events": int(blocked_cash),
         "blocked_pending_events": int(blocked_pending),
+        "single_position_only": bool(single_position_only),
+        "blocked_single_position_events": int(blocked_single_position),
         "profit_factor": float(wins / abs(losses)) if losses else float("nan"),
         "win_rate": float(sum(x > 0 for x in realized) / len(realized)) if realized else float("nan"),
         "settlement_seconds": SETTLEMENT_SECONDS,

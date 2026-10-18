@@ -118,6 +118,22 @@ class CashReleaseSensitivityTests(unittest.TestCase):
         self.assertEqual(buffered["trades"], 1)
         self.assertEqual(buffered["minimum_free_cash_after_entry"], 5.0)
 
+    def test_single_position_gate_waits_for_cash_release(self):
+        _, metrics = simulate_cash_locked(
+            self.frame(),
+            "classic_early_drop_down_mean_positive",
+            ExecutionConfig(),
+            10.0,
+            5.0,
+            600.0,
+            fee_mode="polymarket_taker",
+            fee_rate=0.0,
+            single_position_only=True,
+        )
+        self.assertEqual(metrics["trades"], 1)
+        self.assertEqual(metrics["blocked_single_position_events"], 1)
+        self.assertTrue(metrics["single_position_only"])
+
 
 if __name__ == "__main__":
     unittest.main()
