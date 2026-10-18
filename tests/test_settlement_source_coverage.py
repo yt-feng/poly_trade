@@ -210,6 +210,20 @@ class SourceTests(unittest.TestCase):
         row["microstructure"]["rules"]["metadata_received_ms"] = True
         self.assertFalse(one(row)["feature_availability"]["identity"])
 
+    def test_polybolt_shape_is_not_silently_admitted_to_legacy_audit(self):
+        row = snapshot()
+        twap = row["microstructure"]["twap60"]
+        twap["source"] = "polybolt_crypto_twap_60"
+        twap["topic"] = "prices.crypto.twap"
+        twap["payload"] = {
+            "symbol": "btcusd",
+            "timestamp": twap["event_ms"],
+            "value": twap["price"],
+            "windowSeconds": 60,
+        }
+        self.assertFalse(one(row)["feature_availability"]["twap"])
+        self.assertIn("twap_legacy_identity_mismatch", one(row)["failure_reasons"])
+
     def test_warmed_and_realized_vol_units(self):
         row = snapshot()
         vol = row["microstructure"]["spot_returns_and_vol"]["60s"]
