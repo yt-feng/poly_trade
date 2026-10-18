@@ -112,6 +112,10 @@ def _orderfilled_frontier(state: dict[str, Any]) -> dict[str, Any]:
         canary_ready = audit.get("canary_ready") is True
         boundary = audit.get("evidence_boundary")
     if synthetic_marker is not False:
+        boundary = boundary or (
+            "synthetic_marker_missing" if synthetic_marker is None
+            else "synthetic_only_binding_evidence"
+        )
         return {
             "reported": True,
             "future_only": True,
@@ -119,7 +123,7 @@ def _orderfilled_frontier(state: dict[str, Any]) -> dict[str, Any]:
             "same_ledger_rows": same_ledger_rows if type(same_ledger_rows) is int else 0,
             "ready": False,
             "synthetic_only": synthetic_only,
-            "evidence_boundary": boundary or "synthetic_marker_missing_or_not_false",
+            "evidence_boundary": boundary,
         }
     if type(same_ledger_rows) is not int:
         raise ValueError("ORDERFILLED_SAME_LEDGER_ROWS_MUST_BE_INTEGER")
