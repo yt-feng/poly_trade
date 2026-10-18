@@ -69,6 +69,9 @@ def assemble_maker_compound_row(
         raise ValueError("trade_side_must_be_maker")
     if _text(trade_event.get("trade_status")).upper() not in {"CONFIRMED", "TRADE_STATUS_CONFIRMED"}:
         raise ValueError("trade_status_must_be_confirmed")
+    fee_rate_bps = _text(trade_event.get("fee_rate_bps"))
+    if not fee_rate_bps:
+        raise ValueError("maker_fee_rate_required")
     if _text(trade_event.get("side")).upper() != "BUY":
         raise ValueError("maker_entry_side_must_be_buy")
     maker_address = _text(_required(trade_event, "maker_address"))
@@ -105,6 +108,8 @@ def assemble_maker_compound_row(
         "asset_id": _text(_required(trade_event, "asset_id")),
         "shares": _text(_required(trade_event, "shares")),
         "price": _text(_required(trade_event, "price")),
+        "fee_rate": fee_rate_bps,
+        "fee": _text(row.get("fee", "0")),
         "execution_role": "MAKER",
         "trader_side": "MAKER",
         "post_only_accepted": post_only_accepted,

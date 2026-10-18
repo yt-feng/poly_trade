@@ -1,6 +1,8 @@
 import unittest
+from decimal import Decimal
 
 from analysis.maker_compound_bundle_adapter import assemble_maker_compound_row
+from analysis.maker_compound_receipt_contract import validate_maker_compound_chain
 
 
 def order_event(status="MATCHED"):
@@ -19,6 +21,7 @@ def trade_event(**updates):
         "asset_id": "token-1",
         "shares": "10",
         "price": "0.5",
+        "fee_rate_bps": "0",
         "side": "BUY",
         "execution_role": "MAKER",
         "trader_side": "MAKER",
@@ -72,6 +75,55 @@ def rebate_fields():
 
 
 class MakerCompoundBundleAdapterTest(unittest.TestCase):
+    def test_ten_assembled_rows_reach_the_same_ledger_contract(self):
+        rows = []
+        fills = []
+        for sequence in range(1, 11):
+            order = order_event()
+            order["order_id"] = f"maker-order-{sequence}"
+            trade = trade_event(
+                maker_order_ids=[order["order_id"]],
+                trade_id=f"trade-{sequence}",
+                transaction_ref=f"0xtx{sequence}",
+            )
+            ledger = ledger_fields()
+            before = Decimal("10") + Decimal("0.61") * (sequence - 1)
+            ledger.update({
+                "sequence_no": sequence,
+                "orderfilled_event_id": f"0xtx{sequence}:7",
+                "previous_checkpoint_id": "opening" if sequence == 1 else f"balance-{sequence - 1}",
+                "balance_checkpoint_id": f"balance-{sequence}",
+                "entry_ts": str(sequence * 100),
+                "cash_available_ts": str(sequence * 100 + 10),
+                "released_cash_since_previous_entry": "0" if sequence == 1 else "5.61",
+                "balance_before": str(before),
+                "balance_after": str(before - Decimal("5")),
+            })
+            settlement = settlement_fields()
+            settlement.update({
+                "settlement_receipt_id": f"settlement-{sequence}",
+                "cash_release_receipt_id": f"cash-release-{sequence}",
+            })
+            row = assemble_maker_compound_row(
+                order_event=order, trade_event=trade, ledger_fields=ledger,
+                settlement_fields=settlement, rebate_fields=rebate_fields(),
+                post_only_accepted=True,
+            )
+            rows.append(row)
+            fills.append({
+                "event_id": f"0xtx{sequence}:7", "tx_hash": f"0xtx{sequence}",
+                "market_id": "market-1", "maker": "0xmaker", "taker": "0xtaker",
+                "side": "BUY", "sign": 1, "size": "10", "cash_amount": "5", "price": "0.5",
+            })
+        result = validate_maker_compound_chain(
+            rows, fills, owner="owner-key", maker_address="0xmaker",
+            starting_checkpoint_id="opening", closing_balance_checkpoint_id="closing",
+            closing_balance="16.10",
+        )
+        self.assertTrue(result["offline_consistency_passed"])
+        self.assertEqual(result["same_ledger_compounding_rows"], 10)
+        self.assertFalse(result["gate_passed"])
+
     def test_joins_maker_order_trade_and_cash_groups(self):
         row = assemble_maker_compound_row(
             order_event=order_event(), trade_event=trade_event(),
