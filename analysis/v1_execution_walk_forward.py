@@ -337,6 +337,42 @@ def simulate(
     return pd.DataFrame(logs), metrics
 
 
+def simulate_share_floor(
+    df: pd.DataFrame,
+    strategy: str,
+    config: ExecutionConfig,
+    bankroll0: float,
+    *,
+    capture_logs: bool = False,
+    fee_mode: str = "polymarket_taker",
+    fee_rate: float = 0.07,
+    fee_exponent: float = 1.0,
+    min_order_shares: float = 5.0,
+) -> Tuple[pd.DataFrame, Dict[str, object]]:
+    """Run a new replay under the documented share-floor contract.
+
+    This named entrypoint prevents a new experiment from silently inheriting
+    the legacy notional-mode default.  The minimum cash is the declared share
+    count at the executed price plus the selected fee; callers that need an
+    additional notional floor must use ``simulate`` and declare that mode
+    explicitly in the experiment record.
+    """
+    return simulate(
+        df,
+        strategy,
+        config,
+        bankroll0,
+        min_cost=0.0,
+        capture_logs=capture_logs,
+        fee_mode=fee_mode,
+        fee_rate=fee_rate,
+        fee_exponent=fee_exponent,
+        min_cost_policy="raise_to_min",
+        min_order_mode="shares",
+        min_order_shares=min_order_shares,
+    )
+
+
 def run_walk_forward(features: pd.DataFrame, folds: List[Dict[str, object]], bankroll0: float, min_cost: float):
     rows: List[Dict[str, object]] = []
     logs: List[pd.DataFrame] = []

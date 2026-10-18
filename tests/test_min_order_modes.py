@@ -6,7 +6,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
-from v1_execution_walk_forward import ExecutionConfig, simulate
+from v1_execution_walk_forward import ExecutionConfig, simulate, simulate_share_floor
 
 
 def one_signal(fraction=0.10):
@@ -46,6 +46,19 @@ class MinimumOrderModeTests(unittest.TestCase):
 
     def test_shares_mode_raises_to_five_shares(self):
         logs, metrics = self.run_one("shares", fraction=0.01)
+        self.assertEqual(metrics["trades"], 1)
+        self.assertAlmostEqual(float(logs.iloc[0]["filled_cost"]), 0.5125, places=6)
+
+    def test_named_share_floor_entrypoint_declares_share_mode(self):
+        logs, metrics = simulate_share_floor(
+            one_signal(fraction=0.01),
+            "v1_conservative_mix",
+            ExecutionConfig(),
+            10.0,
+            capture_logs=True,
+        )
+        self.assertEqual(metrics["min_order_mode"], "shares")
+        self.assertEqual(metrics["min_cost_policy"], "raise_to_min")
         self.assertEqual(metrics["trades"], 1)
         self.assertAlmostEqual(float(logs.iloc[0]["filled_cost"]), 0.5125, places=6)
 
