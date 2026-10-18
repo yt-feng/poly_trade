@@ -1530,7 +1530,9 @@ jobs:
               'format': 'old-clean-h57-causal-loss-window-diagnostic-sealed-v1',
               'analysis_output': (private / 'analysis-output.txt').read_text(),
               'meta': json.loads((private / 'results/meta.json').read_text()),
-              'metrics_csv': (private / 'results/metrics.csv').read_text(),
+              'selection_metrics_csv': (private / 'results/selection_metrics.csv').read_text(),
+              'holdout_metrics_csv': (private / 'results/holdout_metrics.csv').read_text(),
+              'baseline_event_diagnostics_csv': (private / 'results/baseline_event_diagnostics.csv').read_text(),
               'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
           }
           delivery = Path('sealed-delivery')
