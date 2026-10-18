@@ -175,7 +175,13 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
             ])
         ),
         "holdout_passed": holdout_pass,
-        "holdout_target_growth_passed": bool(chosen_holdout) and all(
+        # The Canary target is evaluated at the tenth chronological fill.  A
+        # separate full-chain field keeps later regime decay visible without
+        # redefining the bounded ten-fill contract.
+        "holdout_prefix_growth_passed": bool(chosen_holdout) and all(
+            float(row["first_ten_ending_cash_usd"]) >= INITIAL_CASH for row in chosen_holdout
+        ),
+        "holdout_full_chain_growth_passed": bool(chosen_holdout) and all(
             float(row["ending_cash"]) >= INITIAL_CASH for row in chosen_holdout
         ),
         "rows": len(rows),
@@ -190,7 +196,7 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
     output.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(output / "metrics.csv", index=False)
     (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({k: summary[k] for k in ("selection_choice", "selection_eligible_count", "holdout_passed", "holdout_target_growth_passed")}, ensure_ascii=False, sort_keys=True))
+    print(json.dumps({k: summary[k] for k in ("selection_choice", "selection_eligible_count", "holdout_passed", "holdout_prefix_growth_passed", "holdout_full_chain_growth_passed")}, ensure_ascii=False, sort_keys=True))
     return summary
 
 
