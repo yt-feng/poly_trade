@@ -1,7 +1,10 @@
 import hashlib
 import sys
+
 from decimal import Decimal
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
@@ -152,9 +155,9 @@ def bundle(events=None, source=None):
     }
 
 
-def test_polybolt_source_and_authenticated_cash_chain_admit_together():
+def test_supplied_source_and_cash_chain_pass_offline_consistency_only():
     result = validate_bundle_document(bundle())
-    assert result["gate_passed"] is True
+    assert result["offline_consistency_passed"] is True
     assert result["source_continuity_ok"] is True
     assert result["fills"] == 10
     assert result["same_ledger_identity_verified"] is True
@@ -165,7 +168,7 @@ def test_polybolt_source_and_authenticated_cash_chain_admit_together():
 
 def test_share_floor_allows_entry_cost_below_five_dollars():
     result = validate_bundle_document(bundle())
-    assert result["gate_passed"] is True
+    assert result["offline_consistency_passed"] is True
 
 
 def test_market_share_floor_is_enforced():
@@ -174,7 +177,7 @@ def test_market_share_floor_is_enforced():
     doc["events"][0]["entry_cost"] = "2"
     doc["events"][0]["fee"] = "0.056"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "shares_below_market_minimum"
 
 
@@ -182,7 +185,7 @@ def test_executed_price_must_follow_market_tick_size():
     doc = bundle()
     doc["events"][0]["price"] = "0.503"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "price_not_on_tick_size"
 
 
@@ -190,7 +193,7 @@ def test_market_constraints_are_required():
     doc = bundle()
     del doc["market_windows"][0]["tick_size"]
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "tick_size_must_be_finite_decimal"
 
 
@@ -198,7 +201,7 @@ def test_depth_evidence_is_required_for_each_compound_fill():
     doc = bundle()
     del doc["depth_snapshots"]
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "exactly_ten_depth_snapshots_required"
 
 
@@ -206,7 +209,7 @@ def test_depth_must_cover_the_executed_share_quantity():
     doc = bundle()
     doc["depth_snapshots"][0]["available_shares"] = "7"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "depth_available_shares_insufficient"
 
 
@@ -217,7 +220,7 @@ def test_depth_snapshot_must_be_received_before_entry():
     doc["depth_snapshots"][0]["received_ms"] = after_entry
     doc["events"][0]["depth_ref"]["event_ms"] = after_entry
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "depth_snapshot_after_entry"
 
 
@@ -225,7 +228,7 @@ def test_depth_reference_must_match_the_bound_snapshot():
     doc = bundle()
     doc["events"][0]["depth_ref"]["raw_payload_sha256"] = "0" * 64
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "depth_ref_not_in_bundle"
 
 
@@ -233,7 +236,7 @@ def test_taker_execution_cannot_be_better_than_the_bound_ask():
     doc = bundle()
     doc["depth_snapshots"][0]["ask_price"] = "0.51"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "executed_price_below_depth_ask"
 
 
@@ -241,7 +244,7 @@ def test_settlement_receipt_is_required_and_bound_to_each_fill():
     doc = bundle()
     del doc["settlement_receipts"]
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "exactly_ten_settlement_receipts_required"
 
 
@@ -249,7 +252,7 @@ def test_settlement_payout_must_match_the_cash_release_payout():
     doc = bundle()
     doc["settlement_receipts"][0]["payout"] = "0"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "settlement_payout_mismatch"
 
 
@@ -262,7 +265,7 @@ def test_unconfirmed_or_non_independent_account_evidence_fails_closed():
         doc = bundle()
         doc["events"][0][field] = value
         result = validate_bundle_document(doc)
-        assert result["gate_passed"] is False
+        assert result["offline_consistency_passed"] is False
         assert result["failure_reason"] == reason
 
 
@@ -270,7 +273,7 @@ def test_strategy_binding_must_match_frozen_h30_config():
     doc = bundle()
     doc["strategy"]["id"] = "other-strategy"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "strategy_id_not_frozen"
 
 
@@ -278,7 +281,7 @@ def test_strategy_decision_reference_and_hash_are_required_per_fill():
     doc = bundle()
     del doc["events"][0]["strategy_decision_sha256"]
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "strategy_decision_sha256_required"
 
 
@@ -286,7 +289,7 @@ def test_two_independent_ledgers_cannot_be_concatenated():
     doc = bundle()
     doc["events"][5]["ledger_id"] = "ledger-2"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "ledger_id_mismatch"
 
 
@@ -297,7 +300,7 @@ def test_cash_reset_between_fills_cannot_be_two_compound_ledgers():
     # this five-plus-five concatenation by its arithmetic link.
     doc["events"][5]["balance_before"] = "10"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "balance_before_arithmetic_mismatch"
 
 
@@ -314,7 +317,7 @@ def test_numeric_balance_mismatch_is_not_hidden_by_boolean_checkpoint_flags():
     doc = bundle()
     doc["events"][3]["balance_after"] = "999"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "balance_after_arithmetic_mismatch"
 
 
@@ -322,7 +325,7 @@ def test_current_fill_payout_cannot_be_released_before_its_entry():
     doc = bundle()
     doc["cash_release_receipts"][0]["release_ts_ms"] = doc["events"][0]["entry_ts_ms"]
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "cash_release_before_entry"
 
 
@@ -334,14 +337,14 @@ def test_source_is_bound_to_each_fill_and_must_precede_entry():
     doc["source_events"][0]["payload"]["timestamp"] = after_entry
     doc["events"][0]["source_ref"]["event_ms"] = after_entry
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "source_event_after_entry"
 
 
 def test_source_gap_blocks_even_when_account_chain_is_valid():
     source = [source_event(1), source_event(3)]
     result = validate_bundle_document(bundle(source=source))
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "source_continuity_not_admissible"
     assert result["source_continuity_ok"] is False
 
@@ -350,7 +353,7 @@ def test_market_slug_epoch_and_window_identity_are_exact():
     doc = bundle()
     doc["market_windows"][0]["slug"] = "btc-updown-5m-1800000001"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "btc_slug_window_start_mismatch"
 
 
@@ -358,7 +361,7 @@ def test_non_btc_five_minute_market_cannot_enter():
     doc = bundle()
     doc["market_windows"][0]["slug"] = "btc-updown-15m-1800000000"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "btc_five_minute_slug_required"
 
 
@@ -366,7 +369,7 @@ def test_zero_fee_counterfactual_is_not_a_canary():
     doc = bundle()
     doc["events"][0]["fee"] = "0"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "zero_fee_not_admissible"
 
 
@@ -374,7 +377,7 @@ def test_maker_execution_is_not_a_canary():
     doc = bundle()
     doc["events"][0]["execution_role"] = "MAKER"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "execution_role_must_be_taker"
 
 
@@ -382,7 +385,7 @@ def test_fee_schedule_must_match_frozen_taker_rate():
     doc = bundle()
     doc["events"][0]["fee_rate"] = "0.00"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "fee_rate_must_equal_frozen_taker_rate"
 
 
@@ -390,7 +393,7 @@ def test_taker_fee_amount_must_match_price_and_shares_formula():
     doc = bundle()
     doc["events"][0]["fee"] = "0.174"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "taker_fee_amount_mismatch"
 
 
@@ -398,7 +401,7 @@ def test_entry_cost_must_match_executed_shares_and_price():
     doc = bundle()
     doc["events"][0]["shares"] = "9"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "entry_cost_price_arithmetic_mismatch"
 
 
@@ -406,7 +409,7 @@ def test_required_fills_cannot_be_lowered_to_a_lucky_prefix():
     doc = bundle()
     doc["required_fills"] = 1
     result = validate_bundle_document(doc, required_fills=1)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "required_fills_fixed_at_ten"
 
 
@@ -428,7 +431,7 @@ def test_source_must_cover_every_account_market():
     })
     doc["events"][0]["market_id"] = "m-2"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "source_account_market_coverage_mismatch"
 
 
@@ -436,7 +439,7 @@ def test_unhashable_source_sequence_fails_closed():
     doc = bundle()
     doc["events"][0]["source_ref"]["seq"] = []
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "source_ref_invalid"
 
 
@@ -444,7 +447,7 @@ def test_unhashable_event_market_id_fails_closed():
     doc = bundle()
     doc["events"][0]["market_id"] = []
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "account_event_market_identity_mismatch"
 
 
@@ -452,5 +455,36 @@ def test_mixed_sequence_types_fail_closed_before_sorting():
     doc = bundle()
     doc["events"][0]["sequence_no"] = "1"
     result = validate_bundle_document(doc)
-    assert result["gate_passed"] is False
+    assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "sequence_no_invalid"
+
+
+def assert_unverified_receipts(result):
+    assert result["evidence_scope"] == "offline_bundle_consistency_only"
+    assert result["gate_passed"] is False
+    assert result["receipt_authenticity_verified"] is False
+    assert result["actual_fills"] == 0
+    assert result["verified_canary_fills"] == 0
+
+
+@pytest.mark.parametrize("case", ["consistent", "incomplete", "invalid", "self_attested"])
+def test_offline_bundle_never_authenticates_actual_receipts(case):
+    doc = bundle()
+    if case == "incomplete":
+        doc["events"].pop()
+    elif case == "invalid":
+        doc = {}
+    elif case == "self_attested":
+        # These are supplied claims, just like owner-1/trade-N/tx-N and the
+        # syntactically valid settlement hashes.  No external source is checked.
+        doc.update(receipt_authenticity_verified=True, verified_canary_fills=10,
+                   actual_fills=10, gate_passed=True, evidence_scope="independently_authenticated")
+        for receipt in doc["settlement_receipts"]:
+            receipt["raw_payload_sha256"] = hashlib.sha256(
+                ("unverified-" + receipt["receipt_id"]).encode()).hexdigest()
+    result = validate_bundle_document(doc)
+    assert_unverified_receipts(result)
+    assert result["offline_consistency_passed"] is (case in {"consistent", "self_attested"})
+    if result["offline_consistency_passed"]:
+        assert result["fills"] == 10
+        assert result["settlement_evidence_verified"] is True  # internal consistency only

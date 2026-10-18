@@ -1,8 +1,10 @@
-"""Validate one private authenticated PolyBolt compound bundle.
+"""Check the internal consistency of one private PolyBolt compound bundle.
 
 The input is read from a runner-local file created from a GitHub secret.  Only
 an allowlisted, identifier-free result is written to the requested output;
 the bundle itself is never printed or uploaded.
+Neither the result nor a successful exit authenticates receipts.  Exit zero
+means a diagnostic result was written, including for rejected input.
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ from typing import Any
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
-from validate_polybolt_compound_bundle import validate_bundle_document
+from validate_polybolt_compound_bundle import OFFLINE_VERIFICATION, validate_bundle_document
 
 
 MAX_BUNDLE_BYTES = 2 * 1024 * 1024
@@ -33,6 +35,11 @@ RESULT_KEYS = (
     "consecutive",
     "paper_replay_passed",
     "gate_passed",
+    "offline_consistency_passed",
+    "evidence_scope",
+    "receipt_authenticity_verified",
+    "actual_fills",
+    "verified_canary_fills",
     "failure_reason",
     "owner_scoped",
     "identity_complete",
@@ -49,7 +56,8 @@ def _failure(reason: str) -> dict[str, Any]:
         "required_fills": 10,
         "event_count": 0,
         "source_event_count": 0,
-        "gate_passed": False,
+        **OFFLINE_VERIFICATION,
+        "offline_consistency_passed": False,
         "failure_reason": reason,
     })
     return result
@@ -95,7 +103,11 @@ def main() -> int:
         handle.write(encoded)
         handle.flush()
         os.fsync(handle.fileno())
-    print(json.dumps({key: result.get(key) for key in ("gate_passed", "failure_reason", "fills", "source_continuity_ok")}, sort_keys=True))
+    print(json.dumps({key: result.get(key) for key in (
+        "gate_passed", "offline_consistency_passed", "evidence_scope",
+        "receipt_authenticity_verified", "verified_canary_fills",
+        "failure_reason", "fills", "source_continuity_ok",
+    )}, sort_keys=True))
     return 0
 
 
