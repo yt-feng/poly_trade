@@ -205,7 +205,11 @@ def main() -> None:
             "live_orders_enabled": False,
         }
         args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(json.dumps({"status": "failed", "failure_code": result["failure_code"]}, sort_keys=True))
+        print(json.dumps({
+            "status": "failed",
+            "failure_code": result["failure_code"],
+            "failure_type": result["failure_type"],
+        }, sort_keys=True))
         raise
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({
