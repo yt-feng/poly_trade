@@ -168,14 +168,25 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
     for candidate in CANDIDATES:
         candidate_rows = result[result["candidate"].eq(candidate)]
         primary = candidate_rows[candidate_rows["split"].isin(["selection20", "holdout59"])]
-        prefix_rows = primary[(primary["slippage"].eq(SLIPPAGES[0]))]
-        selection_pass = bool((prefix_rows[prefix_rows["split"].eq("selection20")]["first_ten_passed"]).all() and (prefix_rows[prefix_rows["split"].eq("selection20")]["first_ten_fills"] == 10).all())
-        holdout_pass = bool((prefix_rows[prefix_rows["split"].eq("holdout59")]["first_ten_passed"]).all() and (prefix_rows[prefix_rows["split"].eq("holdout59")]["first_ten_fills"] == 10).all())
+        selection_rows = primary[primary["split"].eq("selection20")]
+        holdout_rows = primary[primary["split"].eq("holdout59")]
+        # The acceptance gate covers every declared delay and both declared
+        # slippages. A single favorable 0.5% row is not sufficient.
+        selection_pass = bool(
+            len(selection_rows) == len(DELAYS_SECONDS) * len(SLIPPAGES)
+            and selection_rows["first_ten_passed"].all()
+            and (selection_rows["first_ten_fills"] == 10).all()
+        )
+        holdout_pass = bool(
+            len(holdout_rows) == len(DELAYS_SECONDS) * len(SLIPPAGES)
+            and holdout_rows["first_ten_passed"].all()
+            and (holdout_rows["first_ten_fills"] == 10).all()
+        )
         gates[candidate] = {
             "selection_prefix_all_delays_gate": selection_pass,
             "holdout_prefix_all_delays_gate": holdout_pass,
             "exact_ten_share_floor_gate": selection_pass and holdout_pass,
-            "primary_rows": prefix_rows.to_dict(orient="records"),
+            "primary_rows": primary.to_dict(orient="records"),
             "holdout_block_600s_diagnostics": candidate_rows[candidate_rows["split"].str.startswith("holdout_block_")].to_dict(orient="records"),
         }
     summary = {
