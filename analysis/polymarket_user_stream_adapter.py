@@ -76,6 +76,7 @@ def _canonical_payload(event_type: str, payload: dict[str, Any]) -> dict[str, An
         "updatedAt": payload.get("updatedAt", payload.get("last_update")),
         "traderSide": payload.get("traderSide", payload.get("trader_side")),
         "makerOrders": payload.get("makerOrders", payload.get("maker_orders", [])),
+        "timestamp": payload.get("timestamp"),
     }
 
 

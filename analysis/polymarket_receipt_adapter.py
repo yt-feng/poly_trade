@@ -132,6 +132,10 @@ def _trade_canonical(payload: dict[str, Any]) -> dict[str, Any]:
         "owner": _text(_pick(payload, "owner")),
         "taker_order_id": _text(_pick(payload, "taker_order_id", "takerOrderId")),
         "side": _text(_pick(payload, "side")).upper(),
+        # Preserve the executed price as authenticated trade evidence.  It is
+        # not used to promote a fill; status, timestamps and transaction hash
+        # remain required below.
+        "price": _text(_pick(payload, "price")),
         "size": _text(_pick(payload, "size")),
         "status": _text(_pick(payload, "status")).upper(),
         "trader_side": _text(_pick(payload, "trader_side", "traderSide")).upper(),
@@ -143,6 +147,10 @@ def _trade_canonical(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "match_time": _text(_pick(payload, "match_time", "matchedAt", "matched_at")),
         "last_update": _text(_pick(payload, "last_update", "updatedAt", "updated_at")),
+        # Preserve the documented epoch timestamp even when the optional
+        # matchedAt/updatedAt fields are absent; it is evidence metadata, not
+        # a substitute for the stricter confirmation timestamps above.
+        "timestamp": _text(_pick(payload, "timestamp")),
         "maker_orders": maker_orders,
     }
 
@@ -329,6 +337,13 @@ def adapt_trade(
             "kind": "entry_fill",
             "trade_id": trade["id"],
             "trade_status": "CONFIRMED",
+            "owner": trade["owner"],
+            "market_id": trade["market_id"],
+            "asset_id": trade["asset_id"],
+            "taker_order_id": trade["taker_order_id"],
+            "side": trade["side"],
+            "price": trade["price"],
+            "size": trade["size"],
             "transaction_ref": trade["transaction_hash"],
             "gross_filled_shares": trade["size"],
             "net_position_delta_shares": trade["size"],
@@ -337,6 +352,7 @@ def adapt_trade(
             "maker_address": trade["maker_address"],
             "match_time": trade["match_time"],
             "last_update": trade["last_update"],
+            "timestamp": trade["timestamp"],
             "evidence_source": "authenticated_clob_trade",
         }
     )
