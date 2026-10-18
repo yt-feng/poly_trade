@@ -212,3 +212,19 @@ def test_unhashable_source_sequence_fails_closed():
     result = validate_bundle_document(doc)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "source_ref_invalid"
+
+
+def test_unhashable_event_market_id_fails_closed():
+    doc = bundle()
+    doc["events"][0]["market_id"] = []
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "account_event_market_identity_mismatch"
+
+
+def test_mixed_sequence_types_fail_closed_before_sorting():
+    doc = bundle()
+    doc["events"][0]["sequence_no"] = "1"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "sequence_no_invalid"

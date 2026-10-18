@@ -117,7 +117,7 @@ def normalize_polybolt_event(raw: dict[str, Any]) -> dict[str, Any]:
     """
     raw, payload, frame_timestamp_ms, received_ms, seq, connection_id, sequence_scope = _common(_require_dict(raw, "event"))
     kind = raw.get("type")
-    if kind not in {"update", "subscribe"}:
+    if not isinstance(kind, str) or kind not in {"update", "subscribe"}:
         raise PolyBoltContractError("type must be update or subscribe")
     base = {
         "protocol": "polybolt_crypto_twap_60",

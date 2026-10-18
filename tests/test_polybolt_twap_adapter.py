@@ -89,6 +89,12 @@ class PolyBoltAdapterTests(unittest.TestCase):
             with self.subTest(row=row), self.assertRaises(PolyBoltContractError):
                 normalize_polybolt_event(row)
 
+    def test_rejects_unhashable_event_type(self):
+        row = event()
+        row["type"] = []
+        with self.assertRaises(PolyBoltContractError):
+            normalize_polybolt_event(row)
+
     def test_rejects_future_or_mismatched_timestamps(self):
         row = event()
         row["payload"]["timestamp"] = row["received_ms"] + 1

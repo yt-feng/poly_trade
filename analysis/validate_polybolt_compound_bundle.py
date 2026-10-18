@@ -120,6 +120,11 @@ def _validate_same_ledger(
         return "initial_cash_must_equal_ten"
     if len(events) != REQUIRED_FILLS:
         return "exactly_ten_account_events_required"
+    # Check sequence types before sorting.  Mixed JSON types (for example a
+    # string and a list) are not orderable in Python and must be rejected as a
+    # malformed bundle rather than escaping as a TypeError.
+    if any(type(row.get("sequence_no")) is not int for row in events):
+        return "sequence_no_invalid"
     ordered = sorted(events, key=lambda row: row.get("sequence_no", -1))
     sequence_values = [row.get("sequence_no") for row in ordered]
     if sequence_values != list(range(1, REQUIRED_FILLS + 1)):
@@ -284,14 +289,14 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
         return _fail(error, event_count=len(events), source_event_count=len(source_events))
     account_market_ids: set[str] = set()
     for row in events:
-        if not isinstance(row, dict) or row.get("market_id") not in windows:
+        if not isinstance(row, dict) or not isinstance(row.get("market_id"), str) or row.get("market_id") not in windows:
             return _fail("account_event_market_identity_mismatch", event_count=len(events), source_event_count=len(source_events))
         account_market_ids.add(row["market_id"])
     source_market_ids: set[str] = set()
     normalized: list[dict[str, Any]] = []
     source_by_ref: dict[tuple[str, str, int], dict[str, Any]] = {}
     for raw in source_events:
-        if not isinstance(raw, dict) or raw.get("market_id") not in windows:
+        if not isinstance(raw, dict) or not isinstance(raw.get("market_id"), str) or raw.get("market_id") not in windows:
             return _fail("source_event_market_identity_mismatch", event_count=len(events), source_event_count=len(source_events))
         source_market_ids.add(raw["market_id"])
         try:
