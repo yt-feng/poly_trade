@@ -51,12 +51,12 @@ def rolling_windows(runs: list[str], window_runs: int = WINDOW_RUNS, stride: int
         raise ValueError("INSUFFICIENT_RUNS_FOR_WINDOW")
     return [
         {
-            "window_index": index + 1,
+            "window_index": window_index,
             "start_run": str(runs[index]),
             "end_run": str(runs[index + window_runs - 1]),
             "runs": [str(name) for name in runs[index : index + window_runs]],
         }
-        for index in range(0, len(runs) - window_runs + 1, stride)
+        for window_index, index in enumerate(range(0, len(runs) - window_runs + 1, stride), start=1)
     ]
 
 
