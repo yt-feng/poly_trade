@@ -110,6 +110,7 @@ def _derive_credentials(private_key: str) -> Any:
 def _capture_one(label: str, private_key: str, sdk_commit: str) -> dict[str, Any]:
     from eth_account import Account
     from polymarket import SecureClient
+    from public_data_lifecycle_capture import capture as capture_public_data
 
     stage = "signer"
     try:
@@ -136,6 +137,23 @@ def _capture_one(label: str, private_key: str, sdk_commit: str) -> dict[str, Any
         # an enum.  Use the documented wire value directly.
         balance = client.get_balance_allowance(asset_type="COLLATERAL")
         raw_balance = _jsonable(balance)
+        try:
+            public_data = capture_public_data(str(client.wallet))
+        except Exception as error:
+            # Public Data API availability is useful corroboration, but its
+            # failure must not erase the authenticated CLOB receipt bundle.
+            public_data = {
+                "format": "h283-public-position-activity-capture-failure-v1",
+                "status": "failed",
+                "failure_type": type(error).__name__,
+                "positions": [],
+                "positions_count": 0,
+                "positions_truncated": False,
+                "activity": [],
+                "activity_count": 0,
+                "activity_truncated": False,
+                "evidence_boundary": "public Data API unavailable; authenticated CLOB capture remains separate",
+            }
         return {
             "label": label,
             "signer_address_sha256": _digest(signer.address.lower()),
@@ -154,6 +172,14 @@ def _capture_one(label: str, private_key: str, sdk_commit: str) -> dict[str, Any
             "settlement_receipt_present": False,
             "cash_release_receipt_present": False,
             "independent_balance_checkpoint_present": raw_balance is not None,
+            "public_data_positions": public_data["positions"],
+            "public_data_positions_count": public_data["positions_count"],
+            "public_data_positions_truncated": public_data["positions_truncated"],
+            "public_data_activity": public_data["activity"],
+            "public_data_activity_count": public_data["activity_count"],
+            "public_data_activity_truncated": public_data["activity_truncated"],
+            "public_data_capture_format": public_data["format"],
+            "public_data_capture_status": public_data.get("status", "complete"),
         }
     except Exception as error:
         raise CaptureStageError(stage, error) from error
