@@ -128,6 +128,7 @@ def validate_h4_chain(
     closing_balance: Any,
     initial_cash: Any = "10",
     minimum_order: Any = "5",
+    target_cash: Any = "1000",
 ) -> dict[str, Any]:
     """Validate ten chronological taker rows with token/market/whale joins.
 
@@ -142,6 +143,12 @@ def validate_h4_chain(
     rows = list(events)
     if len(rows) != REQUIRED_FILLS:
         return _failure("exactly_ten_h4_events_required")
+    try:
+        target = _decimal(target_cash, "target_cash")
+    except ValueError:
+        return _failure("target_cash_must_be_finite_decimal")
+    if target <= ZERO:
+        return _failure("target_cash_must_be_positive")
     seen: dict[str, set[str]] = {key: set() for key in (
         "transaction_hash", "trade_id", "settlement_receipt_id",
         "cash_release_receipt_id", "balance_checkpoint_id", "whale_trade_id",
@@ -247,9 +254,17 @@ def validate_h4_chain(
         "actual_fills": 0,
         "verified_canary_fills": 0,
         "gate_passed": False,
+        "target_cash": str(target),
+        "target_growth_passed": False,
     }
     if reconciled.get("gate_passed"):
         out["failure_reason"] = "offline_only_receipt_authentication_pending"
+        try:
+            ending = _decimal(reconciled.get("ending_cash"), "ending_cash")
+        except ValueError:
+            ending = ZERO
+        out["growth_multiple"] = str(ending / _decimal(initial_cash, "initial_cash"))
+        out["target_growth_passed"] = ending >= target
     return out
 
 

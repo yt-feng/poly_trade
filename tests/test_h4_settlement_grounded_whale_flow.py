@@ -82,6 +82,9 @@ class H4SettlementGroundedWhaleFlowTests(unittest.TestCase):
         self.assertEqual(result["actual_fills"], 0)
         self.assertEqual(result["verified_canary_fills"], 0)
         self.assertIs(result["gate_passed"], False)
+        self.assertEqual(result["target_cash"], "1000")
+        self.assertIs(result["target_growth_passed"], False)
+        self.assertLess(float(result["growth_multiple"]), 2.0)
 
     def test_source_schema_preflight_rejects_orderfilled_without_market_join(self):
         result = audit_h4_source_schema([{
