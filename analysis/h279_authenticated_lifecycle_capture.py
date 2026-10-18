@@ -22,6 +22,13 @@ MAX_ROWS = 400
 ADDRESS_LENGTH = 42
 
 
+class CaptureStageError(RuntimeError):
+    def __init__(self, stage: str, cause: BaseException):
+        super().__init__(stage)
+        self.stage = stage
+        self.cause_type = type(cause).__name__
+
+
 def _jsonable(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -105,18 +112,27 @@ def _capture_one(label: str, private_key: str, sdk_commit: str) -> dict[str, Any
     from polymarket import SecureClient
     from polymarket.models import AssetType
 
-    signer = Account.from_key(private_key)
-    credentials = _derive_credentials(private_key)
-    # Supplying the signer address avoids any wallet-deployment or relayer
-    # action during client bootstrap; this workflow is strictly read-only.
-    client = SecureClient.create(
-        private_key=private_key,
-        wallet=signer.address,
-        credentials=credentials,
-    )
+    stage = "signer"
     try:
+        signer = Account.from_key(private_key)
+        stage = "derive_credentials"
+        credentials = _derive_credentials(private_key)
+        # Supplying the signer address avoids any wallet-deployment or relayer
+        # action during client bootstrap; this workflow is strictly read-only.
+        stage = "client_create"
+        client = SecureClient.create(
+            private_key=private_key,
+            wallet=signer.address,
+            credentials=credentials,
+        )
+    except Exception as error:
+        raise CaptureStageError(stage, error) from error
+    try:
+        stage = "account_trades"
         account_trades, trades_truncated = _bounded_items(client.list_account_trades())
+        stage = "public_activity"
         activity, activity_truncated = _bounded_items(client.list_activity(full_history=True))
+        stage = "balance_checkpoint"
         balance = client.get_balance_allowance(asset_type=AssetType.COLLATERAL)
         raw_balance = _jsonable(balance)
         return {
@@ -138,6 +154,8 @@ def _capture_one(label: str, private_key: str, sdk_commit: str) -> dict[str, Any
             "cash_release_receipt_present": False,
             "independent_balance_checkpoint_present": raw_balance is not None,
         }
+    except Exception as error:
+        raise CaptureStageError(stage, error) from error
     finally:
         client.close()
 
@@ -194,6 +212,8 @@ def main() -> None:
             "format": "h279-authenticated-lifecycle-capture-failure-v1",
             "failure_code": _failure_code(error),
             "failure_type": type(error).__name__,
+            "failure_stage": getattr(error, "stage", "unknown"),
+            "cause_type": getattr(error, "cause_type", ""),
             "failure_digest": _digest(f"{type(error).__name__}:{error}"),
             "sdk_commit": args.sdk_commit,
             "strategy_evaluated": False,
@@ -209,6 +229,7 @@ def main() -> None:
             "status": "failed",
             "failure_code": result["failure_code"],
             "failure_type": result["failure_type"],
+            "failure_stage": result["failure_stage"],
         }, sort_keys=True))
         raise
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
