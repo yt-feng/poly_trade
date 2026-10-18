@@ -33,7 +33,10 @@ H4_SOURCE_GROUPS: dict[str, tuple[str, ...]] = {
         "whale_address", "whale_trade_id", "whale_transaction_hash",
         "whale_observed_ts", "whale_observation_verified",
     ),
-    "settlement": ("settlement_status", "settlement_receipt_id", "settlement_transaction_hash"),
+    "settlement": (
+        "settlement_status", "settlement_receipt_id", "settlement_transaction_hash",
+        "settlement_reverted",
+    ),
     "cash_release": ("cash_release_status", "cash_release_receipt_id", "balance_checkpoint_id"),
 }
 
@@ -160,7 +163,8 @@ def validate_h4_chain(
         "source_version", "identity_hash", "whale_address", "whale_trade_id",
         "whale_transaction_hash", "transaction_hash", "trade_id", "order_hash",
         "maker_address", "taker_address", "trader_side_source", "settlement_receipt_id",
-        "settlement_transaction_hash", "settlement_status", "cash_release_receipt_id",
+        "settlement_transaction_hash", "settlement_status", "settlement_reverted",
+        "cash_release_receipt_id",
         "fee_schedule_source", "fee_schedule_observed_ts",
         "balance_checkpoint_id", "previous_checkpoint_id",
     )
@@ -195,6 +199,10 @@ def validate_h4_chain(
             issues.append({"reason": "whale_observation_must_be_verified", "sequence_no": sequence})
         if _text(row.get("settlement_status")).upper() != "CONFIRMED":
             issues.append({"reason": "settlement_must_be_confirmed", "sequence_no": sequence})
+        if type(row.get("settlement_reverted")) is not bool:
+            issues.append({"reason": "settlement_reversion_status_required", "sequence_no": sequence})
+        elif row["settlement_reverted"]:
+            issues.append({"reason": "settlement_must_not_be_reverted", "sequence_no": sequence})
         if _text(row.get("cash_release_status")).upper() != "CONFIRMED":
             issues.append({"reason": "cash_release_must_be_confirmed", "sequence_no": sequence})
         if _text(row.get("whale_address")).lower() == expected_owner:

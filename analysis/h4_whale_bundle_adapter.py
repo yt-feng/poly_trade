@@ -56,10 +56,12 @@ def assemble_h4_whale_row(
     required_market = ("token_id", "condition_id", "market_slug", "outcome_index", "outcome_name", "source_version", "identity_hash")
     required_fill = ("transaction_hash", "block_number", "log_index", "trade_id", "order_hash", "maker_address", "taker_address", "trader_side_source", "filled_shares", "fill_price", "fee", "fee_schedule_source", "fee_schedule_observed_ts", "entry_ts")
     required_whale = ("whale_address", "whale_trade_id", "whale_transaction_hash", "whale_notional_usdc", "whale_observed_ts")
+    required_settlement = ("settlement_reverted",)
     for name, source, fields in (
         ("market", market, required_market),
         ("fill", fill, required_fill),
         ("whale", whale, required_whale),
+        ("settlement", settlement, required_settlement),
     ):
         for field in fields:
             _required(source, field)
@@ -77,6 +79,10 @@ def assemble_h4_whale_row(
     row.update(whale)
     for field in ("sequence_no", "ledger_id", "chain_id", "previous_checkpoint_id", "balance_checkpoint_id"):
         _required(row, field)
+    if type(row.get("settlement_reverted")) is not bool:
+        raise ValueError("settlement_reversion_status_required")
+    if row["settlement_reverted"]:
+        raise ValueError("settlement_must_not_be_reverted")
     row.update({
         "owner": owner,
         "trader_side": "TAKER",

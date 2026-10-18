@@ -25,7 +25,7 @@ def groups():
         },
         "settlement": {
             "settlement_receipt_id": "settlement-1", "settlement_transaction_hash": "settle-tx-1",
-            "settlement_status": "CONFIRMED", "cash_release_receipt_id": "release-1",
+            "settlement_status": "CONFIRMED", "settlement_reverted": False, "cash_release_receipt_id": "release-1",
             "cash_release_status": "CONFIRMED",
         },
         "ledger": {
@@ -43,6 +43,12 @@ class H4WhaleBundleAdapterTests(unittest.TestCase):
         self.assertEqual(row["owner"], "owner-1")
         self.assertEqual(row["market_slug"], "btc-updown-5m-1")
         self.assertTrue(row["market_join_verified"])
+
+    def test_reverted_settlement_is_rejected(self):
+        evidence = groups()
+        evidence["settlement"]["settlement_reverted"] = True
+        with self.assertRaisesRegex(ValueError, "settlement_must_not_be_reverted"):
+            assemble_h4_whale_row(**evidence)
 
     def test_rejects_maker_side(self):
         evidence = groups()

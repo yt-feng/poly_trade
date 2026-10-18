@@ -47,6 +47,7 @@ def bundle():
             "settlement_receipt_id": f"settlement-{i}",
             "settlement_transaction_hash": f"settlement-tx-{i}",
             "settlement_status": "CONFIRMED",
+            "settlement_reverted": False,
             "resolved_outcome": "Up",
             "cash_release_receipt_id": f"release-{i}",
             "cash_release_status": "CONFIRMED",
@@ -113,6 +114,13 @@ class H4SettlementGroundedWhaleFlowTests(unittest.TestCase):
         result = self.validate(rows)
         self.assertEqual(result["failure_reason"], "h4_event_contract_failed")
         self.assertTrue(any(item["reason"] == "settlement_status_required" for item in result["issues"]))
+
+    def test_h4_rejects_reverted_settlement(self):
+        rows = bundle()
+        rows[0]["settlement_reverted"] = True
+        result = self.validate(rows)
+        self.assertEqual(result["failure_reason"], "h4_event_contract_failed")
+        self.assertTrue(any(item["reason"] == "settlement_must_not_be_reverted" for item in result["issues"]))
 
     def test_h4_rejects_fee_schedule_observed_after_entry(self):
         rows = bundle()
