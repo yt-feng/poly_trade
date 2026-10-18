@@ -282,6 +282,9 @@ def test_settlement_payout_must_match_the_cash_release_payout():
 def test_unconfirmed_or_non_independent_account_evidence_fails_closed():
     for field, value, reason in (
         ("status", "pending", "authenticated_event_not_confirmed"),
+        ("status", "matched", "authenticated_event_not_confirmed"),
+        ("status", "delayed", "authenticated_event_not_confirmed"),
+        ("status", "mined", "authenticated_event_not_confirmed"),
         ("cash_reconciled", False, "cash_reconciliation_not_confirmed"),
         ("independent_checkpoint", False, "independent_checkpoint_not_confirmed"),
     ):

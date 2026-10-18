@@ -357,6 +357,10 @@ def _validate_same_ledger(
                 return "ledger_id_mismatch"
             if _text(row.get("chain_id"), "event_chain_id") != chain_id:
                 return "chain_id_mismatch"
+            # Only the terminal account-event confirmation is admissible here.
+            # Polymarket's order lifecycle also exposes intermediate states
+            # such as matched, delayed and mined; none proves a settled fill
+            # or reusable cash, so they must fail closed at this boundary.
             if row.get("status") != "confirmed":
                 return "authenticated_event_not_confirmed"
             if row.get("cash_reconciled") is not True:
