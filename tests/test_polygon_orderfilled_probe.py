@@ -1,5 +1,8 @@
+from urllib.error import HTTPError
+
 import pytest
 
+import analysis.polygon_orderfilled_probe as probe
 from analysis.polygon_orderfilled_probe import (
     V1_ORDER_FILLED_TOPIC,
     decode_v1_log,
@@ -45,4 +48,21 @@ def test_decode_v2_keeps_explicit_side_and_token_id():
     assert result["side"] == "0"
     assert result["token_id"] == "987"
     assert result["timestamp_ms"] == 456000
+
+
+def test_rpc_uses_json_headers_and_exposes_bounded_http_status(monkeypatch):
+    seen = {}
+
+    def rejected(request, timeout):
+        seen["headers"] = dict(request.headers)
+        seen["timeout"] = timeout
+        raise HTTPError(request.full_url, 403, "forbidden", {}, None)
+
+    monkeypatch.setattr(probe, "urlopen", rejected)
+    with pytest.raises(RuntimeError, match="^polygon_rpc_http_403$"):
+        probe._rpc("https://rpc.example", "eth_blockNumber", [], 1)
+    assert seen["headers"]["Accept"] == "application/json"
+    assert seen["headers"]["Content-type"] == "application/json"
+    assert seen["headers"]["User-agent"] == probe.RPC_USER_AGENT
+    assert seen["timeout"] == 30
 
