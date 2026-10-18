@@ -1,5 +1,6 @@
 import analysis.h277_owner_scoped_orderfilled_probe as h277
 from analysis.h277_owner_scoped_orderfilled_probe import normalize_owner, run, summarize_records
+from pathlib import Path
 
 
 OWNER = "0x" + "11" * 20
@@ -57,3 +58,12 @@ def test_run_uses_owner_indexed_taker_filter(monkeypatch):
     assert seen["taker_addresses"] == [OWNER]
     assert result["taker_topic_filter_applied"] is True
     assert result["new_data_collected"] is False
+
+
+def test_workflow_allows_bounded_rpc_failover():
+    workflow = Path(__file__).parents[1].joinpath(
+        ".github", "workflows", "h277-owner-scoped-orderfilled-probe.yml"
+    ).read_text(encoding="utf-8")
+    assert "rpc_url:" in workflow
+    assert "RPC_URL: ${{ inputs.rpc_url }}" in workflow
+    assert "--rpc-url \"$RPC_URL\"" in workflow

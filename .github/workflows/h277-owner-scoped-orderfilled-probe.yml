@@ -18,6 +18,11 @@ on:
         required: true
         default: '2000'
         type: string
+      rpc_url:
+        description: 'Read-only Polygon JSON-RPC endpoint'
+        required: true
+        default: 'https://polygon-bor-rpc.publicnode.com'
+        type: string
 
 permissions:
   contents: write
@@ -50,6 +55,7 @@ jobs:
           WINDOW_BLOCKS: ${{ inputs.window_blocks }}
           CHUNK_BLOCKS: ${{ inputs.chunk_blocks }}
           MAX_LOGS: ${{ inputs.max_logs }}
+          RPC_URL: ${{ inputs.rpc_url }}
           POLY_SDK_COMMIT: ${{ env.POLY_SDK_COMMIT }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
@@ -90,6 +96,7 @@ jobs:
           python -u analysis/h277_owner_scoped_orderfilled_probe.py \
             --owners-file "$PRIVATE_DIR/owners.json" \
             --output "$PRIVATE_DIR/report.json" \
+            --rpc-url "$RPC_URL" \
             --window-blocks "$WINDOW_BLOCKS" \
             --chunk-blocks "$CHUNK_BLOCKS" \
             --max-logs "$MAX_LOGS"
