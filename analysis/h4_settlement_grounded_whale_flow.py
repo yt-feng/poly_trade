@@ -86,7 +86,7 @@ def validate_h4_chain(
         "source_version", "identity_hash", "whale_address", "whale_trade_id",
         "whale_transaction_hash", "transaction_hash", "trade_id", "order_hash",
         "maker_address", "taker_address", "settlement_receipt_id",
-        "settlement_transaction_hash", "cash_release_receipt_id",
+        "settlement_transaction_hash", "settlement_status", "cash_release_receipt_id",
         "balance_checkpoint_id", "previous_checkpoint_id",
     )
     for row in rows:
@@ -116,7 +116,7 @@ def validate_h4_chain(
             issues.append({"reason": "token_market_join_required", "sequence_no": sequence})
         if row.get("whale_observation_verified") is not True:
             issues.append({"reason": "whale_observation_must_be_verified", "sequence_no": sequence})
-        if row.get("settlement_status") is not None and _text(row.get("settlement_status")).upper() != "CONFIRMED":
+        if _text(row.get("settlement_status")).upper() != "CONFIRMED":
             issues.append({"reason": "settlement_must_be_confirmed", "sequence_no": sequence})
         if _text(row.get("cash_release_status")).upper() != "CONFIRMED":
             issues.append({"reason": "cash_release_must_be_confirmed", "sequence_no": sequence})

@@ -90,6 +90,13 @@ class H4SettlementGroundedWhaleFlowTests(unittest.TestCase):
         self.assertEqual(result["failure_reason"], "h4_event_contract_failed")
         self.assertTrue(any(item["reason"] == "transaction_hash_required" for item in result["issues"]))
 
+    def test_h4_rejects_missing_settlement_status(self):
+        rows = bundle()
+        rows[0].pop("settlement_status")
+        result = self.validate(rows)
+        self.assertEqual(result["failure_reason"], "h4_event_contract_failed")
+        self.assertTrue(any(item["reason"] == "settlement_status_required" for item in result["issues"]))
+
 
     def test_h4_rejects_maker_side_and_owner_mismatch(self):
         rows = bundle()
