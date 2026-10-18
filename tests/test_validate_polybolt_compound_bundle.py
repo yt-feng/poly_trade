@@ -119,6 +119,17 @@ def test_two_independent_ledgers_cannot_be_concatenated():
     assert result["failure_reason"] == "ledger_id_mismatch"
 
 
+def test_cash_reset_between_fills_cannot_be_two_compound_ledgers():
+    doc = bundle()
+    # Keep the ledger, chain and sequence identities intact, but reset the
+    # sixth fill to a fresh $10 balance.  The evolving cash ledger must reject
+    # this five-plus-five concatenation by its arithmetic link.
+    doc["events"][5]["balance_before"] = "10"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "balance_before_arithmetic_mismatch"
+
+
 def test_sequence_reset_and_checkpoint_link_fail_closed():
     doc = bundle()
     doc["events"][5]["sequence_no"] = 5
