@@ -136,6 +136,14 @@ class PolyBoltAdapterTests(unittest.TestCase):
         self.assertFalse(manifest["continuity_ok"])
         self.assertEqual(manifest["reconnect_segments"], 2)
 
+    def test_capture_id_change_is_not_silently_joined(self):
+        first = normalize_polybolt_event(event(1))
+        second = normalize_polybolt_event(event(2))
+        second["capture_id"] = "capture-b"
+        manifest = build_continuity_manifest([first, second])
+        self.assertFalse(manifest["continuity_ok"])
+        self.assertEqual(manifest["capture_ids"], ["capture-a", "capture-b"])
+
 
 if __name__ == "__main__":
     unittest.main()

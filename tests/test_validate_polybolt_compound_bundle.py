@@ -349,6 +349,16 @@ def test_two_independent_ledgers_cannot_be_concatenated():
     assert result["failure_reason"] == "ledger_id_mismatch"
 
 
+def test_two_five_fill_ledgers_with_fresh_rows_cannot_be_concatenated():
+    doc = bundle()
+    first = [account_event(i, ledger_id="ledger-a", chain_id="chain-a") for i in range(1, 6)]
+    second = [account_event(i, ledger_id="ledger-b", chain_id="chain-b") for i in range(6, 11)]
+    doc["events"] = first + second
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "ledger_id_mismatch"
+
+
 def test_cash_reset_between_fills_cannot_be_two_compound_ledgers():
     doc = bundle()
     # Keep the ledger, chain and sequence identities intact, but reset the
@@ -409,6 +419,14 @@ def test_source_is_bound_to_each_fill_and_must_precede_entry():
     result = validate_bundle_document(doc)
     assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "source_event_after_entry"
+
+
+def test_source_before_market_window_is_rejected():
+    doc = bundle()
+    source = [source_event(1, event_ms=START - 1)] + [source_event(i) for i in range(2, 11)]
+    result = validate_bundle_document(bundle(source=source))
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "source_event_after_market_window"
 
 
 def test_source_gap_blocks_even_when_account_chain_is_valid():

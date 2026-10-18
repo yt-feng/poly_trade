@@ -198,6 +198,11 @@ def build_continuity_manifest(events: Iterable[dict[str, Any]]) -> dict[str, Any
     manifest["continuity_ok"] = (
         len(scopes) == 1
         and len(connections) == 1
+        # A capture id is the immutable provenance boundary for this
+        # bounded source slice.  Reusing one connection/scope while silently
+        # joining rows from two captures would make an independently captured
+        # stream look like one continuous sequence.
+        and len(manifest["capture_ids"]) == 1
         and manifest["gap_count"] == 0
         and manifest["duplicate_count"] == 0
         and manifest["out_of_order_count"] == 0
