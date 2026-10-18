@@ -65,6 +65,9 @@ jobs:
           repository: yt-feng/poly
           path: source_poly
           fetch-depth: 1
+          # Keep the standard report on the frozen old-clean snapshot. The
+          # same commit is used by the compound and holdout audits below.
+          ref: bbda5f2050685f63153621a54641ebdfab943487
 
       - name: Set up Python
         uses: actions/setup-python@v5
