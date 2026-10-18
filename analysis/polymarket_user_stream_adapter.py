@@ -66,6 +66,7 @@ def _canonical_payload(event_type: str, payload: dict[str, Any]) -> dict[str, An
         "assetId": payload.get("assetId", payload.get("asset_id")),
         "side": payload.get("side"),
         "size": payload.get("size"),
+        "price": payload.get("price"),
         "status": payload.get("status"),
         "feeRateBps": payload.get("feeRateBps", payload.get("fee_rate_bps")),
         "makerAddress": payload.get("makerAddress", payload.get("maker_address")),

@@ -85,6 +85,9 @@ class PolymarketUserStreamAdapter(unittest.TestCase):
         self.assertEqual(result["events"][0]["market_id"], "market-1")
         self.assertEqual(result["events"][0]["asset_id"], "token-1")
         self.assertEqual(result["events"][0]["taker_order_id"], "order-1")
+        self.assertEqual(result["events"][0]["shares"], "5")
+        self.assertEqual(result["events"][0]["execution_role"], "TAKER")
+        self.assertEqual(result["events"][0]["price"], "0.52")
         self.assertEqual(result["events"][0]["timestamp"], "1782753357257")
 
     def test_duplicate_frame_is_idempotent_by_type_and_payload_id(self):

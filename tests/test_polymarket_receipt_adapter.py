@@ -42,6 +42,7 @@ class PolymarketReceiptAdapter(unittest.TestCase):
             "owner": "account-1",
             "side": "BUY",
             "size": "5",
+            "price": "0.5",
             "status": status,
             "trader_side": "TAKER",
             "fee_rate_bps": "7",
@@ -101,6 +102,29 @@ class PolymarketReceiptAdapter(unittest.TestCase):
             expected=self.expected,
         )
         self.assertEqual(sum(event["kind"] == "entry_fill" for event in result["events"]), 1)
+
+    def test_confirmed_fill_exposes_v2_share_and_role_aliases(self):
+        result = adapt_trade(self.trade(), expected=self.expected, required_trader_side="TAKER")
+        self.assertEqual(result["issues"], [])
+        fill = result["events"][0]
+        self.assertEqual(fill["shares"], "5")
+        self.assertEqual(fill["size"], fill["shares"])
+        self.assertEqual(fill["execution_role"], "TAKER")
+        self.assertEqual(fill["price"], "0.5")
+
+    def test_confirmed_fill_without_executed_price_is_rejected(self):
+        payload = self.trade()
+        payload.pop("price")
+        result = adapt_trade(payload, expected=self.expected)
+        self.assertEqual(result["events"], [])
+        self.assertIn("MISSING_TRADE_PRICE", {issue["code"] for issue in result["issues"]})
+
+    def test_confirmed_fill_with_out_of_range_price_is_rejected(self):
+        payload = self.trade()
+        payload["price"] = "1"
+        result = adapt_trade(payload, expected=self.expected)
+        self.assertEqual(result["events"], [])
+        self.assertIn("INVALID_TRADE_PRICE", {issue["code"] for issue in result["issues"]})
 
     def test_matched_or_missing_hash_never_becomes_confirmed_fill(self):
         matched = adapt_trade(self.trade("TRADE_STATUS_MATCHED"), expected=self.expected)

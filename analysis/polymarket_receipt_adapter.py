@@ -303,6 +303,26 @@ def adapt_trade(
             issues.append(_issue("INVALID_TRADE_QUANTITY", "trade size must be positive"))
     except ValueError as exc:
         issues.append(_issue("INVALID_TRADE_QUANTITY", str(exc)))
+    if not trade["price"]:
+        issues.append(
+            _issue(
+                "MISSING_TRADE_PRICE",
+                "a confirmed fill must include its executed price",
+            )
+        )
+    else:
+        try:
+            price = _decimal(trade["price"], "price")
+            if price <= 0 or price >= 1:
+                issues.append(
+                    _issue(
+                        "INVALID_TRADE_PRICE",
+                        "trade price must be strictly between zero and one",
+                        price=trade["price"],
+                    )
+                )
+        except ValueError as exc:
+            issues.append(_issue("INVALID_TRADE_PRICE", str(exc)))
     if trade["status"] != CONFIRMED_TRADE_STATUS:
         issues.append(
             _issue(
@@ -344,6 +364,15 @@ def adapt_trade(
             "side": trade["side"],
             "price": trade["price"],
             "size": trade["size"],
+            # v2 compound admission names the same executed share quantity
+            # ``shares`` and the role ``execution_role``.  Preserve the
+            # legacy receipt names above while emitting explicit aliases so a
+            # confirmed account event cannot silently lose the fields needed
+            # by the one-ledger validator.  Fee-rate conversion remains
+            # deliberately separate because the raw API field is named bps
+            # while the frozen v2 schedule is a decimal rate.
+            "shares": trade["size"],
+            "execution_role": trade["trader_side"],
             "transaction_ref": trade["transaction_hash"],
             "gross_filled_shares": trade["size"],
             "net_position_delta_shares": trade["size"],
