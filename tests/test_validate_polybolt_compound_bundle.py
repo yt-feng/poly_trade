@@ -37,6 +37,22 @@ def source_event(seq: int, market_id: str = MARKET_ID, *, event_ms: int | None =
     }
 
 
+def depth_snapshot(seq: int, market_id: str = MARKET_ID, *, event_ms: int | None = None) -> dict[str, object]:
+    timestamp = START + (seq - 1) * 1_000 if event_ms is None else event_ms
+    digest = hashlib.sha256(f"depth-{seq}".encode()).hexdigest()
+    return {
+        "market_id": market_id,
+        "snapshot_id": f"depth-{seq}",
+        "capture_id": "book-capture-a",
+        "seq": seq,
+        "raw_payload_sha256": digest,
+        "event_ms": timestamp,
+        "received_ms": timestamp + 50,
+        "available_shares": "100",
+        "ask_price": "0.50",
+    }
+
+
 def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain-1") -> dict[str, object]:
     entry_ms = START + (i - 1) * 10_000 + 1_000
     release_ms = entry_ms + 5_000
@@ -77,6 +93,13 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
             "raw_payload_sha256": digest,
             "event_ms": START + (i - 1) * 1_000,
         },
+        "depth_ref": {
+            "snapshot_id": f"depth-{i}",
+            "capture_id": "book-capture-a",
+            "seq": i,
+            "raw_payload_sha256": hashlib.sha256(f"depth-{i}".encode()).hexdigest(),
+            "event_ms": START + (i - 1) * 1_000,
+        },
         "strategy_decision_ref": f"decision-{i}",
         "strategy_decision_sha256": hashlib.sha256(f"decision-{i}".encode()).hexdigest(),
     }
@@ -113,6 +136,7 @@ def bundle(events=None, source=None):
             for i in range(1, 11)
         ],
         "source_events": [source_event(i) for i in range(1, 11)] if source is None else source,
+        "depth_snapshots": [depth_snapshot(i) for i in range(1, 11)],
         "events": [account_event(i) for i in range(1, 11)] if events is None else events,
     }
 
@@ -157,6 +181,49 @@ def test_market_constraints_are_required():
     result = validate_bundle_document(doc)
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "tick_size_must_be_finite_decimal"
+
+
+def test_depth_evidence_is_required_for_each_compound_fill():
+    doc = bundle()
+    del doc["depth_snapshots"]
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "exactly_ten_depth_snapshots_required"
+
+
+def test_depth_must_cover_the_executed_share_quantity():
+    doc = bundle()
+    doc["depth_snapshots"][0]["available_shares"] = "7"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "depth_available_shares_insufficient"
+
+
+def test_depth_snapshot_must_be_received_before_entry():
+    doc = bundle()
+    after_entry = doc["events"][0]["entry_ts_ms"] + 1
+    doc["depth_snapshots"][0]["event_ms"] = after_entry
+    doc["depth_snapshots"][0]["received_ms"] = after_entry
+    doc["events"][0]["depth_ref"]["event_ms"] = after_entry
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "depth_snapshot_after_entry"
+
+
+def test_depth_reference_must_match_the_bound_snapshot():
+    doc = bundle()
+    doc["events"][0]["depth_ref"]["raw_payload_sha256"] = "0" * 64
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "depth_ref_not_in_bundle"
+
+
+def test_taker_execution_cannot_be_better_than_the_bound_ask():
+    doc = bundle()
+    doc["depth_snapshots"][0]["ask_price"] = "0.51"
+    result = validate_bundle_document(doc)
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "executed_price_below_depth_ask"
 
 
 def test_strategy_binding_must_match_frozen_h30_config():

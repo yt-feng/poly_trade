@@ -79,6 +79,14 @@ def _text(value: Any, field: str) -> str:
     return value.strip()
 
 
+def _hash(value: Any, field: str) -> str:
+    """Require a canonical lowercase SHA-256 reference for bound evidence."""
+    digest = _text(value, field).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError(f"{field}_invalid")
+    return digest
+
+
 def _validate_strategy_binding(document: dict[str, Any]) -> str | None:
     strategy = document.get("strategy")
     if not isinstance(strategy, dict):
@@ -146,11 +154,76 @@ def _market_windows(document: dict[str, Any]) -> tuple[dict[str, dict[str, Any]]
     return out, None
 
 
+def _depth_snapshots(
+    document: dict[str, Any],
+    windows: dict[str, dict[str, Any]],
+) -> tuple[dict[tuple[str, str], dict[str, Any]], str | None]:
+    """Index ten authenticated pre-entry depth observations.
+
+    A TWAP event is a price source, not an executable quote. The compound gate
+    therefore requires a separate CLOB depth observation for every fill, with a
+    stable snapshot id and payload digest that can be audited against the
+    private capture. This function validates shape and timing only; it never
+    fetches a book or infers depth from a TWAP value.
+    """
+    snapshots = document.get("depth_snapshots")
+    if not isinstance(snapshots, list) or len(snapshots) != REQUIRED_FILLS:
+        return {}, "exactly_ten_depth_snapshots_required"
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            return {}, "invalid_depth_snapshot"
+        try:
+            market_id = _text(snapshot.get("market_id"), "depth_market_id")
+            snapshot_id = _text(snapshot.get("snapshot_id"), "depth_snapshot_id")
+            capture_id = _text(snapshot.get("capture_id"), "depth_capture_id")
+            seq = snapshot.get("seq")
+            if type(seq) is not int or seq < 0:
+                return {}, "depth_snapshot_seq_invalid"
+            payload_hash = _hash(snapshot.get("raw_payload_sha256"), "depth_raw_payload_sha256")
+            event_ms = snapshot.get("event_ms")
+            received_ms = snapshot.get("received_ms")
+            if not _integer(event_ms) or not _integer(received_ms) or received_ms < event_ms:
+                return {}, "depth_snapshot_timestamp_invalid"
+            available_shares = _decimal(snapshot.get("available_shares"), "depth_available_shares")
+            ask_price = _decimal(snapshot.get("ask_price"), "depth_ask_price")
+        except ValueError as exc:
+            return {}, str(exc)
+        window = windows.get(market_id)
+        if window is None:
+            return {}, "depth_snapshot_market_unknown"
+        if not (window["window_start_ms"] <= event_ms <= window["window_end_ms"]):
+            return {}, "depth_snapshot_outside_market_window"
+        if available_shares < 0:
+            return {}, "depth_available_shares_negative"
+        if ask_price <= 0 or ask_price >= 1:
+            return {}, "depth_ask_price_must_be_between_zero_and_one"
+        tick_multiple = ask_price / window["tick_size"]
+        if tick_multiple != tick_multiple.to_integral_value():
+            return {}, "depth_ask_price_not_on_tick_size"
+        key = (market_id, snapshot_id)
+        if key in out:
+            return {}, "duplicate_depth_snapshot_id"
+        out[key] = {
+            "market_id": market_id,
+            "snapshot_id": snapshot_id,
+            "capture_id": capture_id,
+            "seq": seq,
+            "raw_payload_sha256": payload_hash,
+            "event_ms": event_ms,
+            "received_ms": received_ms,
+            "available_shares": available_shares,
+            "ask_price": ask_price,
+        }
+    return out, None
+
+
 def _validate_same_ledger(
     document: dict[str, Any],
     events: list[dict[str, Any]],
     windows: dict[str, dict[str, Any]],
     source_by_ref: dict[tuple[str, str, int], dict[str, Any]],
+    depth_by_ref: dict[tuple[str, str], dict[str, Any]],
     *,
     required_fills: int,
 ) -> str | None:
@@ -189,6 +262,7 @@ def _validate_same_ledger(
     seen_checkpoints: set[str] = set()
     seen_receipts: set[str] = set()
     seen_strategy_refs: set[str] = set()
+    seen_depth_refs: set[tuple[str, str]] = set()
     previous_after = initial_cash
     previous_checkpoint = starting_checkpoint
     previous_entry_ms: int | None = None
@@ -259,6 +333,31 @@ def _validate_same_ledger(
                 return "source_event_outside_market_window"
             if source_event_ms > entry_ms:
                 return "source_event_after_entry"
+            depth_ref = row.get("depth_ref")
+            if not isinstance(depth_ref, dict):
+                return "depth_ref_required_per_fill"
+            depth_snapshot_id = _text(depth_ref.get("snapshot_id"), "depth_snapshot_id_ref")
+            depth_capture_id = _text(depth_ref.get("capture_id"), "depth_capture_id_ref")
+            depth_seq = depth_ref.get("seq")
+            depth_hash = _hash(depth_ref.get("raw_payload_sha256"), "depth_raw_payload_sha256_ref")
+            depth_event_ms = depth_ref.get("event_ms")
+            if type(depth_seq) is not int or depth_seq < 0 or not _integer(depth_event_ms):
+                return "depth_ref_invalid"
+            depth_key = (market_id, depth_snapshot_id)
+            if depth_key in seen_depth_refs:
+                return "depth_ref_reused"
+            seen_depth_refs.add(depth_key)
+            depth = depth_by_ref.get(depth_key)
+            if (
+                depth is None
+                or depth["capture_id"] != depth_capture_id
+                or depth["seq"] != depth_seq
+                or depth["raw_payload_sha256"] != depth_hash
+                or depth["event_ms"] != depth_event_ms
+            ):
+                return "depth_ref_not_in_bundle"
+            if depth["event_ms"] > entry_ms or depth["received_ms"] > entry_ms:
+                return "depth_snapshot_after_entry"
             checkpoint = _text(row.get("balance_checkpoint_id"), "balance_checkpoint_id")
             if checkpoint in seen_checkpoints:
                 return "duplicate_balance_checkpoint_id"
@@ -309,8 +408,12 @@ def _validate_same_ledger(
                 return "shares_must_be_positive"
             if shares < window["min_order_size"]:
                 return "shares_below_market_minimum"
+            if depth["available_shares"] < shares:
+                return "depth_available_shares_insufficient"
             if price <= 0 or price >= 1:
                 return "price_must_be_between_zero_and_one"
+            if price < depth["ask_price"]:
+                return "executed_price_below_depth_ask"
             tick_multiple = price / window["tick_size"]
             if tick_multiple != tick_multiple.to_integral_value():
                 return "price_not_on_tick_size"
@@ -380,6 +483,9 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
     windows, error = _market_windows(document)
     if error:
         return _fail(error, event_count=len(events), source_event_count=len(source_events))
+    depth_by_ref, depth_error = _depth_snapshots(document, windows)
+    if depth_error:
+        return _fail(depth_error, event_count=len(events), source_event_count=len(source_events))
     account_market_ids: set[str] = set()
     for row in events:
         if not isinstance(row, dict) or not isinstance(row.get("market_id"), str) or row.get("market_id") not in windows:
@@ -419,6 +525,7 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
         events,
         windows,
         source_by_ref,
+        depth_by_ref,
         required_fills=required_fills,
     )
     if ledger_failure:
@@ -451,6 +558,7 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
         "source_continuity_ok": True,
         "source_reconnect_segments": manifest["reconnect_segments"],
         "market_window_count": len(windows),
+        "depth_snapshot_count": len(depth_by_ref),
         "fills": int(result.get("fills", 0)),
         "consecutive": bool(result.get("consecutive", False)),
         "paper_replay_passed": bool(result.get("paper_replay_passed", False)),
@@ -463,6 +571,7 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
         "same_ledger_identity_verified": True,
         "cash_amounts_reconciled": True,
         "source_fill_references_verified": True,
+        "depth_evidence_verified": True,
     }
 
 
