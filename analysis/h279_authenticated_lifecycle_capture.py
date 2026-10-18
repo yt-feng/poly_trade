@@ -70,10 +70,11 @@ def _public_data_wallet(account_trades: list[Any], fallback: Any) -> tuple[str, 
     """
     counts: dict[str, int] = {}
     for row in account_trades:
-        if not isinstance(row, dict):
+        normalized = _jsonable(row)
+        if not isinstance(normalized, dict):
             continue
         for key in ("maker_address", "owner_address", "wallet_address"):
-            value = str(row.get(key) or "").strip().lower()
+            value = str(normalized.get(key) or "").strip().lower()
             if _HEX_WALLET.fullmatch(value):
                 counts[value] = counts.get(value, 0) + 1
                 break

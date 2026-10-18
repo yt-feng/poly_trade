@@ -86,3 +86,15 @@ def test_public_data_wallet_falls_back_to_sdk_wallet():
     )
     assert wallet == "0x" + "c" * 40
     assert source == "client_wallet_fallback"
+
+
+def test_public_data_wallet_accepts_sdk_like_model():
+    class Trade:
+        maker_address = "0x" + "d" * 40
+
+        def model_dump(self, mode=None):
+            return {"maker_address": self.maker_address}
+
+    wallet, source = h279._public_data_wallet([Trade()], "0x" + "c" * 40)
+    assert wallet == "0x" + "d" * 40
+    assert source == "account_trade_address"
