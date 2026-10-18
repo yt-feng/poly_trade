@@ -30,6 +30,7 @@ if str(CURRENT_DIR) not in sys.path:
 
 import classic_min_order_chain as registry
 import h197_registry_prefix_survivor_holdout as h197
+import h54_execution_contract_prefix_sensitivity as h54
 
 SOURCE_COMMIT = "bbda5f2050685f63153621a54641ebdfab943487"
 INITIAL_CASH = 10.0
@@ -88,10 +89,13 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
     ).strip()
     if observed != source_commit:
         raise RuntimeError(f"SOURCE_COMMIT_MISMATCH:{observed}:{source_commit}")
-    unknown = sorted(set(AUDIT_CANDIDATES) - set(registry.CANDIDATES))
-    if unknown:
-        raise RuntimeError(f"AUDIT_CANDIDATE_NOT_REGISTERED:{unknown}")
-    frame, runs = registry.prepare(source_root, list(AUDIT_CANDIDATES))
+    if "classic_breakout_up" not in registry.CANDIDATES:
+        raise RuntimeError("AUDIT_CANDIDATE_NOT_REGISTERED:classic_breakout_up")
+    # Build the registered candidate with the normal registry path, then add
+    # the already-frozen H30/H38 columns through the existing H54 generator.
+    # This does not fit or refit a signal.
+    frame, runs = registry.prepare(source_root, ["classic_breakout_up"])
+    frame = h54.add_frozen_candidates(frame)
     if len(runs) != 83:
         raise RuntimeError(f"SOURCE_SNAPSHOT_RUN_COUNT_MISMATCH:{len(runs)}")
     test_runs = runs[4:]
