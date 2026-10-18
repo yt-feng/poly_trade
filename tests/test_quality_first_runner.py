@@ -2,6 +2,7 @@
 import argparse
 import base64
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -17,6 +18,8 @@ sys.path.insert(0, str(ROOT / 'tools'))
 import run_quality_first_research as runner
 import research_vault
 import quality_first_research as research
+import persist_quality_first_journal as journal
+from test_quality_first_research import raw_row, synthetic_provenance
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 
@@ -41,6 +44,116 @@ class QualityFirstRunnerTests(unittest.TestCase):
         self.private = X25519PrivateKey.generate()
         self.recipient = research_vault.recipient_for(self.private)
         self.rid = self.recipient['recipient_id']
+
+    def run_with_result(self, result):
+        """Exercise delivery with synthetic child bytes; never acquire data."""
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'delivery'
+            args = argparse.Namespace(recipient_json_b64=base64.b64encode(research_vault.canonical(self.recipient)).decode(),
+                recipient_id=self.rid, output=output, cache=None, max_releases=64, max_bytes=1024**3,
+                max_snapshot_archives=96, initial_cash=10, timeout_seconds=10)
+            def child(command, **kwargs):
+                destination = Path(command[command.index('--output') + 1])
+                destination.mkdir()
+                if result is None:
+                    (destination / 'unrelated.txt').write_text('nonempty is not evidence')
+                else:
+                    (destination / 'research.json').write_bytes(result)
+                return argparse.Namespace(returncode=0)
+            with patch.object(runner.forward_acquire, 'acquire', return_value={'errors': []}), \
+                 patch.object(runner.forward_acquire, 'validate_manifest', return_value=True), \
+                 patch.object(runner.forward_acquire, 'request', side_effect=AssertionError('network forbidden')) as network, \
+                 patch.object(runner.subprocess, 'run', side_effect=child), contextlib.redirect_stdout(io.StringIO()):
+                code = runner.run(args)
+            network.assert_not_called()
+            status = json.loads((output / 'status.json').read_text())
+            self.assertEqual(journal.validate_status(status), status)
+            bundle = journal.validate_delivery(output, self.rid)
+            self.assertEqual(json.loads(bundle['status.json']), status)
+            payload = json.loads(research_vault.unseal(bundle['part-0000.vault'], self.private))
+            with tarfile.open(fileobj=io.BytesIO(base64.b64decode(payload['payload_base64'])), mode='r:gz') as archive:
+                if result is not None:
+                    self.assertEqual(archive.extractfile('results/research.json').read(), result)
+            return code, status
+
+    def challenger_result(self, rows):
+        challenger = research.research_challenger_payload(
+            {'family': 'spot_residual', 'coef': [.20] + [0.] * 6, 'fit_cutoff_ms': 1_000_000},
+            'synthetic', 4_000_000, 10., 5_000_000)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, 'load_verified_snapshots', return_value=(rows, synthetic_provenance(rows or [raw_row(0, 0)]))):
+            root = Path(directory)
+            frozen = root / 'frozen.json'
+            frozen.write_text(json.dumps(challenger))
+            research.run(root / 'input', root / 'output', frozen_model=frozen)
+            return (root / 'output/research.json').read_bytes()
+
+    def test_actual_waiting_empty_and_bounded_metadata_controls_evaluation_and_journal(self):
+        begin, end = 5_100_000, 91_500_000
+        cases = [([], 'awaiting_new_data', False),
+                 ([raw_row(0, 0)], 'awaiting_new_data', False),
+                 ([raw_row(end, 0)], 'no_observations_within_episode', False),
+                 ([raw_row(begin, 0)], 'bounded_episode_replay', True)]
+        for rows, evaluation_status, evaluated in cases:
+            with self.subTest(status=evaluation_status, count=len(rows)):
+                result = self.challenger_result(rows)
+                self.assertEqual(json.loads(result)['evaluation_status'], evaluation_status)
+                code, status = self.run_with_result(result)
+                self.assertEqual(code, 0)
+                self.assertEqual(status['status'], 'complete')
+                self.assertIs(status['strategy_evaluated'], evaluated)
+                self.assertNotIn('failed_stage', status)
+
+    def test_actual_discovery_and_legacy_frozen_results_remain_supported(self):
+        rows = [raw_row(i * 300_000, 0) for i in range(10)]
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(research, 'load_verified_snapshots', return_value=(rows, synthetic_provenance(rows))):
+            root = Path(directory)
+            research.run(root / 'input', root / 'discovery')
+            frozen_path = root / 'discovery/frozen_model.json'
+            begin = json.loads(frozen_path.read_text())['forward_min_window_start_ms']
+            forward_rows = [raw_row(begin, offset) for offset in range(0, 300_000, 1000)]
+            with patch.object(research, 'load_verified_snapshots',
+                              return_value=(forward_rows, synthetic_provenance(forward_rows))):
+                research.run(root / 'input', root / 'forward', frozen_model=frozen_path)
+            for name in ('discovery', 'forward'):
+                code, status = self.run_with_result((root / name / 'research.json').read_bytes())
+                self.assertEqual(code, 0)
+                self.assertTrue(status['strategy_evaluated'])
+
+    def test_unknown_damaged_or_inconsistent_metadata_fails_closed(self):
+        good = json.loads(self.challenger_result([raw_row(5_100_000, 0)]))
+        cases = [None, b'{', b'[]', b'null', b'{}', b'\xff', b'{"version":1,"version":1}']
+        mutations = [
+            {'version': 2}, {'version': True}, {'sample_role': 'unknown'},
+            {'research_only': False}, {'live_enabled': True},
+            {'evaluation_status': 'unknown'}, {'evaluation_status': None},
+            {'evaluation_status': 'awaiting_new_data'}, {'evaluation_status': 'no_observations_within_episode'},
+            {'new_episode_observation_count': 0}, {'new_episode_observation_count': True},
+            {'new_episode_observation_count': '1'}, {'quality_funnel': {}},
+            {'quality_funnel': {'input_rows': True}},
+            {'quality_funnel': {'input_rows': -1}}, {'forward': None},
+            {'forward_stress': {'summary': {}}},
+            {'forward': {'summary': {'attempts': True}}},
+        ]
+        for update in mutations:
+            result = copy.deepcopy(good)
+            result.update(update)
+            cases.append(research.canonical(result))
+        for field in ('sample_role', 'evaluation_status', 'new_episode_observation_count', 'forward_stress'):
+            result = copy.deepcopy(good)
+            del result[field]
+            cases.append(research.canonical(result))
+        empty = json.loads(self.challenger_result([]))
+        empty['evaluation_status'] = 'bounded_episode_replay'
+        cases.append(research.canonical(empty))
+        for index, result in enumerate(cases):
+            with self.subTest(index=index):
+                code, status = self.run_with_result(result)
+                self.assertEqual(code, 2)
+                self.assertEqual(status['status'], 'failed')
+                self.assertEqual(status['failed_stage'], 'research')
+                self.assertFalse(status['strategy_evaluated'])
 
     def test_stratification_reserves_each_day_and_spreads_intraday(self):
         items = [item(f'2026-10-{day:02d}', hour) for day in range(1, 9) for hour in range(24)]
@@ -269,7 +382,7 @@ class QualityFirstRunnerTests(unittest.TestCase):
                 self.assertEqual(delivered_model.read_bytes(), frozen.read_bytes())
                 result = Path(command[command.index('--output') + 1])
                 result.mkdir()
-                (result / 'research.json').write_text('{"fixture":true}')
+                (result / 'research.json').write_bytes(self.challenger_result([raw_row(5_100_000, 0)]))
                 return argparse.Namespace(returncode=0)
             with patch.object(runner.forward_acquire, 'acquire', return_value={'errors': []}), \
                  patch.object(runner.forward_acquire, 'validate_manifest', return_value=True), \

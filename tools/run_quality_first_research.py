@@ -292,6 +292,54 @@ def deliver_bundle(bundle, output, recipient, expected_id):
     return len(chunks)
 
 
+def strategy_evaluated(result_dir):
+    """Classify the analysis result, not the existence of output files.
+
+    Unknown, missing or inconsistent metadata is a research failure. A valid
+    waiting/empty episode can still be delivered successfully without claiming
+    that a strategy was evaluated.
+    """
+    path = Path(result_dir) / 'research.json'
+    if path.is_symlink():
+        raise ValueError('RESEARCH_RESULT_SYMLINK')
+    result = research_vault.load_json_bytes(
+        research_vault.read_bounded(path, MAX_BUNDLE_BYTES), MAX_BUNDLE_BYTES)
+    if (type(result.get('version')) is not int or result['version'] != 1
+            or result.get('research_only') is not True or result.get('live_enabled') is not False):
+        raise ValueError('RESEARCH_RESULT_SCHEMA')
+    role = result.get('sample_role')
+    replay_fields = {
+        'retrospective_discovery_and_untuned_chronological_holdout': ('holdout', 'holdout_stress'),
+        'prospective_after_frozen_boundary': ('forward', 'forward_stress'),
+        'prospective_research_challenger': ('forward', 'forward_stress'),
+    }.get(role)
+    if replay_fields is None:
+        raise ValueError('RESEARCH_RESULT_ROLE')
+    funnel = result.get('quality_funnel')
+    rows = funnel.get('input_rows') if isinstance(funnel, dict) else None
+    if type(rows) is not int or rows < 0:
+        raise ValueError('RESEARCH_RESULT_OBSERVATIONS')
+    for field in replay_fields:
+        replay = result.get(field)
+        summary = replay.get('summary') if isinstance(replay, dict) else None
+        attempts = summary.get('attempts') if isinstance(summary, dict) else None
+        if type(attempts) is not int or attempts < 0 or (rows == 0 and attempts != 0):
+            raise ValueError('RESEARCH_RESULT_REPLAY')
+    if role == 'prospective_research_challenger':
+        count = result.get('new_episode_observation_count')
+        state = result.get('evaluation_status')
+        if type(count) is not int or count != rows:
+            raise ValueError('RESEARCH_RESULT_EPISODE_COUNT')
+        if state in ('awaiting_new_data', 'no_observations_within_episode') and count == 0:
+            return False
+        if state == 'bounded_episode_replay' and count > 0:
+            return True
+        raise ValueError('RESEARCH_RESULT_EPISODE_STATUS')
+    if 'evaluation_status' in result:
+        raise ValueError('RESEARCH_RESULT_UNEXPECTED_STATUS')
+    return rows > 0
+
+
 def run(args):
     recipient = load_recipient(args.recipient_json_b64, args.recipient_id)
     output = Path(args.output)
@@ -366,8 +414,8 @@ def run(args):
                     raise ValueError('RESEARCH_PROCESS_FAILED')
                 if not (private / 'results').is_dir() or not any((private / 'results').iterdir()):
                     raise ValueError('RESEARCH_OUTPUT_MISSING')
+                status['strategy_evaluated'] = strategy_evaluated(private / 'results')
                 status['status'] = 'complete'
-                status['strategy_evaluated'] = True
             except Exception as exc:
                 # Diagnostics are sealed below; exception text is never public.
                 print(type(exc).__name__, str(exc))

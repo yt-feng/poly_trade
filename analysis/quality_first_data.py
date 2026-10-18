@@ -455,6 +455,11 @@ def build_quality_dataset(rows, policy=None, required_features=DEFAULT_FEATURES)
     policy = policy or QualityPolicy()
     engine = CausalQualityEngine(policy, required_features)
     decisions = [engine.update(row) for row in rows]
+    return summarize_quality_decisions(decisions, policy, required_features)
+
+
+def summarize_quality_decisions(decisions, policy, required_features):
+    """Retain causal features; recompute training annotations on supplied records."""
     by_window = defaultdict(list)
     counters = {name: Counter() for name in ("base_integrity", "execution_quality", "candidate_feature_quality")}
     accepted = Counter()
