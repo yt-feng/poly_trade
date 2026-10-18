@@ -100,8 +100,6 @@ jobs:
           status_record={'version':1,'status':status,'stage':'sealed_delivery','strategy_evaluated':False,'live_orders_enabled':False,'plaintext_published':False,'sealed_parts':1}
           if failed_stage:
               status_record['failed_stage']=failed_stage
-          if isinstance(report.get('failure_code'), str):
-              status_record['failure_code']=report['failure_code']
           research_vault.write_new(delivery/'status.json', research_vault.canonical(status_record)+b'\n',0o644)
           PY
       - name: Publish only encrypted lifecycle delivery
