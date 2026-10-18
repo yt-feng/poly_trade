@@ -31,6 +31,31 @@ def test_ten_fills_are_one_growth_positive_reusable_cash_chain():
     assert result["ending_cash"] == "15.00"
 
 
+def test_bounded_chain_stops_at_required_fill_and_ignores_later_trades():
+    # The first ten entries are a valid finite batch. Two later losses would
+    # make the unbounded history fail, but they are outside this Canary batch.
+    events = [event(i) for i in range(10)]
+    events.extend([event(10, payout="0"), event(11, payout="0")])
+    result = evaluate_compound_chain(
+        events,
+        stop_after_required_fills=True,
+        evidence_mode="paper_upper_bound",
+    )
+    assert result["fills"] == 10
+    assert result["stopped_after_required_fills"] is True
+    assert result["ending_cash"] == "15.00"
+    assert result["paper_replay_passed"] is True
+
+
+def test_unbounded_history_still_includes_later_trades():
+    events = [event(i) for i in range(10)]
+    events.extend([event(10, payout="0"), event(11, payout="0")])
+    result = evaluate_compound_chain(events, evidence_mode="paper_upper_bound")
+    assert result["fills"] == 12
+    assert result["stopped_after_required_fills"] is False
+    assert result["paper_replay_passed"] is False
+
+
 def test_chain_does_not_reset_cash_between_independent_trials():
     events = [event(0, payout="0"), event(1, cost="5", payout="0")]
     result = evaluate_compound_chain(events, required_fills=2)
