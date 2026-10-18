@@ -16,9 +16,9 @@ import re
 from typing import Any, Iterable
 
 try:  # package import for tests, direct import for the Actions script entrypoint
-    from .polygon_orderfilled_probe import probe
+    from .polygon_orderfilled_probe import POLYGON_RPC_URL, probe
 except ImportError:  # pragma: no cover
-    from polygon_orderfilled_probe import probe
+    from polygon_orderfilled_probe import POLYGON_RPC_URL, probe
 
 
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
@@ -115,7 +115,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--owners-file", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--rpc-url", default="https://polygon-rpc.com")
+    parser.add_argument("--rpc-url", default=POLYGON_RPC_URL)
     parser.add_argument("--window-blocks", type=int, default=100_000)
     parser.add_argument("--chunk-blocks", type=int, default=200)
     parser.add_argument("--max-logs", type=int, default=2_000)

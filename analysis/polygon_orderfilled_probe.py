@@ -18,7 +18,10 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-POLYGON_RPC_URL = "https://polygon-rpc.com"
+# ``polygon-rpc.com`` began returning HTTP 401 from GitHub runners.  This
+# public endpoint was independently verified by the repaired bounded probe;
+# callers may still supply an explicitly approved endpoint.
+POLYGON_RPC_URL = "https://polygon-bor-rpc.publicnode.com"
 V1_ORDER_FILLED_TOPIC = "0xd0a08e8c493f9c94f29311604c9de1b4e8c8d4c06bd0c789af57f2d65bfec0f6"
 V2_ORDER_FILLED_TOPIC = "0xd543adfd945773f1a62f74f0ee55a5e3b9b1a28262980ba90b1a89f2ea84d8ee"
 V1_EXCHANGE_ADDRESSES = (
