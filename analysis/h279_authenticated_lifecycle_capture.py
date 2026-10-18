@@ -110,7 +110,6 @@ def _derive_credentials(private_key: str) -> Any:
 def _capture_one(label: str, private_key: str, sdk_commit: str) -> dict[str, Any]:
     from eth_account import Account
     from polymarket import SecureClient
-    from polymarket.models import AssetType
 
     stage = "signer"
     try:
@@ -133,7 +132,9 @@ def _capture_one(label: str, private_key: str, sdk_commit: str) -> dict[str, Any
         stage = "public_activity"
         activity, activity_truncated = _bounded_items(client.list_activity(full_history=True))
         stage = "balance_checkpoint"
-        balance = client.get_balance_allowance(asset_type=AssetType.COLLATERAL)
+        # The current SDK exposes AssetType as a Literal[str] type alias, not
+        # an enum.  Use the documented wire value directly.
+        balance = client.get_balance_allowance(asset_type="COLLATERAL")
         raw_balance = _jsonable(balance)
         return {
             "label": label,
