@@ -48,6 +48,13 @@ def _pick(payload: dict[str, Any], *names: str, default: Any = None) -> Any:
     return default
 
 
+def _text_list(value: Any, field: str) -> list[str]:
+    """Normalize an optional list of opaque receipt identifiers."""
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be a list")
+    return [_text(item) for item in value if _text(item)]
+
+
 def _decimal(value: Any, field: str) -> Decimal:
     try:
         result = Decimal(str(value))
@@ -90,8 +97,9 @@ def _order_canonical(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(associate, list):
         raise ValueError("associate_trades must be a list")
     trade_ids = _pick(payload, "trade_ids", "tradeIDs", default=[])
-    if not isinstance(trade_ids, list):
-        raise ValueError("trade_ids must be a list")
+    transaction_hashes = _pick(
+        payload, "transaction_hashes", "transactionsHashes", default=[]
+    )
     return {
         "id": _text(_pick(payload, "id")),
         "market_id": _text(_pick(payload, "market", "conditionId", "condition_id")),
@@ -105,7 +113,11 @@ def _order_canonical(payload: dict[str, Any]) -> dict[str, Any]:
         # Async order responses may expose trade IDs before the transaction
         # hash is available. Preserve them for a later authenticated trade
         # update; they never establish a fill by themselves.
-        "trade_ids": [_text(value) for value in trade_ids if _text(value)],
+        "trade_ids": _text_list(trade_ids, "trade_ids"),
+        # The official client may return transaction hashes before the trade
+        # record has resolved. Preserve them as order evidence, but never use
+        # them alone to emit an entry_fill event.
+        "transaction_hashes": _text_list(transaction_hashes, "transaction_hashes"),
     }
 
 
@@ -207,6 +219,7 @@ def adapt_order(payload: dict[str, Any], *, expected: dict[str, Any]) -> dict[st
             "original_size_shares": order["original_size"],
             "size_matched_shares": order["size_matched"],
             "trade_ids": list(order["trade_ids"]),
+            "transaction_hashes": list(order["transaction_hashes"]),
             "evidence_source": "authenticated_clob_order",
         }
     )

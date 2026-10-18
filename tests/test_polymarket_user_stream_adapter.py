@@ -36,6 +36,7 @@ class PolymarketUserStreamAdapter(unittest.TestCase):
                 "orderEventType": "PLACEMENT",
                 "status": status,
                 "tradeIDs": ["trade-1"],
+                "transactionsHashes": ["0xsettlement"],
                 "timestamp": 1782753357257,
             },
         }
@@ -73,6 +74,7 @@ class PolymarketUserStreamAdapter(unittest.TestCase):
         self.assertEqual(result["dedupe_key"], "order:order-1:LIVE:1782753357257")
         self.assertEqual([event["kind"] for event in result["events"]], ["entry_order_accepted"])
         self.assertEqual(result["events"][0]["trade_ids"], ["trade-1"])
+        self.assertEqual(result["events"][0]["transaction_hashes"], ["0xsettlement"])
 
     def test_documented_trade_wire_shape_emits_confirmed_fill(self):
         result = adapt_user_stream_frame(self.trade_frame(), expected=self.expected)

@@ -52,6 +52,9 @@ def _canonical_payload(event_type: str, payload: dict[str, Any]) -> dict[str, An
                 "associateTrades", payload.get("associate_trades", [])
             ),
             "tradeIDs": payload.get("tradeIDs", payload.get("trade_ids", [])),
+            "transactionsHashes": payload.get(
+                "transactionsHashes", payload.get("transaction_hashes", [])
+            ),
             "status": payload.get("status"),
         }
     return {

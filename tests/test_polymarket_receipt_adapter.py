@@ -30,6 +30,7 @@ class PolymarketReceiptAdapter(unittest.TestCase):
             "status": status,
             "associate_trades": ["trade-1"],
             "tradeIDs": ["trade-1"],
+            "transactionsHashes": [],
         }
 
     def trade(self, status="TRADE_STATUS_CONFIRMED", tx="0xtx"):
@@ -59,6 +60,16 @@ class PolymarketReceiptAdapter(unittest.TestCase):
         self.assertEqual(result["order"]["trade_ids"], ["trade-1"])
         self.assertEqual([event["kind"] for event in result["events"]], ["entry_order_accepted"])
         self.assertEqual(result["events"][0]["trade_ids"], ["trade-1"])
+        self.assertEqual(result["events"][0]["transaction_hashes"], [])
+
+    def test_order_preserves_best_effort_transaction_hash_without_promoting_fill(self):
+        payload = self.order()
+        payload["transactionsHashes"] = ["0xsettlement"]
+        result = adapt_order(payload, expected=self.expected)
+        self.assertEqual(result["issues"], [])
+        self.assertEqual(result["order"]["transaction_hashes"], ["0xsettlement"])
+        self.assertEqual([event["kind"] for event in result["events"]], ["entry_order_accepted"])
+        self.assertEqual(result["events"][0]["transaction_hashes"], ["0xsettlement"])
 
     def test_matched_order_emits_terminal_event(self):
         result = adapt_order(self.order("MATCHED"), expected=self.expected)
