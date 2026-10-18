@@ -5,12 +5,14 @@ on:
       - '.github/workflows/sealed-source-coverage.yml'
       - '.github/workflows/sealed-journal-persist.yml'
       - 'analysis/polybolt_twap_adapter.py'
+      - 'analysis/validate_polybolt_compound_bundle.py'
       - 'tools/run_source_coverage.py'
       - 'analysis/settlement_source_coverage.py'
       - 'analysis/forward_acquire.py'
       - 'tools/run_quality_first_research.py'
       - 'tools/research_vault.py'
       - 'tests/test_polybolt_twap_adapter.py'
+      - 'tests/test_validate_polybolt_compound_bundle.py'
       - 'tests/test_source_coverage_runner.py'
       - 'tests/test_settlement_source_coverage.py'
       - 'requirements-vault.txt'
@@ -19,8 +21,10 @@ on:
     paths:
       - '.github/workflows/sealed-source-coverage.yml'
       - 'analysis/polybolt_twap_adapter.py'
+      - 'analysis/validate_polybolt_compound_bundle.py'
       - 'analysis/settlement_source_coverage.py'
       - 'tests/test_polybolt_twap_adapter.py'
+      - 'tests/test_validate_polybolt_compound_bundle.py'
       - 'tests/test_settlement_source_coverage.py'
   workflow_dispatch:
 permissions:
@@ -43,6 +47,7 @@ jobs:
       - name: Synthetic coverage and sealed-delivery contracts
         run: |
           python -m unittest discover -s tests -p 'test_polybolt_twap_adapter.py' -v
+          python -m unittest discover -s tests -p 'test_validate_polybolt_compound_bundle.py' -v
           python -m unittest discover -s tests -p 'test_settlement_source_coverage.py' -v
           python -m unittest discover -s tests -p 'test_source_coverage_runner.py' -v
           python -m unittest discover -s tests -p 'test_persist_quality_first_journal.py' -v
