@@ -80,15 +80,16 @@ def validate_maker_compound_chain(
     closing_balance_checkpoint_id: Any = None,
     closing_balance: Any = None,
     require_rebate: bool = True,
-    require_async_binding: bool = False,
+    require_async_binding: bool = True,
 ) -> dict[str, Any]:
     """Validate an independent maker-only ten-row compound bundle.
 
     ``events`` must carry ``payout`` equal to settlement payout plus the
     independently identified maker rebate.  The shared authenticated
     reconciler still supplies the no-reset balance chain and explicit opening
-    and closing anchors.  This function does not make the supplied identities
-    externally authentic.
+    and closing anchors.  Async trade-ID binding is required by default so a
+    caller cannot form an offline maker chain from manually joined rows. This
+    function does not make the supplied identities externally authentic.
     """
     rows = list(events)
     fills = list(orderfilled)

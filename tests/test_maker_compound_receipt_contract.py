@@ -49,6 +49,7 @@ def maker_event(i: int, **updates):
         "rebate_batch_amount": "1.10",
         "rebate_allocated_amount": "0.11",
         "rebate_available_ts": str(sequence * 100 + 10),
+        "async_trade_id_binding_ready": True,
     }
     value.update(updates)
     return value
@@ -152,6 +153,8 @@ class MakerCompoundReceiptContractTest(unittest.TestCase):
 
     def test_async_binding_is_required_when_strict_admission_is_enabled(self):
         events, fills = bundle()
+        for event in events:
+            event.pop("async_trade_id_binding_ready", None)
         result = validate_maker_compound_chain(
             events,
             fills,
@@ -160,7 +163,6 @@ class MakerCompoundReceiptContractTest(unittest.TestCase):
             starting_checkpoint_id="opening",
             closing_balance_checkpoint_id="closing",
             closing_balance="16.10",
-            require_async_binding=True,
         )
         self.assertEqual(result["failure_reason"], "maker_event_contract_failed")
         self.assertTrue(all(issue["reason"] == "async_trade_id_binding_required" for issue in result["issues"]))

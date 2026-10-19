@@ -108,6 +108,12 @@ class MakerCompoundBundleAdapterTest(unittest.TestCase):
                 order_event=order, trade_event=trade, ledger_fields=ledger,
                 settlement_fields=settlement, rebate_fields=rebate_fields(),
                 post_only_accepted=True,
+                order_updates=[{
+                    "kind": "entry_order_accepted",
+                    "order_id": order["order_id"],
+                    "owner": "owner-key",
+                    "trade_ids": [trade["trade_id"]],
+                }],
             )
             rows.append(row)
             fills.append({
@@ -129,6 +135,12 @@ class MakerCompoundBundleAdapterTest(unittest.TestCase):
             order_event=order_event(), trade_event=trade_event(),
             ledger_fields=ledger_fields(), settlement_fields=settlement_fields(),
             rebate_fields=rebate_fields(), post_only_accepted=True,
+            order_updates=[{
+                "kind": "entry_order_accepted",
+                "order_id": "maker-order-1",
+                "owner": "owner-key",
+                "trade_ids": ["trade-1"],
+            }],
         )
         self.assertEqual(row["owner"], "owner-key")
         self.assertEqual(row["maker_address"], "0xmaker")
