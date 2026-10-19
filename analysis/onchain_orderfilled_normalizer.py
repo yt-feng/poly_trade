@@ -24,6 +24,54 @@ V2_ORDERFILLED_FIELDS = (
 )
 
 
+def adapt_rocklabs_orderfilled(record: dict[str, Any]) -> dict[str, Any]:
+    """Map one Rocklabs decoded ``onchain.OrderFilled`` row to v1 input.
+
+    Rocklabs stores the event payload under ``content.decoded`` and uses
+    camelCase asset/amount names.  The adapter is deliberately schema-only:
+    it requires a log index so multiple fills in one transaction cannot be
+    collapsed, and it never treats the maker address as the user's owner.
+    The returned mapping still needs :func:`normalize_orderfilled` and the
+    authenticated cash/settlement gates before it can enter a ledger.
+    """
+    if not isinstance(record, dict):
+        raise ValueError("record must be an object")
+    content = record.get("content") if isinstance(record.get("content"), dict) else record
+    decoded = content.get("decoded") if isinstance(content.get("decoded"), dict) else content
+    event_name = content.get("event_name", content.get("eventName"))
+    if str(event_name or "").strip() != "OrderFilled":
+        raise ValueError("rocklabs_orderfilled_event_required")
+
+    def required(*names: str) -> Any:
+        for name in names:
+            if name in decoded and decoded[name] not in (None, ""):
+                return decoded[name]
+            if name in content and content[name] not in (None, ""):
+                return content[name]
+        raise ValueError(f"rocklabs_field_required:{names[0]}")
+
+    # The source README documents transaction/block identity but not a usable
+    # fallback for log position.  Fail closed rather than inventing one.
+    log_index = required("log_index", "logIndex")
+    return {
+        "tx_hash": required("tx_hash", "txHash", "transaction_hash", "transactionHash"),
+        "log_index": log_index,
+        "block_number": required("block_number", "blockNumber"),
+        "order_hash": required("order_hash", "orderHash"),
+        "maker": required("maker"),
+        "taker": required("taker"),
+        "maker_asset_id": required("makerAssetId", "maker_asset_id"),
+        "taker_asset_id": required("takerAssetId", "taker_asset_id"),
+        "maker_amount_filled": required("makerAmountFilled", "maker_amount_filled"),
+        "taker_amount_filled": required("takerAmountFilled", "taker_amount_filled"),
+        "fee": required("fee"),
+        "block_timestamp": content.get("ts_block", content.get("timestamp")),
+        "market_id": content.get("market_id", content.get("market")),
+        "chain_id": content.get("chain_id", content.get("chainId")),
+        "receipt_status": content.get("receipt_status", content.get("status")),
+    }
+
+
 def _text(value: Any, field: str) -> str:
     out = "" if value is None else str(value).strip()
     if not out:
