@@ -34,7 +34,11 @@ ORDER_STATUSES = frozenset(
 TERMINAL_ORDER_STATUSES = frozenset(
     {"INVALID", "CANCELED_MARKET_RESOLVED", "CANCELED", "MATCHED"}
 )
-CONFIRMED_TRADE_STATUS = "TRADE_STATUS_CONFIRMED"
+# The authenticated account API normalizes the terminal state to
+# ``CONFIRMED`` while the wire/legacy SDK shape may use the prefixed
+# ``TRADE_STATUS_CONFIRMED`` spelling.  Both identify the same terminal state;
+# matched, mined, and retrying states remain non-terminal.
+CONFIRMED_TRADE_STATUSES = frozenset({"CONFIRMED", "TRADE_STATUS_CONFIRMED"})
 
 
 def _text(value: Any) -> str:
@@ -323,7 +327,7 @@ def adapt_trade(
                 )
         except ValueError as exc:
             issues.append(_issue("INVALID_TRADE_PRICE", str(exc)))
-    if trade["status"] != CONFIRMED_TRADE_STATUS:
+    if trade["status"] not in CONFIRMED_TRADE_STATUSES:
         issues.append(
             _issue(
                 "TRADE_NOT_CONFIRMED",

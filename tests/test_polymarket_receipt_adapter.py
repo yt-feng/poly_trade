@@ -112,6 +112,11 @@ class PolymarketReceiptAdapter(unittest.TestCase):
         self.assertEqual(fill["execution_role"], "TAKER")
         self.assertEqual(fill["price"], "0.5")
 
+    def test_normalized_confirmed_status_is_accepted_alongside_wire_alias(self):
+        result = adapt_trade(self.trade(status="CONFIRMED"), expected=self.expected)
+        self.assertEqual(result["issues"], [])
+        self.assertEqual(result["events"][0]["trade_status"], "CONFIRMED")
+
     def test_confirmed_fill_without_executed_price_is_rejected(self):
         payload = self.trade()
         payload.pop("price")
