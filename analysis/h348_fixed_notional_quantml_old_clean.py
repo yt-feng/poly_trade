@@ -31,7 +31,7 @@ from h53_prefix_only_compound_audit import paper_events, chain_summary
 
 SOURCE_COMMIT = "bbda5f2050685f63153621a54641ebdfab943487"
 INITIAL_CASH = 10.0
-MINIMUM_ORDER = 5.0
+DEFAULT_MINIMUM_ORDER = 5.0
 FEE_RATE = 0.07
 CASH_RELEASE_DELAY = 600.0
 TRAIN_RUNS = 4
@@ -65,7 +65,14 @@ def add_signal(frame: pd.DataFrame, spec: quantml.CandidateSpec, hi: float, lo: 
     return out
 
 
-def replay(frame: pd.DataFrame, strategy: str, run_names: list[str], *, slippage: float = 0.0025) -> tuple[dict, pd.DataFrame]:
+def replay(
+    frame: pd.DataFrame,
+    strategy: str,
+    run_names: list[str],
+    *,
+    minimum_order_notional: float,
+    slippage: float = 0.0025,
+) -> tuple[dict, pd.DataFrame]:
     logs, metrics = simulate_cash_locked(
         frame[frame["run_name"].astype(str).isin([str(name) for name in run_names])],
         strategy,
@@ -78,7 +85,7 @@ def replay(frame: pd.DataFrame, strategy: str, run_names: list[str], *, slippage
             fixed_slippage=slippage,
         ),
         INITIAL_CASH,
-        MINIMUM_ORDER,
+        minimum_order_notional,
         CASH_RELEASE_DELAY,
         cooldown_events=0,
         capture_logs=True,
@@ -90,7 +97,15 @@ def replay(frame: pd.DataFrame, strategy: str, run_names: list[str], *, slippage
     return {**metrics, **chain_summary(paper_events(logs))}, logs
 
 
-def evaluate(source_root: Path, output: Path) -> dict:
+def evaluate(
+    source_root: Path,
+    output: Path,
+    *,
+    minimum_order_notional: float = DEFAULT_MINIMUM_ORDER,
+    protocol_variant: str = "dollar_and_share_floor",
+) -> dict:
+    if minimum_order_notional < 0:
+        raise ValueError("MINIMUM_ORDER_NOTIONAL_MUST_BE_NONNEGATIVE")
     observed = subprocess.check_output(["git", "-C", str(source_root.parent.parent), "rev-parse", "HEAD"], text=True).strip()
     if observed != SOURCE_COMMIT:
         raise RuntimeError(f"SOURCE_COMMIT_MISMATCH:{observed}:{SOURCE_COMMIT}")
@@ -113,10 +128,10 @@ def evaluate(source_root: Path, output: Path) -> dict:
             frame = add_signal(features, spec, hi, lo, strategy)
             candidate_frames[strategy] = (spec.name, frame)
             for split, names in (("selection20", selection_runs), ("holdout59", holdout_runs)):
-                metrics, _logs = replay(frame, strategy, names)
+                metrics, _logs = replay(frame, strategy, names, minimum_order_notional=minimum_order_notional)
                 rows.append({"candidate": spec.name, "q_threshold": q, "hi_value": hi, "lo_value": lo, "strategy": strategy, "split": split, **metrics})
             for block_id, names in enumerate(chronological_blocks(holdout_runs), start=1):
-                metrics, _logs = replay(frame, strategy, names)
+                metrics, _logs = replay(frame, strategy, names, minimum_order_notional=minimum_order_notional)
                 rows.append({"candidate": spec.name, "q_threshold": q, "hi_value": hi, "lo_value": lo, "strategy": strategy, "split": f"holdout_block_{block_id}", **metrics})
     result = pd.DataFrame(rows)
     selection = result[result["split"] == "selection20"].copy()
@@ -142,7 +157,7 @@ def evaluate(source_root: Path, output: Path) -> dict:
         "training_runs": runs[:TRAIN_RUNS],
         "selection_runs": selection_runs,
         "holdout_runs": holdout_runs,
-        "protocol": {"initial_cash_usd": INITIAL_CASH, "minimum_order_usd": MINIMUM_ORDER, "minimum_order_shares": 5.0, "fee_rate": FEE_RATE, "settlement_seconds": 300.0, "cash_release_delay_seconds": CASH_RELEASE_DELAY, "single_position_only": True, "same_ledger": True, "no_concatenation": True, "paper_only": True, "fixed_target_fraction": 0.50},
+        "protocol": {"initial_cash_usd": INITIAL_CASH, "minimum_order_usd": minimum_order_notional, "minimum_order_notional_usd": minimum_order_notional, "minimum_order_shares": 5.0, "fee_rate": FEE_RATE, "settlement_seconds": 300.0, "cash_release_delay_seconds": CASH_RELEASE_DELAY, "single_position_only": True, "same_ledger": True, "no_concatenation": True, "paper_only": True, "fixed_target_fraction": 0.50, "protocol_variant": protocol_variant},
         "selection_eligible_count": int(len(eligible)),
         "selection_choice": choice,
         "holdout_passed": holdout_passed,
@@ -168,8 +183,15 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--minimum-order-notional", type=float, default=DEFAULT_MINIMUM_ORDER)
+    parser.add_argument("--protocol-variant", default="dollar_and_share_floor")
     args = parser.parse_args()
-    evaluate(args.source_root, args.output)
+    evaluate(
+        args.source_root,
+        args.output,
+        minimum_order_notional=args.minimum_order_notional,
+        protocol_variant=args.protocol_variant,
+    )
 
 
 if __name__ == "__main__":
