@@ -1,0 +1,198 @@
+name: H304 Data API v2 receipt join
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: Official Polymarket Data API v2 base URL
+        required: false
+        default: https://data-api.polymarket.com
+        type: string
+      rpc_url:
+        description: Read-only Polygon JSON-RPC endpoint
+        required: false
+        default: https://polygon-bor-rpc.publicnode.com
+        type: string
+      max_history_blocks:
+        description: Maximum historical block span per account
+        required: false
+        default: '250000'
+        type: string
+      chunk_blocks:
+        description: Block span per eth_getLogs query
+        required: false
+        default: '5000'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  join:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install vault and latest official SDK
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements-vault.txt
+          sdk_commit="$(git ls-remote https://github.com/Polymarket/py-sdk.git refs/heads/main | cut -f1)"
+          test "${#sdk_commit}" -eq 40
+          echo "POLY_SDK_COMMIT=$sdk_commit" >> "$GITHUB_ENV"
+          python -m pip install "git+https://github.com/Polymarket/py-sdk.git@$sdk_commit"
+      - name: Capture owners and join Data API v2 rows to receipts
+        env:
+          POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
+          BTC5M_POLYMARKET_PRIVATE_KEY: ${{ secrets.BTC5M_POLYMARKET_PRIVATE_KEY }}
+          API_BASE_URL: ${{ inputs.api_base_url }}
+          RPC_URL: ${{ inputs.rpc_url }}
+          MAX_HISTORY_BLOCKS: ${{ inputs.max_history_blocks }}
+          CHUNK_BLOCKS: ${{ inputs.chunk_blocks }}
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          private_dir="$RUNNER_TEMP/h304"
+          mkdir -m 700 "$private_dir"
+          python - "$private_dir/keys.json" <<'PY'
+          import json, os, sys
+          rows=[]
+          for label, env_name in (("polymarket", "POLYMARKET_PRIVATE_KEY"), ("btc5m", "BTC5M_POLYMARKET_PRIVATE_KEY")):
+              value=os.environ.get(env_name, "").strip()
+              if value:
+                  rows.append({"label": label, "private_key": value})
+          json.dump(rows, open(sys.argv[1], "w"), separators=(",", ":"))
+          PY
+          set +e
+          python -u analysis/h279_authenticated_lifecycle_capture.py \
+            --keys-file "$private_dir/keys.json" \
+            --sdk-commit "$POLY_SDK_COMMIT" \
+            --output "$private_dir/h279.json" \
+            > "$private_dir/h279.stdout" 2> "$private_dir/h279.stderr"
+          h279_rc=$?
+          set -e
+          export H279_RC="$h279_rc"
+          python - "$private_dir" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          private=Path(sys.argv[1])
+          report=json.loads((private/'h279.json').read_text()) if (private/'h279.json').exists() else {}
+          address=re.compile(r'^0x[0-9a-fA-F]{40}$')
+          accounts=[]
+          for row in report.get('accounts') or []:
+              if not isinstance(row, dict):
+                  continue
+              counts={}
+              for trade in row.get('account_trades') or []:
+                  if not isinstance(trade, dict):
+                      continue
+                  for key in ('maker_address','owner_address','wallet_address'):
+                      value=str(trade.get(key) or '').strip().lower()
+                      if address.fullmatch(value):
+                          counts[value]=counts.get(value,0)+1
+                          break
+              if not counts:
+                  continue
+              owner=max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+              activity=[item for item in (row.get('public_data_activity') or []) if isinstance(item, dict)]
+              accounts.append({'label': row.get('label',''), 'owner': owner, 'existing_activity': activity})
+          json.dump({'accounts': accounts}, open(private/'h304-input.json','w'), separators=(',',':'))
+          PY
+          set +e
+          if python - "$private_dir/h304-input.json" <<'PY'
+          import json, sys
+          sys.exit(0 if json.loads(open(sys.argv[1]).read()).get('accounts') else 1)
+          PY
+          then
+              python -u analysis/h304_data_api_v2_receipt_join.py \
+                --input "$private_dir/h304-input.json" \
+                --output "$private_dir/h304.json" \
+                --base-url "$API_BASE_URL" \
+                --rpc-url "$RPC_URL" \
+                --max-history-blocks "$MAX_HISTORY_BLOCKS" \
+                --chunk-blocks "$CHUNK_BLOCKS"
+              h304_rc=$?
+          else
+              h304_rc=1
+              python - "$private_dir/h304.json" <<'PY'
+          import json, sys
+          json.dump({'format':'h304-data-api-v2-receipt-join-failure-v1',
+                     'failure_code':'authenticated_activity_unavailable',
+                     'redeemable_btc_rows':0,'closed_btc_rows':0,'activity_btc_rows':0,
+                     'joined_btc_activity_rows':0,'settlement_receipt_rows':0,
+                     'cash_release_receipt_rows':0,
+                     'owner_scoped_full_settlement_cash_bundle_available':False,
+                     'balance_continuity_proven':False,'actual_fills':0,
+                     'verified_canary_fills':0,'same_ledger_compounding_rows':0,
+                     'new_data_collected':False,'model_refit':False,
+                     'live_orders_enabled':False}, open(sys.argv[1],'w'), indent=2)
+          PY
+          fi
+          set -e
+          export H304_RC="$h304_rc"
+          python - "$private_dir" <<'PY'
+          import base64, hashlib, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private=Path(sys.argv[1])
+          encoded=os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64','')
+          recipient_id=os.environ.get('QUALITY_FIRST_RECIPIENT_ID','')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient=research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          h279=json.loads((private/'h279.json').read_text()) if (private/'h279.json').exists() else {}
+          h304=json.loads((private/'h304.json').read_text()) if (private/'h304.json').exists() else {}
+          payload={'format':'h304-data-api-v2-receipt-join-sealed-v1',
+                   'h279':h279,'h304':h304,
+                   'workflow':{'run_id':os.environ['GITHUB_RUN_ID'],
+                               'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],
+                               'ref':os.environ['GITHUB_REF'],
+                               'api_base_url_sha256':hashlib.sha256(os.environ.get('API_BASE_URL','').encode()).hexdigest(),
+                               'rpc_url_sha256':hashlib.sha256(os.environ.get('RPC_URL','').encode()).hexdigest()}}
+          delivery=Path('sealed-delivery'); delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery/'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          complete=int(os.environ.get('H279_RC','1')) == 0 and int(os.environ.get('H304_RC','1')) == 0
+          status={'version':1,'status':'complete' if complete else 'failed','stage':'sealed_delivery',
+                  'strategy_evaluated':False,'live_orders_enabled':False,'plaintext_published':False,
+                  'sealed_parts':1}
+          if not complete:
+              status['failed_stage']='research'
+          research_vault.write_new(delivery/'status.json', research_vault.canonical(status)+b'\n', 0o644)
+          PY
+      - name: Publish only encrypted receipt join
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+      - name: Redacted summary and cleanup
+        if: always()
+        run: |
+          echo '## H304 Data API v2 receipt join' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Reuses existing authenticated owner activity and joins official v2 status/activity references to confirmed V2 receipt logs; no quote scan, model refit, order, redeem, merge, transfer, or allowance mutation.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Only confirmed owner-scoped settlement plus collateral transfer can reach the cash reconciler. API status rows alone remain non-Canary evidence.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Full activity, status rows, condition IDs, transaction details and owner identities remain encrypted; no plaintext findings are published.' >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY'
+          from pathlib import Path
+          import os, shutil
+          private=Path(os.environ.get('RUNNER_TEMP','/tmp'))/'h304'
+          if private.exists(): shutil.rmtree(private)
+          if Path('sealed-delivery').exists(): shutil.rmtree('sealed-delivery')
+          PY
