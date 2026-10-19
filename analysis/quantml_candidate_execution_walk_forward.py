@@ -195,7 +195,8 @@ def attach_execution_snapshots(
                 for delay in delay_list:
                     fill_row = None
                     if pd.notna(signal_ts):
-                        fill_cut = pd.Timestamp(signal_ts) + pd.Timedelta(seconds=delay)
+                        # Delay starts at the decision cutoff, not its earlier quote.
+                        fill_cut = signal_cut + pd.Timedelta(seconds=delay)
                         fill_pos = int(ts.searchsorted(fill_cut, side="left"))
                         if fill_pos < len(g):
                             fill_row = g.iloc[fill_pos]
