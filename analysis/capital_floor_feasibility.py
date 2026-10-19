@@ -1,4 +1,10 @@
-"""Deterministic feasibility bounds for a $10 account under the CLOB share floor."""
+"""Deterministic feasibility bounds for a $10 account under the CLOB floors.
+
+The frozen small-account protocol has two independent entry constraints: a
+minimum number of shares and a minimum dollar notional.  The executable order
+must satisfy both, so the cash bound uses their maximum rather than silently
+dropping the dollar floor.
+"""
 from __future__ import annotations
 
 import argparse
@@ -10,6 +16,7 @@ from dataclasses import asdict, dataclass
 class Contract:
     initial_cash: float = 10.0
     minimum_order_shares: float = 5.0
+    minimum_order_notional: float = 5.0
     taker_fee_rate: float = 0.07
     fee_exponent: float = 1.0
 
@@ -28,7 +35,9 @@ def minimum_order_notional(price: float, contract: Contract = Contract()) -> flo
         raise ValueError("PRICE_MUST_BE_BETWEEN_ZERO_AND_ONE")
     if contract.minimum_order_shares <= 0.0:
         raise ValueError("MINIMUM_ORDER_SHARES_MUST_BE_POSITIVE")
-    return contract.minimum_order_shares * price
+    if contract.minimum_order_notional < 0.0:
+        raise ValueError("MINIMUM_ORDER_NOTIONAL_MUST_BE_NONNEGATIVE")
+    return max(contract.minimum_order_shares * price, contract.minimum_order_notional)
 
 
 def minimum_order_cash(price: float, contract: Contract = Contract()) -> float:
@@ -60,7 +69,7 @@ def audit(contract: Contract = Contract()) -> dict[str, object]:
     maximum = max(post_loss)
     minimum = min(post_loss)
     return {
-        "format": "capital-share-floor-feasibility-v2",
+        "format": "capital-floor-feasibility-v3",
         "contract": asdict(contract),
         "price_grid": {"min": min(prices), "max": max(prices), "step": 0.01},
         "post_full_loss_cash": {
@@ -68,7 +77,7 @@ def audit(contract: Contract = Contract()) -> dict[str, object]:
             "maximum": maximum,
             "minimum_next_order_cash": min(required),
             "maximum_next_order_cash": max(required),
-            "can_fund_second_minimum_share_order_for_all_grid_prices": all(
+            "can_fund_second_minimum_order_for_all_grid_prices": all(
                 cash + 1e-12 >= needed for cash, needed in zip(post_loss, required)
             ),
         },
@@ -78,7 +87,7 @@ def audit(contract: Contract = Contract()) -> dict[str, object]:
             "price_at_minimum": prices[capacities.index(min(capacities))],
             "price_at_maximum": prices[capacities.index(max(capacities))],
         },
-        "conclusion": "Under the documented five-share floor, a $10 account can fund a second minimum-share order after one full loss across the tested price grid; repeated full-loss capacity remains price-dependent and is a feasibility bound, not strategy evidence.",
+        "conclusion": "Under the documented five-share and $5 notional floors, a $10 account cannot fund a second minimum order after one full loss across the tested price grid; repeated-loss capacity is a feasibility bound, not strategy evidence.",
         "live_orders_enabled": False,
         "actual_fills": 0,
         "verified_canary_fills": 0,
