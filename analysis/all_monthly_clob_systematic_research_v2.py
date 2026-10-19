@@ -119,6 +119,27 @@ def snapshot_row(g: pd.DataFrame, minute: int) -> pd.Series | None:
     return None if snap.empty else snap.iloc[-1]
 
 
+def snapshot_row_with_age(g: pd.DataFrame, minute: int) -> Tuple[pd.Series | None, float]:
+    """Return the last pre-cutoff snapshot and its age in seconds.
+
+    The legacy feature builder intentionally keeps its permissive fallback for
+    reproducibility.  Strict quality-first runs use this helper to reject a
+    market when the requested minute has no sufficiently recent observation.
+    """
+    first_ts = g["ts_utc"].min()
+    if pd.isna(first_ts):
+        return None, float("nan")
+    cutoff = first_ts + pd.Timedelta(minutes=minute)
+    snap = g[g["ts_utc"] <= cutoff].copy()
+    if snap.empty:
+        return None, float("nan")
+    row = snap.iloc[-1]
+    ts = pd.to_datetime(row.get("ts_utc"), utc=True, errors="coerce")
+    if pd.isna(ts):
+        return None, float("nan")
+    return row, float((cutoff - ts).total_seconds())
+
+
 def price_from_row(row: pd.Series | None, col: str) -> float:
     if row is None:
         return np.nan
@@ -147,7 +168,35 @@ def regime_for_row(row: pd.Series) -> str:
     return "neutral"
 
 
-def build_features(quotes: pd.DataFrame) -> pd.DataFrame:
+STRICT_SNAPSHOT_FIELDS = (
+    "buy_up_cents", "buy_down_cents", "sell_up_cents", "sell_down_cents",
+    "buy_up_size", "buy_down_size", "sell_up_size", "sell_down_size",
+    "spread_up_cents", "spread_down_cents", "bid_depth_up_5", "ask_depth_up_5",
+    "bid_depth_down_5", "ask_depth_down_5", "final_price",
+)
+
+
+def _strict_snapshot_complete(row: pd.Series | None) -> bool:
+    if row is None:
+        return False
+    return all(pd.notna(pd.to_numeric(row.get(field), errors="coerce")) for field in STRICT_SNAPSHOT_FIELDS)
+
+
+def build_features(
+    quotes: pd.DataFrame,
+    *,
+    strict_quality: bool = False,
+    max_snapshot_age_seconds: float = 90.0,
+) -> pd.DataFrame:
+    """Build market features, optionally enforcing the quality-first contract.
+
+    ``strict_quality=False`` preserves the historical replay exactly.  New
+    quality-first studies should opt into strict mode, which requires complete
+    1m/2m/4m snapshots, bounded snapshot age, a three-point BTC path and an
+    observed label.  It never imputes an execution-critical field.
+    """
+    if not np.isfinite(float(max_snapshot_age_seconds)) or float(max_snapshot_age_seconds) < 0:
+        raise ValueError("max_snapshot_age_seconds must be finite and non-negative")
     rows: List[Dict[str, object]] = []
     for market_id, g in quotes.groupby("market_id", dropna=False):
         g = g.sort_values("ts_utc").copy()
@@ -157,16 +206,32 @@ def build_features(quotes: pd.DataFrame) -> pd.DataFrame:
         target = first_non_null(g["target_price"])
         final = last_non_null(g["final_price"])
         outcome_up = np.nan if pd.isna(target) or pd.isna(final) else float(final > target)
-        row1, row2, row4 = snapshot_row(g, 1), snapshot_row(g, 2), snapshot_row(g, 4)
+        row1, age1 = snapshot_row_with_age(g, 1)
+        row2, age2 = snapshot_row_with_age(g, 2)
+        row4, age4 = snapshot_row_with_age(g, 4)
         if row2 is None:
             continue
+        if strict_quality:
+            if any(
+                row is None
+                or age > float(max_snapshot_age_seconds)
+                or not _strict_snapshot_complete(row)
+                for row, age in ((row1, age1), (row2, age2), (row4, age4))
+            ):
+                continue
         first2 = g[g["ts_utc"] <= first_ts + pd.Timedelta(minutes=2)].copy()
         path = pd.to_numeric(first2["final_price"], errors="coerce").dropna()
         diffs = path.diff().dropna()
         total_abs = float(diffs.abs().sum()) if not diffs.empty else 0.0
         net_move = float(path.iloc[-1] - path.iloc[0]) if len(path) >= 2 else 0.0
         realized_vol = float(diffs.std()) if len(diffs) >= 2 else 0.0
-        path_eff = float(abs(net_move) / total_abs) if total_abs > 0 else 1.0
+        path_eff = (
+            float(abs(net_move) / total_abs)
+            if total_abs > 0
+            else (np.nan if strict_quality else 1.0)
+        )
+        if strict_quality and len(path) < 3:
+            continue
         move_series = pd.to_numeric(first2["btc_move_from_target"], errors="coerce").dropna()
         max_drawdown = abs(float(move_series.min())) if not move_series.empty else np.nan
         max_rebound = float(move_series.max()) if not move_series.empty else np.nan
@@ -191,6 +256,10 @@ def build_features(quotes: pd.DataFrame) -> pd.DataFrame:
             "slug": first_non_null(g["slug"]),
             "first_quote_ts": first_ts,
             "outcome_up": outcome_up,
+            "snapshot_age_seconds_1m": age1,
+            "snapshot_age_seconds_2m": age2,
+            "snapshot_age_seconds_4m": age4,
+            "path_observation_count_first2m": int(len(path)),
             "quote_count_first2m": int(len(first2)),
             "btc_move_1m": np.nan if row1 is None or pd.isna(target) or pd.isna(row1.get("final_price")) else float(row1["final_price"] - target),
             "btc_move_2m": np.nan if pd.isna(target) or pd.isna(row2.get("final_price")) else float(row2["final_price"] - target),
