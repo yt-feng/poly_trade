@@ -68,3 +68,14 @@ def test_out_of_contract_json_is_reported_but_never_admitted(tmp_path):
     assert result["frontier_rows"] == []
     assert result["supplemental_out_of_contract_row_count"] == 1
     assert result["supplemental_out_of_contract_rows"][0]["protocol_compatible"] is False
+
+
+def test_empty_csv_is_skipped_without_losing_other_artifacts(tmp_path):
+    empty = tmp_path / "empty.csv"
+    empty.write_text("")
+    valid = tmp_path / "valid.csv"
+    pd.DataFrame([row(f"holdout_block_{i}") for i in range(1, 6)]).to_csv(valid, index=False)
+    result = audit([empty, valid])
+    assert result["files_read"] == 2
+    assert result["admitted_candidates"]
+    assert any("READ_ERROR:EmptyDataError" in item["reason"] for item in result["files_skipped"])

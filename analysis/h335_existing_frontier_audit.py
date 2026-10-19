@@ -120,8 +120,12 @@ def audit(paths: Iterable[Path], *, json_paths: Iterable[Path] = ()) -> dict[str
     files_read = 0
     files_skipped: list[dict[str, str]] = []
     for path in paths:
-        frame = pd.read_csv(path)
         files_read += 1
+        try:
+            frame = pd.read_csv(path)
+        except (OSError, UnicodeDecodeError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+            files_skipped.append({"artifact": str(path), "reason": f"READ_ERROR:{type(exc).__name__}"})
+            continue
         artifact_rows += len(frame)
         try:
             filtered = _filter_contract(frame)
