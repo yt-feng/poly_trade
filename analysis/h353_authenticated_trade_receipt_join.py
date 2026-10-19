@@ -12,6 +12,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any, Callable, Iterable
+from urllib.error import URLError
 
 try:
     from .h300_owner_scoped_payout_transfer_capture import (
@@ -43,6 +44,17 @@ MAX_ACCOUNTS = 4
 MAX_TRANSACTIONS = 200
 
 
+def _receipt_failure_code(exc: Exception) -> str:
+    """Return a bounded category without retaining provider/error text."""
+    if isinstance(exc, URLError) or type(exc).__name__ in {"TimeoutError", "ConnectionError"}:
+        return "transport_error"
+    if isinstance(exc, RuntimeError) and str(exc) == "receipt_rpc_error":
+        return "rpc_error"
+    if isinstance(exc, (TypeError, ValueError, KeyError)):
+        return "receipt_shape_or_decode_error"
+    return "unknown_receipt_error"
+
+
 def _direct_receipt_join(
     account: dict[str, Any],
     *,
@@ -68,6 +80,7 @@ def _direct_receipt_join(
     legacy_payout_rows = 0
     v2_payout_rows = 0
     v2_unbound_payout_rows = 0
+    receipt_failure_categories: dict[str, int] = {}
     for tx_hash in transactions:
         try:
             receipt = receipt_fetcher(tx_hash)
@@ -87,10 +100,12 @@ def _direct_receipt_join(
             legacy_payout_rows += len(legacy_payouts)
             v2_payout_rows += admitted
             v2_unbound_payout_rows += unbound
-        except Exception:
+        except Exception as exc:
             # Keep the failure bounded and redacted; the encrypted payload can
             # retain only aggregate counts and no raw exception text.
             receipt_failures += 1
+            code = _receipt_failure_code(exc)
+            receipt_failure_categories[code] = receipt_failure_categories.get(code, 0) + 1
 
     reconciliations = _reconcile(btc_rows, transfer_rows, payout_rows, owner)
     cash_release_rows = sum(
@@ -106,6 +121,7 @@ def _direct_receipt_join(
         "transaction_hashes_considered": len(transactions),
         "confirmed_receipts": confirmed_receipts,
         "receipt_fetch_failures": receipt_failures,
+        "receipt_failure_categories": receipt_failure_categories,
         "legacy_settlement_receipt_rows": legacy_payout_rows,
         "v2_settlement_receipt_rows": v2_payout_rows,
         "v2_unbound_payout_rows": v2_unbound_payout_rows,
@@ -144,6 +160,11 @@ def capture(
         "legacy_settlement_receipt_rows": sum(r["legacy_settlement_receipt_rows"] for r in reports),
         "v2_settlement_receipt_rows": sum(r["v2_settlement_receipt_rows"] for r in reports),
         "cash_release_receipt_rows": sum(r["cash_release_receipt_rows"] for r in reports),
+        "receipt_fetch_failures": sum(r["receipt_fetch_failures"] for r in reports),
+        "receipt_failure_categories": {
+            code: sum(r["receipt_failure_categories"].get(code, 0) for r in reports)
+            for code in sorted({code for r in reports for code in r["receipt_failure_categories"]})
+        },
         "owner_scoped_full_settlement_cash_bundle_available": False,
         "balance_continuity_proven": False,
         "actual_fills": 0,
@@ -170,7 +191,7 @@ def main() -> None:
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({k: result[k] for k in ("transaction_hashes_considered", "confirmed_receipts", "legacy_settlement_receipt_rows", "v2_settlement_receipt_rows", "cash_release_receipt_rows")}, sort_keys=True))
+    print(json.dumps({k: result[k] for k in ("transaction_hashes_considered", "confirmed_receipts", "receipt_fetch_failures", "receipt_failure_categories", "legacy_settlement_receipt_rows", "v2_settlement_receipt_rows", "cash_release_receipt_rows")}, sort_keys=True))
 
 
 if __name__ == "__main__":

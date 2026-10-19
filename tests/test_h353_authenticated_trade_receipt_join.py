@@ -1,4 +1,5 @@
 import sys
+from urllib.error import URLError
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
@@ -65,6 +66,18 @@ def test_receipt_failure_is_counted_without_creating_cash_or_canary_evidence():
     )
     account = result["accounts"][0]
     assert account["receipt_fetch_failures"] == 1
+    assert account["receipt_failure_categories"] == {"unknown_receipt_error": 1}
     assert result["confirmed_receipts"] == 0
     assert result["cash_release_receipt_rows"] == 0
     assert result["same_ledger_compounding_rows"] == 0
+
+
+def test_transport_failure_is_categorized_without_exposing_error_text():
+    def receipt_fetcher(_tx):
+        raise URLError("provider detail must not be retained")
+
+    result = capture(
+        [{"label": "btc5m", "owner": OWNER, "activity": [activity()]}],
+        receipt_fetcher=receipt_fetcher,
+    )
+    assert result["receipt_failure_categories"] == {"transport_error": 1}
