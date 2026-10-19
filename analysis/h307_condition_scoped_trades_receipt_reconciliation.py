@@ -149,6 +149,11 @@ def capture_account(
     trade_failures: list[str] = []
     owner_matches = 0
     btc_matches = 0
+    raw_trade_rows = 0
+    raw_rows_with_proxy = 0
+    raw_rows_with_condition = 0
+    raw_rows_with_btc_slug = 0
+    raw_rows_with_btc_slug_condition = 0
     seen: set[tuple[str, str]] = set()
     for chunk in _chunks(conditions, MAX_CONDITIONS_PER_REQUEST):
         condition_chunks += 1
@@ -165,7 +170,14 @@ def capture_account(
         for row in payload:
             if not isinstance(row, dict):
                 continue
-            proxy = _lower_address(_first(row, ("proxy_wallet", "proxyWallet", "wallet_address", "walletAddress")))
+            raw_trade_rows += 1
+            raw_proxy = _lower_address(_first(row, ("proxy_wallet", "proxyWallet", "wallet_address", "walletAddress")))
+            raw_condition = _condition(_first(row, ("condition_id", "conditionId", "condition")))
+            raw_rows_with_proxy += int(bool(raw_proxy))
+            raw_rows_with_condition += int(bool(raw_condition))
+            raw_rows_with_btc_slug += int(is_btc_five_minute(row))
+            raw_rows_with_btc_slug_condition += int(bool(raw_condition) and is_btc_five_minute(row))
+            proxy = raw_proxy
             if proxy != owner:
                 continue
             owner_matches += 1
@@ -188,6 +200,11 @@ def capture_account(
         "condition_chunks": condition_chunks,
         "trade_pages": trade_pages,
         "trade_failures": trade_failures,
+        "raw_trade_rows": raw_trade_rows,
+        "raw_rows_with_proxy": raw_rows_with_proxy,
+        "raw_rows_with_condition": raw_rows_with_condition,
+        "raw_rows_with_btc_slug": raw_rows_with_btc_slug,
+        "raw_rows_with_btc_slug_condition": raw_rows_with_btc_slug_condition,
         "owner_trade_rows": owner_matches,
         "btc_trade_rows": btc_matches,
         **joined,
@@ -219,6 +236,11 @@ def capture(
         "closed_btc_rows": sum(r["closed_btc_rows"] for r in reports),
         "condition_ids": sum(r["condition_ids"] for r in reports),
         "condition_chunks": sum(r["condition_chunks"] for r in reports),
+        "raw_trade_rows": sum(r["raw_trade_rows"] for r in reports),
+        "raw_rows_with_proxy": sum(r["raw_rows_with_proxy"] for r in reports),
+        "raw_rows_with_condition": sum(r["raw_rows_with_condition"] for r in reports),
+        "raw_rows_with_btc_slug": sum(r["raw_rows_with_btc_slug"] for r in reports),
+        "raw_rows_with_btc_slug_condition": sum(r["raw_rows_with_btc_slug_condition"] for r in reports),
         "owner_trade_rows": sum(r["owner_trade_rows"] for r in reports),
         "btc_trade_rows": sum(r["btc_trade_rows"] for r in reports),
         "normalized_btc_trade_rows": sum(r["normalized_btc_trade_rows"] for r in reports),
@@ -252,6 +274,8 @@ def main() -> None:
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({k: result[k] for k in (
         "format", "redeemable_btc_rows", "closed_btc_rows", "condition_ids", "condition_chunks",
+        "raw_trade_rows", "raw_rows_with_proxy", "raw_rows_with_condition", "raw_rows_with_btc_slug",
+        "raw_rows_with_btc_slug_condition",
         "owner_trade_rows", "btc_trade_rows", "normalized_btc_trade_rows", "confirmed_trade_receipts",
         "legacy_settlement_receipt_rows", "v2_settlement_receipt_rows", "cash_release_receipt_rows")}, sort_keys=True))
 
