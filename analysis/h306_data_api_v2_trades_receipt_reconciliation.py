@@ -92,6 +92,10 @@ def capture_account(
     raw_rows, truncated, pages, failure = _pages(
         base_url, "/v2/trades", params, fetcher=data_fetcher
     )
+    raw_rows_with_slug = sum(bool(_text(_first(row, ("slug", "event_slug", "eventSlug")))) for row in raw_rows)
+    raw_rows_with_tx = sum(bool(_tx(_first(row, ("transaction_hash", "transactionHash", "tx_hash", "txHash")))) for row in raw_rows)
+    raw_rows_with_condition = sum(bool(_text(_first(row, ("condition_id", "conditionId", "condition")))) for row in raw_rows)
+    raw_rows_with_side = sum(bool(_text(row.get("side"))) for row in raw_rows)
     btc_raw = [row for row in raw_rows if is_btc_five_minute(row)]
     btc_rows = [normalized for raw in btc_raw if (normalized := _trade_as_activity(raw))]
     condition_ids = _activity_condition_ids(btc_rows)
@@ -138,6 +142,11 @@ def capture_account(
             existing_tx.add(value)
     return {
         "owner_address_sha256": hashlib.sha256(owner.encode("ascii")).hexdigest(),
+        "raw_api_rows": len(raw_rows),
+        "raw_rows_with_slug": raw_rows_with_slug,
+        "raw_rows_with_transaction_hash": raw_rows_with_tx,
+        "raw_rows_with_condition_id": raw_rows_with_condition,
+        "raw_rows_with_side": raw_rows_with_side,
         "raw_btc_trade_rows": len(btc_raw),
         "normalized_btc_trade_rows": len(btc_rows),
         "distinct_btc_trade_transactions": len(txs),
@@ -180,6 +189,11 @@ def capture(
         "format": "h306-data-api-v2-trades-receipt-reconciliation-v1",
         "accounts": reports,
         "scope": "read-only v2 maker/taker trades feed to direct receipt join",
+        "raw_api_rows": sum(r["raw_api_rows"] for r in reports),
+        "raw_rows_with_slug": sum(r["raw_rows_with_slug"] for r in reports),
+        "raw_rows_with_transaction_hash": sum(r["raw_rows_with_transaction_hash"] for r in reports),
+        "raw_rows_with_condition_id": sum(r["raw_rows_with_condition_id"] for r in reports),
+        "raw_rows_with_side": sum(r["raw_rows_with_side"] for r in reports),
         "raw_btc_trade_rows": sum(r["raw_btc_trade_rows"] for r in reports),
         "normalized_btc_trade_rows": sum(r["normalized_btc_trade_rows"] for r in reports),
         "confirmed_trade_receipts": sum(r["confirmed_trade_receipts"] for r in reports),
@@ -211,6 +225,11 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"status": "computed", "format": result["format"],
+                      "raw_api_rows": result["raw_api_rows"],
+                      "raw_rows_with_slug": result["raw_rows_with_slug"],
+                      "raw_rows_with_transaction_hash": result["raw_rows_with_transaction_hash"],
+                      "raw_rows_with_condition_id": result["raw_rows_with_condition_id"],
+                      "raw_rows_with_side": result["raw_rows_with_side"],
                       "raw_btc_trade_rows": result["raw_btc_trade_rows"],
                       "normalized_btc_trade_rows": result["normalized_btc_trade_rows"],
                       "confirmed_trade_receipts": result["confirmed_trade_receipts"],
