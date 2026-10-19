@@ -192,6 +192,15 @@ def reconcile_authenticated_chain(
     previous_checkpoint = opening_checkpoint
     previous_after = expected_initial_cash
     previous_entry: int | None = None
+    # Keep the receipt-linked payout schedule alongside the account ledger.
+    # The balance fields below are caller-supplied observations; without this
+    # schedule check, a bundle could declare an arbitrary
+    # ``released_cash_since_previous_entry`` amount and still pass by changing
+    # the closing balance to match the generic replay.  A release is admissible
+    # only when it is exactly the sum of earlier row payouts whose cash was
+    # available by this entry, with each receipt consumed once.
+    scheduled_releases: list[tuple[Decimal, Decimal, str]] = []
+    released_receipt_ids: set[str] = set()
     for index, row in enumerate(rows):
         checkpoint = _text(row.get("balance_checkpoint_id"))
         prior_checkpoint = _text(row.get("previous_checkpoint_id"))
@@ -207,22 +216,36 @@ def reconcile_authenticated_chain(
             released = _decimal(row.get("released_cash_since_previous_entry"), "released_cash_since_previous_entry")
             cost = _decimal(row.get("entry_cost"), "entry_cost")
             fee = _decimal(row.get("fee"), "fee")
+            payout = _decimal(row.get("payout"), "payout")
             available_ts = int(str(row.get("cash_available_ts")))
         except (ValueError, TypeError, InvalidOperation) as exc:
             reason = str(exc) if isinstance(exc, ValueError) and str(exc) else "invalid_ledger_amount_or_timestamp"
             return {"gate_passed": False, "fills": 0, "failure_reason": reason, "owner_scoped": True, "identity_complete": False}
         if previous_entry is not None and entry_ts <= previous_entry:
             return {"gate_passed": False, "fills": 0, "failure_reason": "entry_timestamps_must_increase", "owner_scoped": True, "identity_complete": False}
-        if available_ts < entry_ts:
-            return {"gate_passed": False, "fills": 0, "failure_reason": "cash_available_timestamp_before_entry", "owner_scoped": True, "identity_complete": False}
+        if available_ts <= entry_ts:
+            # A release at the same timestamp as its own entry does not prove
+            # that the cash was available before that entry.  Equal timestamps
+            # are therefore fail-closed at the authenticated boundary.
+            return {"gate_passed": False, "fills": 0, "failure_reason": "cash_available_timestamp_must_follow_entry", "owner_scoped": True, "identity_complete": False}
         if index == 0 and released != Decimal("0"):
             return {"gate_passed": False, "fills": 0, "failure_reason": "first_entry_cannot_use_prior_release", "owner_scoped": True, "identity_complete": False}
         if balance_before != previous_after + released:
             return {"gate_passed": False, "fills": 0, "failure_reason": "balance_before_arithmetic_mismatch", "owner_scoped": True, "identity_complete": False}
         if balance_after != balance_before - cost - fee:
             return {"gate_passed": False, "fills": 0, "failure_reason": "balance_after_arithmetic_mismatch", "owner_scoped": True, "identity_complete": False}
-        if balance_after < 0 or released < 0 or cost < 0 or fee < 0:
+        if balance_after < 0 or released < 0 or cost < 0 or fee < 0 or payout < 0:
             return {"gate_passed": False, "fills": 0, "failure_reason": "negative_ledger_amount", "owner_scoped": True, "identity_complete": False}
+        expected_released = Decimal("0")
+        due_receipt_ids: set[str] = set()
+        for due_ts, due_amount, due_receipt_id in scheduled_releases:
+            if due_ts <= entry_ts and due_receipt_id not in released_receipt_ids:
+                expected_released += due_amount
+                due_receipt_ids.add(due_receipt_id)
+        if released != expected_released:
+            return {"gate_passed": False, "fills": 0, "failure_reason": "released_cash_amount_mismatch", "owner_scoped": True, "identity_complete": False}
+        released_receipt_ids.update(due_receipt_ids)
+        scheduled_releases.append((Decimal(str(available_ts)), payout, _text(row.get("cash_release_receipt_id"))))
         previous_checkpoint = checkpoint
         previous_after = balance_after
         previous_entry = entry_ts

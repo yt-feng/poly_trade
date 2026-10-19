@@ -111,3 +111,48 @@ def test_closing_balance_anchor_must_match_one_evolving_ledger():
     )
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "closing_balance_arithmetic_mismatch"
+
+
+def test_each_release_amount_must_match_prior_payout_schedule():
+    rows = [row(i) for i in range(10)]
+    # Keep the declared balance chain and closing balance internally
+    # consistent with the altered payout.  The release row still says 5.50,
+    # so a receipt-unbound reconciler could incorrectly admit this chain.
+    rows[0]["payout"] = "6.00"
+    result = reconcile_authenticated_chain(
+        rows,
+        owner="owner-1",
+        starting_checkpoint_id="opening",
+        closing_balance_checkpoint_id="closing",
+        closing_balance="15.50",
+    )
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "released_cash_amount_mismatch"
+
+
+def test_release_timestamp_must_be_before_next_entry_to_fund_it():
+    rows = [row(i) for i in range(10)]
+    rows[0]["cash_available_ts"] = "1000"
+    result = reconcile_authenticated_chain(
+        rows,
+        owner="owner-1",
+        starting_checkpoint_id="opening",
+        closing_balance_checkpoint_id="closing",
+        closing_balance="15.00",
+    )
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "released_cash_amount_mismatch"
+
+
+def test_release_at_same_timestamp_as_its_entry_is_not_admissible():
+    rows = [row(i) for i in range(10)]
+    rows[0]["cash_available_ts"] = rows[0]["entry_ts"]
+    result = reconcile_authenticated_chain(
+        rows,
+        owner="owner-1",
+        starting_checkpoint_id="opening",
+        closing_balance_checkpoint_id="closing",
+        closing_balance="15.00",
+    )
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "cash_available_timestamp_must_follow_entry"
