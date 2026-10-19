@@ -9,7 +9,12 @@ field joins and preserves the official owner/maker/order/trade identities.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
+
+try:
+    from .h341_async_maker_bundle_link import link_confirmed_maker_trade
+except ImportError:  # pragma: no cover - standalone repository tools.
+    from h341_async_maker_bundle_link import link_confirmed_maker_trade
 
 
 def _text(value: Any) -> str:
@@ -38,6 +43,7 @@ def assemble_maker_compound_row(
     settlement_fields: Mapping[str, Any],
     rebate_fields: Mapping[str, Any],
     post_only_accepted: bool,
+    order_updates: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Assemble one maker row from normalized lifecycle evidence.
 
@@ -82,6 +88,13 @@ def assemble_maker_compound_row(
     if order_id not in maker_order_ids:
         raise ValueError("maker_order_not_linked_to_trade")
 
+    async_binding = None
+    if order_updates is not None:
+        async_binding = link_confirmed_maker_trade(order_updates, trade_event)
+        if not async_binding["async_binding_ready"]:
+            reason = async_binding["issues"][0] if async_binding["issues"] else "unknown"
+            raise ValueError(f"async_trade_id_binding_failed:{reason}")
+
     reserved = {
         "owner", "maker_address", "trade_owner", "order_id", "order_status",
         "trade_id", "trade_status", "transaction_ref", "market_id", "asset_id",
@@ -114,6 +127,9 @@ def assemble_maker_compound_row(
         "trader_side": "MAKER",
         "post_only_accepted": post_only_accepted,
     })
+    if async_binding is not None:
+        # This is a binding status only; it is deliberately not a fill count.
+        row["async_trade_id_binding_ready"] = True
     return row
 
 
