@@ -73,14 +73,23 @@ def make_run_folds(
     ]
 
 
-def prepare_data(source_root: Path) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
+def prepare_data(
+    source_root: Path,
+    *,
+    strict_quality: bool = False,
+    max_snapshot_age_seconds: float = 90.0,
+) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
     raw, coverage = base.read_all_monthly_runs(source_root)
     coverage = coverage.sort_values("run_name").reset_index(drop=True)
     runs = complete_runs(coverage)
     if len(runs) < 5:
         raise RuntimeError(f"Need at least five complete runs, found {len(runs)}")
     quotes = base.prepare_quotes(raw[raw["run_name"].astype(str).isin(runs)].copy())
-    features = base.build_features(quotes)
+    features = base.build_features(
+        quotes,
+        strict_quality=bool(strict_quality),
+        max_snapshot_age_seconds=float(max_snapshot_age_seconds),
+    )
     features = v1.add_session_labels(features)
     features = v1.add_quality_features(features)
     features = attach_execution_snapshots(features, quotes, delays=(4,), minutes=(1, 2, 4))

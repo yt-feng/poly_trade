@@ -82,13 +82,24 @@ def _group_passes(rows: list[dict[str, object]]) -> bool:
     )
 
 
-def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str, object]:
+def evaluate(
+    source_root: Path,
+    *,
+    source_commit: str,
+    output: Path,
+    strict_quality: bool = False,
+    max_snapshot_age_seconds: float = 90.0,
+) -> dict[str, object]:
     observed = subprocess.check_output(
         ["git", "-C", str(source_root.parent.parent), "rev-parse", "HEAD"], text=True
     ).strip()
     if observed != source_commit:
         raise RuntimeError(f"SOURCE_COMMIT_MISMATCH:{observed}:{source_commit}")
-    features, _coverage, runs = study.prepare_data(source_root)
+    features, _coverage, runs = study.prepare_data(
+        source_root,
+        strict_quality=bool(strict_quality),
+        max_snapshot_age_seconds=float(max_snapshot_age_seconds),
+    )
     if len(runs) != 83:
         raise RuntimeError(f"SOURCE_SNAPSHOT_RUN_COUNT_MISMATCH:{len(runs)}")
     frame = add_frozen_candidates(features)
@@ -120,12 +131,14 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
         row for row in rows if row["split"] == "holdout59" and choice and row["candidate"] == choice["candidate"]
     ]
     summary = {
-        "format": "old-clean-h270-single-position-cash-turnover-v1",
+        "format": "old-clean-h270-single-position-cash-turnover-quality-first-v1" if strict_quality else "old-clean-h270-single-position-cash-turnover-v1",
         "source_root": str(source_root),
         "source_commit": source_commit,
         "observed_source_commit": observed,
         "complete_runs": len(runs),
         "feature_rows": len(features),
+        "strict_quality": bool(strict_quality),
+        "max_snapshot_age_seconds": float(max_snapshot_age_seconds),
         "candidates": list(CANDIDATES),
         "new_hypothesis": "strict_single_position_only: pending_positions must be zero before the next entry",
         "selection_rule": "Require all four selection slippage/depth cells to pass the exact ten-fill same-ledger paper prefix; rank by worst tenth-fill ending cash; evaluate holdout once.",
@@ -169,8 +182,16 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--source-commit", default=SOURCE_COMMIT)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--strict-quality", action="store_true")
+    parser.add_argument("--max-snapshot-age-seconds", type=float, default=90.0)
     args = parser.parse_args()
-    evaluate(args.source_root, source_commit=args.source_commit, output=args.output)
+    evaluate(
+        args.source_root,
+        source_commit=args.source_commit,
+        output=args.output,
+        strict_quality=args.strict_quality,
+        max_snapshot_age_seconds=args.max_snapshot_age_seconds,
+    )
 
 
 if __name__ == "__main__":
