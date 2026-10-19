@@ -124,6 +124,14 @@ def evaluate(source_root: Path, output: Path) -> dict:
     choice = None if eligible.empty else eligible.sort_values(["first_ten_ending_cash_usd", "candidate"], ascending=[False, True]).iloc[0].to_dict()
     chosen_holdout = result[(result["split"] == "holdout59") & (result["strategy"] == (choice["strategy"] if choice else "__none__"))]
     holdout_passed = bool(not chosen_holdout.empty and (chosen_holdout.iloc[0]["first_ten_fills"] == 10) and chosen_holdout.iloc[0]["first_ten_passed"] and chosen_holdout.iloc[0]["first_ten_ending_cash_usd"] >= INITIAL_CASH)
+    chosen_blocks = result[(result["split"].str.startswith("holdout_block_")) & (result["strategy"] == (choice["strategy"] if choice else "__none__"))]
+    block_stability_passed = bool(
+        choice
+        and len(chosen_blocks) == len(HOLDOUT_BLOCK_SIZES)
+        and (chosen_blocks["first_ten_fills"] == 10).all()
+        and chosen_blocks["first_ten_passed"].all()
+        and (chosen_blocks["first_ten_ending_cash_usd"] >= INITIAL_CASH).all()
+    )
     report = {
         "format": "old-clean-h348-fixed-notional-quantml-v1",
         "hypothesis_id": "H348-FN",
@@ -138,7 +146,8 @@ def evaluate(source_root: Path, output: Path) -> dict:
         "selection_eligible_count": int(len(eligible)),
         "selection_choice": choice,
         "holdout_passed": holdout_passed,
-        "decision": "reject_no_stable_fixed_notional_candidate" if not holdout_passed else "paper_candidate_only_receipt_gate_remains_closed",
+        "holdout_block_stability_passed": block_stability_passed,
+        "decision": "reject_no_stable_fixed_notional_candidate" if not (holdout_passed and block_stability_passed) else "paper_candidate_only_receipt_gate_remains_closed",
         "actual_fills": 0,
         "verified_canary_fills": 0,
         "same_ledger_compounding_rows": 0,
