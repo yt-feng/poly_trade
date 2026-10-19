@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install vault dependency
-        run: python -m pip install -r requirements-vault.txt
+        run: python -m pip install -r requirements-vault.txt pytest
       - name: Validate H346
         run: python -m pytest -q tests/test_h346_old_clean_settlement_source_coverage.py && python -m py_compile analysis/h346_old_clean_settlement_source_coverage.py
       - name: Run H346 on pinned old-clean source
