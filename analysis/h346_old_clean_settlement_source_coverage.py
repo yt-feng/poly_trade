@@ -69,8 +69,8 @@ def classify_headers(headers: set[str]) -> dict[str, object]:
 def summarize_rows(rows: list[dict[str, str]]) -> dict[str, object]:
     """Summarize a small synthetic row set; production uses ``audit_archive``."""
     target_first: dict[str, int] = {}
-    final_pre_end_rows = 0
-    final_pre_end_markets: set[str] = set()
+    reference_pre_end_rows = 0
+    reference_pre_end_markets: set[str] = set()
     for row in rows:
         slug = row["slug"]
         start = _market_start_ms(slug)
@@ -78,16 +78,16 @@ def summarize_rows(rows: list[dict[str, str]]) -> dict[str, object]:
         if row.get("target_price", ""):
             target_first[slug] = min(target_first.get(slug, observed), observed)
         if row.get("final_price", "") and observed < start + WINDOW_MS:
-            final_pre_end_rows += 1
-            final_pre_end_markets.add(slug)
+            reference_pre_end_rows += 1
+            reference_pre_end_markets.add(slug)
     return {
         "markets": len({row["slug"] for row in rows}),
         "target_markets": len(target_first),
         "target_first_seen_before_start_markets": sum(
             value < _market_start_ms(slug) for slug, value in target_first.items()
         ),
-        "final_pre_end_rows": final_pre_end_rows,
-        "final_pre_end_markets": len(final_pre_end_markets),
+        "reference_pre_end_rows": reference_pre_end_rows,
+        "reference_pre_end_markets": len(reference_pre_end_markets),
     }
 
 
@@ -109,8 +109,8 @@ def audit_archive(source_root: Path, source_commit: str, output: Path) -> dict[s
     target_first: dict[str, int] = {}
     target_rows = 0
     final_rows = 0
-    final_pre_end_rows = 0
-    final_pre_end_markets: set[str] = set()
+    reference_pre_end_rows = 0
+    reference_pre_end_markets: set[str] = set()
     final_after_end_rows = 0
     total_rows = 0
 
@@ -141,8 +141,8 @@ def audit_archive(source_root: Path, source_commit: str, output: Path) -> dict[s
                     if final:
                         final_rows += 1
                         if observed < start + WINDOW_MS:
-                            final_pre_end_rows += 1
-                            final_pre_end_markets.add(slug)
+                            reference_pre_end_rows += 1
+                            reference_pre_end_markets.add(slug)
                         else:
                             final_after_end_rows += 1
 
@@ -154,7 +154,7 @@ def audit_archive(source_root: Path, source_commit: str, output: Path) -> dict[s
         value >= _market_start_ms(slug) for slug, value in target_first.items()
     )
     report = {
-        "format": "old-clean-h346-settlement-source-coverage-v1",
+        "format": "old-clean-h347-corrected-settlement-source-coverage-v1",
         "hypothesis_id": "H346-old-clean-settlement-source-fields-are-causally-usable",
         "source_root": str(source_root),
         "source_commit": source_commit,
@@ -173,8 +173,8 @@ def audit_archive(source_root: Path, source_commit: str, output: Path) -> dict[s
             "target_first_seen_before_window_start_markets": target_pre_start,
             "target_first_seen_at_or_after_window_start_markets": target_at_or_after_start,
             "final_price_rows": final_rows,
-            "final_price_pre_end_rows": final_pre_end_rows,
-            "final_price_pre_end_markets": len(final_pre_end_markets),
+            "reference_price_pre_end_rows": reference_pre_end_rows,
+            "reference_price_pre_end_markets": len(reference_pre_end_markets),
             "final_price_after_end_rows": final_after_end_rows,
             "causal_ptb_receipt_clock_rows": 0,
             "causal_twap_rows": 0,
@@ -185,13 +185,18 @@ def audit_archive(source_root: Path, source_commit: str, output: Path) -> dict[s
             field: field_nonnull[field] / field_rows[field]
             for field in sorted(field_rows)
         },
-        "decision": "old_clean_settlement_fields_not_causally_usable",
+        "field_semantics": {
+            "target_price": "window_start_reference_price; archive has no separate receipt clock",
+            "final_price": "current_reference_price_sampled_at_snapshot; not a future settlement label",
+        },
+        "decision": "old_clean_supports_price_path_not_settlement_provenance",
         "root_cause": (
-            "The pinned old-clean projection contains target_price and final_price but no "
-            "PTB receipt clock, TWAP value/window/provider, sequence, reconnect or dropped-message "
-            "provenance. target_price first appears at or after the window start, while final_price "
-            "is populated before scheduled end for nearly every market, so final_price is a future label "
-            "and cannot be used as a contemporaneous training feature."
+            "The pinned old-clean projection contains a window-start target_price and a current "
+            "final_price reference path, but no PTB receipt clock, TWAP value/window/provider, "
+            "sequence, reconnect or dropped-message provenance. target_price first appears at or "
+            "after the window start, so its external availability clock is unknown. final_price is "
+            "observed during the window and remains valid for causal price-path replay; it cannot by "
+            "itself prove the Chainlink TWAP settlement source or reusable cash."
         ),
         "evidence_boundary": "old-clean quote CSV schema and observed row timestamps only; no new capture, model fit, order or fill",
         "actual_fills": 0,
@@ -201,8 +206,8 @@ def audit_archive(source_root: Path, source_commit: str, output: Path) -> dict[s
         "model_refit": False,
         "live_orders_enabled": False,
         "next_action": (
-            "Do not train a settlement-aware strategy from target_price/final_price in this archive. "
-            "Use a separately registered source capture with causal PTB/TWAP clocks if that hypothesis is tested."
+            "Keep existing price/depth replay separate from any settlement-aware model. Use a separately "
+            "registered source capture with causal PTB/TWAP clocks if settlement probability is tested."
         ),
     }
     output.mkdir(parents=True, exist_ok=True)
