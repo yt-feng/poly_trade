@@ -1,0 +1,134 @@
+name: H308 orderbook subgraph receipt reconciliation
+
+on:
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: Official Goldsky-hosted Polymarket orderbook subgraph endpoint
+        required: false
+        default: https://api.goldsky.com/api/public/project_cl6mb8i9h0003e201j6li0diw/subgraphs/orderbook-subgraph/0.0.1/gn
+        type: string
+      rpc_url:
+        description: Read-only Polygon JSON-RPC endpoint
+        required: false
+        default: https://polygon-bor-rpc.publicnode.com
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install vault and latest official SDK
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements-vault.txt
+          sdk_commit="$(git ls-remote https://github.com/Polymarket/py-sdk.git refs/heads/main | cut -f1)"
+          test "${#sdk_commit}" -eq 40
+          echo "POLY_SDK_COMMIT=$sdk_commit" >> "$GITHUB_ENV"
+          python -m pip install "git+https://github.com/Polymarket/py-sdk.git@$sdk_commit"
+      - name: Capture hashes and query only matching OrderFilled events
+        env:
+          POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
+          BTC5M_POLYMARKET_PRIVATE_KEY: ${{ secrets.BTC5M_POLYMARKET_PRIVATE_KEY }}
+          SUBGRAPH_ENDPOINT: ${{ inputs.endpoint }}
+          RPC_URL: ${{ inputs.rpc_url }}
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          private_dir="$RUNNER_TEMP/h308"
+          mkdir -m 700 "$private_dir"
+          python - "$private_dir/keys.json" <<'PY'
+          import json, os, sys
+          rows=[]
+          for label, env_name in (("polymarket", "POLYMARKET_PRIVATE_KEY"), ("btc5m", "BTC5M_POLYMARKET_PRIVATE_KEY")):
+              value=os.environ.get(env_name, "").strip()
+              if value: rows.append({"label": label, "private_key": value})
+          json.dump(rows, open(sys.argv[1], "w"), separators=(",", ":"))
+          PY
+          set +e
+          python -u analysis/h279_authenticated_lifecycle_capture.py \
+            --keys-file "$private_dir/keys.json" --sdk-commit "$POLY_SDK_COMMIT" \
+            --output "$private_dir/h279.json" > "$private_dir/h279.stdout" 2> "$private_dir/h279.stderr"
+          h279_rc=$?
+          set -e
+          export H279_RC="$h279_rc"
+          python - "$private_dir" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          private=Path(sys.argv[1]); report=json.loads((private/'h279.json').read_text()) if (private/'h279.json').exists() else {}
+          address=re.compile(r'^0x[0-9a-fA-F]{40}$'); accounts=[]
+          for row in report.get('accounts') or []:
+              counts={}
+              for trade in row.get('account_trades') or []:
+                  if not isinstance(trade,dict): continue
+                  for key in ('maker_address','owner_address','wallet_address'):
+                      value=str(trade.get(key) or '').strip().lower()
+                      if address.fullmatch(value): counts[value]=counts.get(value,0)+1; break
+              if not counts: continue
+              owner=max(counts.items(),key=lambda item:(item[1],item[0]))[0]
+              accounts.append({'label':row.get('label',''),'owner':owner,
+                               'account_trades':[x for x in row.get('account_trades') or [] if isinstance(x,dict)],
+                               'public_data_activity':[x for x in row.get('public_data_activity') or [] if isinstance(x,dict)]})
+          json.dump({'accounts':accounts},open(private/'h308-input.json','w'),separators=(',',':'))
+          PY
+          set +e
+          python -u analysis/h308_orderbook_subgraph_receipt_reconciliation.py \
+            --input "$private_dir/h308-input.json" --output "$private_dir/h308.json" \
+            --endpoint "$SUBGRAPH_ENDPOINT" --rpc-url "$RPC_URL"
+          h308_rc=$?
+          set -e
+          export H308_RC="$h308_rc"
+          python - "$private_dir" <<'PY'
+          import base64, hashlib, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0,'tools'); import research_vault
+          private=Path(sys.argv[1]); encoded=os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64',''); rid=os.environ.get('QUALITY_FIRST_RECIPIENT_ID','')
+          if not encoded or not rid: raise SystemExit('recipient unavailable')
+          recipient=research_vault.load_json_bytes(base64.b64decode(encoded,validate=True),4096); research_vault.validate_recipient(recipient,rid)
+          h279=json.loads((private/'h279.json').read_text()) if (private/'h279.json').exists() else {}
+          h308=json.loads((private/'h308.json').read_text()) if (private/'h308.json').exists() else {}
+          payload={'format':'h308-orderbook-subgraph-receipt-reconciliation-sealed-v1','h279':h279,'h308':h308,
+                   'workflow':{'run_id':os.environ['GITHUB_RUN_ID'],'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'ref':os.environ['GITHUB_REF'],
+                               'endpoint_sha256':hashlib.sha256(os.environ.get('SUBGRAPH_ENDPOINT','').encode()).hexdigest(),
+                               'rpc_url_sha256':hashlib.sha256(os.environ.get('RPC_URL','').encode()).hexdigest()}}
+          delivery=Path('sealed-delivery'); delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery/'part-0000.vault',research_vault.seal(research_vault.canonical(payload),recipient,rid),0o600)
+          complete=int(os.environ.get('H279_RC','1'))==0 and int(os.environ.get('H308_RC','1'))==0
+          status={'version':1,'status':'complete' if complete else 'failed','stage':'sealed_delivery','strategy_evaluated':False,
+                  'live_orders_enabled':False,'plaintext_published':False,'sealed_parts':1}
+          if not complete: status['failed_stage']='research'
+          research_vault.write_new(delivery/'status.json',research_vault.canonical(status)+b'\n',0o644)
+          PY
+      - name: Publish encrypted receipt reconciliation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py --source sealed-delivery \
+            --repository yt-feng/poly_trade --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+      - name: Print only redacted status and remove plaintext
+        if: always()
+        run: |
+          echo 'H308 queries only transaction hashes from the existing authenticated capture; full rows remain encrypted.'
+          python - <<'PY'
+          from pathlib import Path
+          import os, shutil
+          for name in ('h308','sealed-delivery'):
+              path=Path(os.environ.get('RUNNER_TEMP','/tmp'))/name if name=='h308' else Path(name)
+              if path.exists(): shutil.rmtree(path)
+          PY
