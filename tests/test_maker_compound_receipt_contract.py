@@ -150,6 +150,37 @@ class MakerCompoundReceiptContractTest(unittest.TestCase):
         )
         self.assertIn("settlement_plus_rebate_mismatch", {x["reason"] for x in result["issues"]})
 
+    def test_async_binding_is_required_when_strict_admission_is_enabled(self):
+        events, fills = bundle()
+        result = validate_maker_compound_chain(
+            events,
+            fills,
+            owner="owner-key",
+            maker_address="0xmaker",
+            starting_checkpoint_id="opening",
+            closing_balance_checkpoint_id="closing",
+            closing_balance="16.10",
+            require_async_binding=True,
+        )
+        self.assertEqual(result["failure_reason"], "maker_event_contract_failed")
+        self.assertTrue(all(issue["reason"] == "async_trade_id_binding_required" for issue in result["issues"]))
+
+        for event in events:
+            event["async_trade_id_binding_ready"] = True
+        result = validate_maker_compound_chain(
+            events,
+            fills,
+            owner="owner-key",
+            maker_address="0xmaker",
+            starting_checkpoint_id="opening",
+            closing_balance_checkpoint_id="closing",
+            closing_balance="16.10",
+            require_async_binding=True,
+        )
+        self.assertTrue(result["offline_consistency_passed"])
+        self.assertEqual(result["same_ledger_compounding_rows"], 10)
+        self.assertFalse(result["gate_passed"])
+
 
 if __name__ == "__main__":
     unittest.main()

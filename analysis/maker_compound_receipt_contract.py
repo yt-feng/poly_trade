@@ -80,6 +80,7 @@ def validate_maker_compound_chain(
     closing_balance_checkpoint_id: Any = None,
     closing_balance: Any = None,
     require_rebate: bool = True,
+    require_async_binding: bool = False,
 ) -> dict[str, Any]:
     """Validate an independent maker-only ten-row compound bundle.
 
@@ -97,6 +98,8 @@ def validate_maker_compound_chain(
         return _failure("owner_required")
     if type(require_rebate) is not bool:
         return _failure("require_rebate_must_be_bool")
+    if type(require_async_binding) is not bool:
+        return _failure("require_async_binding_must_be_bool")
     if len(rows) != REQUIRED_FILLS:
         return _failure("exactly_ten_maker_events_required")
     if len(fills) != REQUIRED_FILLS:
@@ -129,6 +132,8 @@ def validate_maker_compound_chain(
             issues.append({"reason": "post_only_acceptance_required", "sequence_no": sequence})
         if _text(row.get("order_status")).upper() not in {"MATCHED", "FILLED", "CONFIRMED"}:
             issues.append({"reason": "maker_order_not_filled", "sequence_no": sequence})
+        if require_async_binding and row.get("async_trade_id_binding_ready") is not True:
+            issues.append({"reason": "async_trade_id_binding_required", "sequence_no": sequence})
         try:
             fee_rate = _decimal(row.get("fee_rate"), "fee_rate")
             fee = _decimal(row.get("fee"), "fee")
