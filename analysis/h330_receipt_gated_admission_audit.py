@@ -59,15 +59,27 @@ def audit(state: dict[str, Any]) -> dict[str, Any]:
             "balance_continuity_proven": value.get("balance_continuity_proven", False),
         })
 
+    # ``same_ledger_compounding_rows`` is only admissible when the producer
+    # has also proved the identity and continuity of one ledger.  A count of
+    # ten by itself could be assembled from ten reset paper windows.
+    ledger_rows = state.get("same_ledger_compounding_rows", 0)
+    ledger_identity_verified = state.get("same_ledger_identity_verified") is True
+    cash_chain_contiguous = state.get("cash_chain_contiguous") is True
+    ledger_reset_count = state.get("ledger_reset_count", 0)
+    if type(ledger_reset_count) is not int:
+        ledger_reset_count = -1
     admitted = bool(
         state["owner_scoped_bundle_available"]
         and state["owner_scoped_full_settlement_cash_bundle_available"]
         and state["balance_continuity_proven"]
         and state["cash_release_receipt_rows"] >= 10
         and state["settlement_receipt_rows"] >= 10
-        and state["actual_fills"] >= 10
-        and state["verified_canary_fills"] >= 10
-        and state["same_ledger_compounding_rows"] >= 10
+        and state["actual_fills"] == 10
+        and state["verified_canary_fills"] == 10
+        and ledger_rows == 10
+        and ledger_identity_verified
+        and cash_chain_contiguous
+        and ledger_reset_count == 0
     )
     return {
         "format": "h330-receipt-gated-admission-audit-v1",
@@ -77,6 +89,12 @@ def audit(state: dict[str, Any]) -> dict[str, Any]:
             "required_fills": 10,
             "owner_scoped": True,
             "same_evolving_cash_ledger": True,
+            "exactly_ten_rows": True,
+            "sequence_numbers": "1..10",
+            "ledger_identity_verified": True,
+            "cash_chain_contiguous": True,
+            "ledger_reset_count": 0,
+            "no_window_concatenation": True,
             "required_receipts": [
                 "transaction_ref",
                 "settlement_receipt_id",
@@ -86,7 +104,12 @@ def audit(state: dict[str, Any]) -> dict[str, Any]:
             ],
         },
         "sources": sources,
-        "state_counters": {key: state[key] for key in required},
+        "state_counters": {
+            **{key: state[key] for key in required},
+            "same_ledger_identity_verified": ledger_identity_verified,
+            "cash_chain_contiguous": cash_chain_contiguous,
+            "ledger_reset_count": ledger_reset_count,
+        },
         "canary_admission_passed": admitted,
         "actual_fills": 0 if not admitted else state["actual_fills"],
         "verified_canary_fills": 0 if not admitted else state["verified_canary_fills"],
