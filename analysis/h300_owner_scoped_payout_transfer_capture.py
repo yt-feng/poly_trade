@@ -157,6 +157,18 @@ def _word(value: str) -> int:
         raise ValueError("log_word_must_be_hex") from exc
 
 
+def _hex_number(value: Any) -> int | None:
+    text = _text(value).lower()
+    if text.startswith("0x"):
+        text = text[2:]
+    if not text or not re.fullmatch(r"[0-9a-f]+", text):
+        return None
+    try:
+        return int(text, 16)
+    except ValueError:
+        return None
+
+
 def _topic_address(value: str) -> str:
     text = _text(value)
     if text.startswith("0x"):
@@ -195,6 +207,7 @@ def decode_receipt_logs(
     tx_hash = _tx(receipt.get("transactionHash") or receipt.get("transaction_hash"))
     if not tx_hash:
         raise ValueError("receipt_transaction_hash_required")
+    block_number = _hex_number(receipt.get("blockNumber"))
     for log in receipt.get("logs") or []:
         if not isinstance(log, dict):
             continue
@@ -221,6 +234,7 @@ def decode_receipt_logs(
                     "to": target,
                     "amount_base_units": amount,
                     "confirmed_nonreverted": confirmed,
+                    "block_number": block_number,
                 })
         elif topic0 == PAYOUT_REDEMPTION_TOPIC and contract in allowed_ctf and len(topics) >= 2:
             redeemer = _topic_address(topics[1])
@@ -245,8 +259,10 @@ def decode_receipt_logs(
                 "transaction_ref": tx_hash,
                 "amount_base_units": payout,
                 "collateral_token": collateral,
+                "condition_id": "0x" + words[0].lower(),
                 "redeemer_address_sha256": _owner_digest(expected_owner),
                 "confirmed_nonreverted": confirmed,
+                "block_number": block_number,
             })
     return transfers, payouts, confirmed
 
