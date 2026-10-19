@@ -145,8 +145,7 @@ jobs:
           complete=int(os.environ.get('H279_RC','1')) == 0 and int(os.environ.get('H300_RC','1')) == 0
           status={'version':1,'status':'complete' if complete else 'failed','stage':'sealed_delivery',
                   'strategy_evaluated':False,'live_orders_enabled':False,'plaintext_published':False,
-                  'sealed_parts':1,'actual_fills':0,'verified_canary_fills':0,
-                  'same_ledger_compounding_rows':0}
+                  'sealed_parts':1}
           if not complete:
               status['failed_stage']='research'
           research_vault.write_new(delivery/'status.json', research_vault.canonical(status)+b'\n', 0o644)
