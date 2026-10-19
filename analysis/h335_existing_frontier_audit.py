@@ -72,8 +72,49 @@ def _candidate_label(frame: pd.DataFrame) -> pd.Series:
     return pd.Series(["unknown"] * len(frame), index=frame.index)
 
 
-def audit(paths: Iterable[Path]) -> dict[str, Any]:
+def _supplemental_json(path: Path) -> list[dict[str, Any]]:
+    """Summarize known JSON artifacts whose execution contract differs.
+
+    They are reported separately and never enter the fixed-contract frontier.
+    """
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if document.get("format") != "old-clean-h211-microprice-stream-v1":
+        return [{"artifact": str(path), "protocol_compatible": False, "reason": "unsupported_json_artifact"}]
+    rows: list[dict[str, Any]] = []
+    for record in document.get("records") or []:
+        blocks = record.get("holdout_blocks") or []
+        prefixes = [block.get("prefix") or {} for block in blocks]
+        if not prefixes:
+            continue
+        fills = [int(prefix.get("fills", 0)) for prefix in prefixes]
+        cash = [float(prefix.get("minimum_cash", 0)) for prefix in prefixes]
+        passed = [prefix.get("passed") is True for prefix in prefixes]
+        rows.append({
+            "artifact": str(path),
+            "candidate": "h211_microprice",
+            "parameter_cell": {
+                "threshold": record.get("threshold"),
+                "price_cap": record.get("price_cap"),
+                "require_path_efficiency": record.get("require_path_efficiency"),
+            },
+            "protocol_compatible": False,
+            "protocol_reason": "cash_release_seconds=900_not_frozen_600",
+            "block_count": len(prefixes),
+            "worst_block_first_ten_fills": min(fills),
+            "worst_block_first_ten_minimum_cash_usd": min(cash),
+            "all_block_first_ten_passed": all(passed),
+            "paper_chain_fields_available": True,
+            "worst_block_full_chain_fills": min(fills),
+            "worst_block_full_chain_minimum_cash_usd": min(cash),
+            "all_block_full_chain_passed": all(passed),
+            "admission_passed": False,
+        })
+    return rows
+
+
+def audit(paths: Iterable[Path], *, json_paths: Iterable[Path] = ()) -> dict[str, Any]:
     frontier: list[dict[str, Any]] = []
+    supplemental: list[dict[str, Any]] = []
     artifact_rows = 0
     contract_rows = 0
     files_read = 0
@@ -142,6 +183,9 @@ def audit(paths: Iterable[Path]) -> dict[str, Any]:
             )
             frontier.append(row)
 
+    for path in json_paths:
+        supplemental.extend(_supplemental_json(path))
+
     frontier.sort(
         key=lambda row: (
             row["admission_passed"],
@@ -175,6 +219,8 @@ def audit(paths: Iterable[Path]) -> dict[str, Any]:
         "contract_rows": contract_rows,
         "frontier_rows": frontier,
         "frontier_row_count": len(frontier),
+        "supplemental_out_of_contract_rows": supplemental,
+        "supplemental_out_of_contract_row_count": len(supplemental),
         "admitted_candidates": admitted,
         "decision": "existing_frontier_has_no_admissible_continuous_chain" if not admitted else "existing_frontier_contains_admissible_chain_requiring_receipt_gate",
         "root_cause": "Previously produced pooled or single-holdout prefixes do not establish a five-block continuous cash chain. This audit prevents an overlooked artifact from being promoted while keeping all artifacts separated by source and parameter cell.",
@@ -193,9 +239,10 @@ def audit(paths: Iterable[Path]) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", action="append", type=Path, required=True)
+    parser.add_argument("--json-input", action="append", type=Path, default=[])
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    result = audit(args.input)
+    result = audit(args.input, json_paths=args.json_input)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
     print(json.dumps({key: result[key] for key in ("decision", "files_read", "contract_rows", "frontier_row_count", "actual_fills", "verified_canary_fills")}, sort_keys=True))

@@ -1,4 +1,5 @@
 import pandas as pd
+import json
 
 from analysis.h335_existing_frontier_audit import audit
 
@@ -47,3 +48,23 @@ def test_cash_floor_failure_rejects_even_when_each_block_has_ten_rows(tmp_path):
     result = audit([path])
     assert result["admitted_candidates"] == []
     assert result["decision"] == "existing_frontier_has_no_admissible_continuous_chain"
+
+
+def test_out_of_contract_json_is_reported_but_never_admitted(tmp_path):
+    path = tmp_path / "microprice.json"
+    records = []
+    for threshold in (0.001,):
+        records.append({
+            "threshold": threshold,
+            "price_cap": 0.9,
+            "require_path_efficiency": True,
+            "holdout_blocks": [
+                {"prefix": {"fills": 5, "minimum_cash": "0.29", "passed": True}}
+                for _ in range(5)
+            ],
+        })
+    path.write_text(json.dumps({"format": "old-clean-h211-microprice-stream-v1", "records": records}))
+    result = audit([], json_paths=[path])
+    assert result["frontier_rows"] == []
+    assert result["supplemental_out_of_contract_row_count"] == 1
+    assert result["supplemental_out_of_contract_rows"][0]["protocol_compatible"] is False
