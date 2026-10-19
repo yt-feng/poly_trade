@@ -45,6 +45,8 @@ jobs:
           BTC5M_POLYMARKET_PRIVATE_KEY: ${{ secrets.BTC5M_POLYMARKET_PRIVATE_KEY }}
           RPC_URL: ${{ inputs.rpc_url }}
           MAX_TRANSACTIONS: ${{ inputs.max_transactions }}
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
         run: |
           set -euo pipefail
           private_dir="$RUNNER_TEMP/h300"
@@ -149,9 +151,6 @@ jobs:
               status['failed_stage']='research'
           research_vault.write_new(delivery/'status.json', research_vault.canonical(status)+b'\n', 0o644)
           PY
-        env:
-          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
-          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
       - name: Publish only encrypted capture
         env:
           GH_TOKEN: ${{ github.token }}
