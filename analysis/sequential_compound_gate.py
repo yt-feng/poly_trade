@@ -69,6 +69,7 @@ def evaluate_compound_chain(
     rows: list[dict[str, Any]] = []
     failure_reason: str | None = None
     minimum_cash = cash
+    minimum_cash_before_entry = cash
     pending: list[tuple[Decimal, Decimal]] = []
     previous_entry: Decimal | None = None
     stopped_after_required = False
@@ -148,6 +149,7 @@ def evaluate_compound_chain(
         while pending and pending[0][0] <= entry_ts:
             _, payout_due = heapq.heappop(pending)
             cash += payout_due
+        minimum_cash_before_entry = min(minimum_cash_before_entry, cash)
         # The venue minimum is an account-level free-cash requirement, not
         # merely a condition on the amount eventually filled.  A partial
         # paper fill must not turn a balance below the minimum into a valid
@@ -194,6 +196,7 @@ def evaluate_compound_chain(
         "ending_cash": str(cash),
         "net_pnl": str(cash - start_cash),
         "minimum_cash": str(minimum_cash),
+        "minimum_cash_before_entry": str(minimum_cash_before_entry),
         "evidence_mode": evidence_mode,
         "paper_replay_passed": paper_replay_passed,
         "gate_passed": canary_gate_passed,
