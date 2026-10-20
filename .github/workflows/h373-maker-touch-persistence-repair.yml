@@ -18,7 +18,9 @@ jobs:
     # encrypted delivery with the fixed publisher; it is not a new hypothesis.
     strategy:
       fail-fast: false
-      max-parallel: 1
+      # Each crossing now has a unique publish identity and the publisher
+      # retries compare-and-swap races, so the frozen cells can run together.
+      max-parallel: 2
       matrix:
         include:
           - crossing_cents: "0.25"
