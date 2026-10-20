@@ -35,6 +35,16 @@ def _seconds(value: Any) -> float:
     return result / 1000.0 if result > 100_000_000_000 else result
 
 
+def _print_size(row: Any) -> float:
+    """Read the canonical spork30 ``Print.size`` while keeping test adapters small."""
+    raw = getattr(row, "size", None)
+    if raw is None:
+        raw = getattr(row, "shares", None)
+    if raw is None:
+        raise AttributeError("print_size_missing")
+    return float(raw)
+
+
 def signed_flow_imbalance(prints: Iterable[Any], start: int, *, horizon_seconds: float = TOXICITY_WINDOW_SECONDS) -> float | None:
     """Return absolute signed Up/Down flow imbalance before quoting.
 
@@ -50,7 +60,7 @@ def signed_flow_imbalance(prints: Iterable[Any], start: int, *, horizon_seconds:
         ts = _seconds(getattr(row, "ts"))
         if not lower <= ts < upper:
             continue
-        shares = float(getattr(row, "shares"))
+        shares = _print_size(row)
         if shares <= 0:
             continue
         outcome = str(getattr(row, "outcome", "")).lower()

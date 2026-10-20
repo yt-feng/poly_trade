@@ -8,6 +8,10 @@ def _p(ts, outcome, side, shares):
     return SimpleNamespace(ts=ts, outcome=outcome, side=side, shares=shares)
 
 
+def _canonical_p(ts, outcome, side, size):
+    return SimpleNamespace(ts=ts, outcome=outcome, side=side, size=size)
+
+
 def test_pre_entry_flow_imbalance_is_causal_and_signed():
     rows = [_p(100, "Up", "BUY", 9), _p(101, "Down", "BUY", 1), _p(500, "Up", "BUY", 100)]
     assert signed_flow_imbalance(rows, 100, horizon_seconds=60) == 0.8
@@ -15,6 +19,11 @@ def test_pre_entry_flow_imbalance_is_causal_and_signed():
 
 def test_missing_pre_entry_tape_is_unknown_not_neutral():
     assert signed_flow_imbalance([], 100) is None
+
+
+def test_canonical_spork30_print_uses_size_field():
+    rows = [_canonical_p(100, "Up", "BUY", 9), _canonical_p(101, "Down", "BUY", 1)]
+    assert signed_flow_imbalance(rows, 100, horizon_seconds=60) == 0.8
 
 
 def test_filter_rejects_toxic_window_and_keeps_balanced_window():
