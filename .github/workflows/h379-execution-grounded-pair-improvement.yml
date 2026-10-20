@@ -1,0 +1,89 @@
+name: H379 execution-grounded pair-improvement paper replay
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      DATASET_REVISION: f3bfb79f19611ea3115ad29c18720166ee6dd0b5
+      DATASET_BASE: https://huggingface.co/datasets/krish301/polymarket-crypto-trades-v1/resolve/f3bfb79f19611ea3115ad29c18720166ee6dd0b5/data/raw/trades/btc/5m/05-03-2026
+      GAMMA_BASE: https://gamma-api.polymarket.com/events?slug=btc-updown-5m-
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install vault dependencies
+        run: python -m pip install -r requirements-vault.txt
+      - name: Download fixed fills and resolution labels
+        run: |
+          set -euo pipefail
+          private_dir="$RUNNER_TEMP/h379"
+          mkdir -m 700 "$private_dir" "$private_dir/fills" "$private_dir/labels"
+          for minute in 00 05 10 15 20 25 30 35 40 45 50 55; do
+            start=$((1772668800 + 300 * (10#$minute / 5)))
+            curl --fail --location --retry 3 --max-time 180 \
+              "$DATASET_BASE/00-${minute}-00-UTC/fills.jsonl.gz?download=true" \
+              --output "$private_dir/fills/${start}.fills.jsonl.gz"
+            curl --fail --location --retry 3 --max-time 60 \
+              "${GAMMA_BASE}${start}" --output "$private_dir/labels/${start}.json"
+          done
+          python -m pytest -q tests/test_h379_execution_grounded_pair_improvement_paper.py
+          python -u analysis/h379_execution_grounded_pair_improvement_paper.py \
+            --fills-dir "$private_dir/fills" --labels-dir "$private_dir/labels" \
+            --output-dir "$private_dir/results" > "$private_dir/analysis-output.txt"
+      - name: Seal and publish encrypted H379 journal
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/h379" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          recipient = research_vault.load_json_bytes(base64.b64decode(os.environ['QUALITY_FIRST_RECIPIENT_JSON_B64'], validate=True), 4096)
+          rid = os.environ['QUALITY_FIRST_RECIPIENT_ID']
+          research_vault.validate_recipient(recipient, rid)
+          results = private / 'results'
+          payload = {
+              'format': 'h379-execution-grounded-pair-improvement-paper-sealed-v1',
+              'report': json.loads((results / 'report.json').read_text()),
+              'events_csv': (results / 'events.csv').read_text(),
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'dataset_revision': os.environ['DATASET_REVISION']},
+          }
+          delivery = Path('sealed-delivery'); delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, rid), 0o600)
+          status = {'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical(status) + b'\n', 0o644)
+          PY
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+      - name: Redacted summary and cleanup
+        if: always()
+        run: |
+          echo '## H379 execution-grounded pair-improvement replay' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Fixed OrderFilled-only causal rule; no live order or Canary row.' >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'h379', Path('sealed-delivery')):
+              if path.exists(): shutil.rmtree(path)
+          PY
