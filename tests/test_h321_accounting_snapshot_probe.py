@@ -2,6 +2,7 @@ import io
 import json
 import zipfile
 import unittest
+from urllib.error import HTTPError
 
 from analysis.h321_accounting_snapshot_probe import probe_accounts, summarize_response
 
@@ -41,6 +42,14 @@ class H321AccountingSnapshotProbeTests(unittest.TestCase):
         self.assertEqual(result["successful_accounts"], 0)
         self.assertEqual(result["accounts"][0]["failure_code"], "TimeoutError")
         self.assertNotIn("0x2222", json.dumps(result))
+
+    def test_probe_preserves_only_bounded_http_failure_category(self):
+        def fetch(_url):
+            raise HTTPError(_url, 403, "private response body must not be retained", {}, io.BytesIO(b"secret"))
+
+        result = probe_accounts([{"label": "a", "owner": "0x" + "3" * 40}], fetcher=fetch)
+        self.assertEqual(result["accounts"][0]["failure_code"], "http_403")
+        self.assertNotIn("secret", json.dumps(result))
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ import json
 import re
 import urllib.parse
 import urllib.request
+from urllib.error import HTTPError
 import zipfile
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -31,6 +32,16 @@ BTC5M_RE = re.compile(r"btc[^\n]{0,80}(?:up|down)[^\n]{0,80}5m|btc[^\n]{0,80}5m"
 TX_RE = re.compile(r"(?:tx|transaction|hash)", re.I)
 CASH_RE = re.compile(r"(?:cash|collateral|usdc|deposit|withdraw|transfer|payout|redeem)", re.I)
 SETTLEMENT_RE = re.compile(r"(?:settle|resolution|redeem|payout|winner|closed)", re.I)
+
+
+def _failure_code(error: BaseException) -> str:
+    """Return a bounded provider category without retaining response content."""
+    if isinstance(error, HTTPError):
+        code = int(getattr(error, "code", 0) or 0)
+        if 100 <= code <= 599:
+            return f"http_{code}"
+        return "http_error"
+    return type(error).__name__
 
 
 def _owner(value: Any) -> str:
@@ -182,7 +193,7 @@ def probe_accounts(
                 "label": str(account.get("label") or ""),
                 "owner_address_sha256": owner_hash,
                 "http_status": None,
-                "failure_code": type(error).__name__,
+                "failure_code": _failure_code(error),
             })
     all_tables = [table for report in reports for table in report.get("response", {}).get("tables", [])]
     return {
