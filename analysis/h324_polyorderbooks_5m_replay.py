@@ -50,9 +50,18 @@ def _finite(value: Any) -> bool:
 
 
 def _first_level(value: Any) -> float:
-    if not isinstance(value, (list, tuple)) or not value:
+    # Parquet readers commonly materialise list columns as numpy arrays.
+    # Accept bounded sequence-like values without importing numpy into the
+    # replay contract; strings and scalars remain invalid depth values.
+    if isinstance(value, (str, bytes)) or value is None:
         return float("nan")
-    return float(value[0]) if _finite(value[0]) else float("nan")
+    try:
+        if len(value) == 0:
+            return float("nan")
+        first = value[0]
+    except (TypeError, IndexError, KeyError):
+        return float("nan")
+    return float(first) if _finite(first) else float("nan")
 
 
 def _as_epoch_seconds(value: Any) -> float:
@@ -267,7 +276,23 @@ def replay(entries: pd.DataFrame, candidate: str, fraction: float, depth_floor: 
     }
 
 
-def evaluate(path: Path, output: Path) -> dict[str, Any]:
+def _parse_fractions(values: Any) -> tuple[float, ...]:
+    """Validate a small, explicit budget-capacity hypothesis."""
+    if isinstance(values, str):
+        values = [item.strip() for item in values.split(",") if item.strip()]
+    try:
+        fractions = tuple(float(value) for value in values)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid_fractions") from exc
+    if not fractions or len(set(fractions)) != len(fractions):
+        raise ValueError("invalid_fractions")
+    if not all(math.isfinite(value) and 0 < value <= 1 for value in fractions):
+        raise ValueError("invalid_fractions")
+    return fractions
+
+
+def evaluate(path: Path, output: Path, *, fractions: tuple[float, ...] = FRACTIONS) -> dict[str, Any]:
+    fractions = _parse_fractions(fractions)
     entries, source_summary = load_entries(path)
     n = len(entries)
     train_end = max(1, int(n * 0.60))
@@ -279,7 +304,7 @@ def evaluate(path: Path, output: Path) -> dict[str, Any]:
     }
     rows = []
     for candidate in ("complement_arb", "book_pressure"):
-        for fraction in FRACTIONS:
+        for fraction in fractions:
             for depth in DEPTH_FLOORS:
                 for split, frame in splits.items():
                     row = replay(frame, candidate, fraction, depth)
@@ -314,6 +339,7 @@ def evaluate(path: Path, output: Path) -> dict[str, Any]:
             "fee_exponent": FEE_EXPONENT,
             "settlement_seconds": 300.0,
             "cash_release_delay_seconds": RELEASE_DELAY_SECONDS,
+            "budget_fractions": list(fractions),
             "same_ledger": True,
             "no_concatenation": True,
             "single_position_or_pair": True,
@@ -347,8 +373,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--fractions", default=",".join(map(str, FRACTIONS)))
     args = parser.parse_args()
-    report = evaluate(args.input, args.output)
+    report = evaluate(args.input, args.output, fractions=_parse_fractions(args.fractions))
     print(json.dumps({
         "format": report["format"],
         "decision": report["decision"],

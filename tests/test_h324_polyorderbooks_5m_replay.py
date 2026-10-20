@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from analysis.h324_polyorderbooks_5m_replay import _shares, _taker_fee, load_entries, replay
+from analysis.h324_polyorderbooks_5m_replay import (
+    _parse_fractions,
+    _shares,
+    _taker_fee,
+    load_entries,
+    replay,
+)
 
 
 def _row(market, token, outcome, winner, tte=120.0, ask=0.40, bid=0.39, pressure=0.6):
@@ -54,6 +60,33 @@ class H324Tests(unittest.TestCase):
         self.assertEqual(result["candidate"], "book_pressure")
         self.assertGreaterEqual(result["fills"], 0)
         self.assertNotIn("verified_canary_fills", result)
+
+    def test_full_budget_capacity_can_reach_the_five_share_unit_in_fixture(self):
+        # The old 20% cap leaves only $2 from a $10 account, below five shares
+        # at this price.  This test isolates that capacity constraint without
+        # changing the signal, labels, cash clock, or same-ledger rule.
+        rows = [_row(i, "u", "Up", i % 2 == 0) for i in range(1, 13)]
+        rows += [_row(i, "d", "Down", i % 2 == 1, pressure=-0.6) for i in range(1, 13)]
+        # Keep both sides above the depth floor while retaining opposite
+        # pressure signs; the production Parquet path uses the same shape.
+        for row in rows:
+            if row["outcome"] == "Up":
+                row["bid_sizes"], row["ask_sizes"] = [200.0], [100.0]
+            else:
+                row["bid_sizes"], row["ask_sizes"] = [100.0], [200.0]
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "btc.parquet"
+            pd.DataFrame(rows).to_parquet(path)
+            entries, _ = load_entries(path)
+        capped = replay(entries, "book_pressure", 0.20, 100.0)
+        full = replay(entries, "book_pressure", 1.0, 100.0)
+        self.assertEqual(capped["fills"], 0)
+        self.assertGreaterEqual(full["fills"], 1)
+
+    def test_budget_fraction_parser_is_bounded_and_explicit(self):
+        self.assertEqual(_parse_fractions("0.5,1.0"), (0.5, 1.0))
+        with self.assertRaisesRegex(ValueError, "invalid_fractions"):
+            _parse_fractions("0,1.1")
 
     def test_rejects_non_five_minute_rows(self):
         rows = [_row(1, "u", "Up", True), _row(1, "d", "Down", False)]
