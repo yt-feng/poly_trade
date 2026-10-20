@@ -102,6 +102,7 @@ jobs:
           import research_vault
           report_path = Path(sys.argv[1])
           report_bytes = report_path.read_bytes()
+          report = json.loads(report_bytes)
           encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
           recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
           if not encoded or not recipient_id:
@@ -110,14 +111,23 @@ jobs:
           research_vault.validate_recipient(recipient, recipient_id)
           payload = {
               'format': 'h387-complete-set-maker-replay-sealed-v1',
-              'report': json.loads(report_bytes),
+              'report': report,
               'report_sha256': hashlib.sha256(report_bytes).hexdigest(),
               'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'head_sha': os.environ['GITHUB_SHA']},
           }
           delivery = Path('sealed-delivery')
           delivery.mkdir(mode=0o700)
           research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
-          status = {'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}
+          status = {
+              'version': 1,
+              'status': 'complete',
+              'stage': 'sealed_delivery',
+              'strategy_evaluated': report.get('format') == 'h387-complete-set-maker-replay-v1',
+              'source_replay_status': report.get('status', 'paper_report'),
+              'live_orders_enabled': False,
+              'plaintext_published': False,
+              'sealed_parts': 1,
+          }
           research_vault.write_new(delivery / 'status.json', research_vault.canonical(status) + b'\n', 0o644)
           PY
       - name: Publish encrypted journal
