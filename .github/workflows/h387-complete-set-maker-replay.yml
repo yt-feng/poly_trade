@@ -131,6 +131,12 @@ jobs:
               'status': 'complete',
               'stage': 'sealed_delivery',
               'strategy_evaluated': report.get('format') == 'h387-complete-set-maker-replay-v1',
+              # Keep only bounded operational metadata public.  The sealed
+              # report remains the source of any diagnostic details.
+              'source_replay_status': report.get('status', 'strategy_evaluated'),
+              'source_replay_stage': report.get('stage', 'strategy'),
+              'source_replay_exit_code': report.get('exit_code', 0),
+              'backtest_json_present': report.get('backtest_json_present', True),
               'live_orders_enabled': False,
               'plaintext_published': False,
               'sealed_parts': 1,
