@@ -21,6 +21,7 @@ def _validate(events: list[dict[str, Any]], fills: list[dict[str, Any]]) -> dict
         starting_checkpoint_id="opening",
         closing_balance_checkpoint_id="closing",
         closing_balance="16.10",
+        require_rebate=True,
     )
 
 

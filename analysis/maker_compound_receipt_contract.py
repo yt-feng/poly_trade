@@ -79,7 +79,7 @@ def validate_maker_compound_chain(
     starting_checkpoint_id: Any = None,
     closing_balance_checkpoint_id: Any = None,
     closing_balance: Any = None,
-    require_rebate: bool = True,
+    require_rebate: bool = False,
     require_async_binding: bool = True,
 ) -> dict[str, Any]:
     """Validate an independent maker-only ten-row compound bundle.
@@ -88,8 +88,11 @@ def validate_maker_compound_chain(
     independently identified maker rebate.  The shared authenticated
     reconciler still supplies the no-reset balance chain and explicit opening
     and closing anchors.  Async trade-ID binding is required by default so a
-    caller cannot form an offline maker chain from manually joined rows. This
-    function does not make the supplied identities externally authentic.
+    caller cannot form an offline maker chain from manually joined rows. Maker
+    settlement cash is usable without waiting for a daily rebate payout by
+    default; callers that are specifically auditing rebate receipt completeness
+    can set ``require_rebate=True``. This function does not make the supplied
+    identities externally authentic.
     """
     rows = list(events)
     fills = list(orderfilled)
@@ -183,9 +186,13 @@ def validate_maker_compound_chain(
                     if current["receipt_id"] != receipt_id or current["batch_amount"] != batch_total:
                         issues.append({"reason": "rebate_batch_identity_or_amount_mismatch", "sequence_no": sequence})
                     current["allocated"] += allocated
-        elif rebate_status == "NOT_ELIGIBLE":
+        elif rebate_status in {"NOT_ELIGIBLE", "PENDING", "ACCRUING", "NOT_PAID"}:
+            # A maker fill can settle and release cash before the daily rebate
+            # batch is paid, or can be below the program's payout threshold.
+            # Such a row is admissible for the cash ledger only when no rebate
+            # amount is being claimed. Strict rebate audits still fail closed.
             if rebate_amount != ZERO:
-                issues.append({"reason": "not_eligible_rebate_must_be_zero", "sequence_no": sequence})
+                issues.append({"reason": "unconfirmed_rebate_must_be_zero", "sequence_no": sequence})
             if require_rebate:
                 issues.append({"reason": "maker_rebate_not_confirmed", "sequence_no": sequence})
         else:

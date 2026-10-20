@@ -183,6 +183,70 @@ class MakerCompoundReceiptContractTest(unittest.TestCase):
         self.assertEqual(result["same_ledger_compounding_rows"], 10)
         self.assertFalse(result["gate_passed"])
 
+    def test_unpaid_daily_rebate_does_not_block_settlement_cash_by_default(self):
+        events, fills = bundle()
+        for event in events:
+            event["rebate_status"] = "PENDING"
+            event["rebate_amount"] = "0"
+            event["payout"] = event["settlement_payout"]
+            for field in (
+                "rebate_batch_id",
+                "rebate_receipt_id",
+                "rebate_batch_amount",
+                "rebate_allocated_amount",
+                "rebate_available_ts",
+            ):
+                event.pop(field, None)
+            if event["sequence_no"] > 1:
+                event["released_cash_since_previous_entry"] = "5.50"
+            before = Decimal("10") + (event["sequence_no"] - 1) * Decimal("0.50")
+            event["balance_before"] = str(before)
+            event["balance_after"] = str(before - Decimal("5"))
+        result = validate_maker_compound_chain(
+            events,
+            fills,
+            owner="owner-key",
+            maker_address="0xmaker",
+            starting_checkpoint_id="opening",
+            closing_balance_checkpoint_id="closing",
+            closing_balance="15.00",
+        )
+        self.assertTrue(result["offline_consistency_passed"])
+        self.assertEqual(result["same_ledger_compounding_rows"], 10)
+        self.assertFalse(result["gate_passed"])
+
+    def test_strict_rebate_audit_still_requires_confirmed_batch(self):
+        events, fills = bundle()
+        for event in events:
+            event["rebate_status"] = "ACCRUING"
+            event["rebate_amount"] = "0"
+            event["payout"] = event["settlement_payout"]
+            for field in (
+                "rebate_batch_id",
+                "rebate_receipt_id",
+                "rebate_batch_amount",
+                "rebate_allocated_amount",
+                "rebate_available_ts",
+            ):
+                event.pop(field, None)
+            if event["sequence_no"] > 1:
+                event["released_cash_since_previous_entry"] = "5.50"
+            before = Decimal("10") + (event["sequence_no"] - 1) * Decimal("0.50")
+            event["balance_before"] = str(before)
+            event["balance_after"] = str(before - Decimal("5"))
+        result = validate_maker_compound_chain(
+            events,
+            fills,
+            owner="owner-key",
+            maker_address="0xmaker",
+            starting_checkpoint_id="opening",
+            closing_balance_checkpoint_id="closing",
+            closing_balance="15.00",
+            require_rebate=True,
+        )
+        self.assertEqual(result["failure_reason"], "maker_event_contract_failed")
+        self.assertIn("maker_rebate_not_confirmed", {x["reason"] for x in result["issues"]})
+
 
 if __name__ == "__main__":
     unittest.main()
