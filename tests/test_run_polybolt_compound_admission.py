@@ -73,6 +73,11 @@ def test_workflow_never_uploads_private_bundle_or_enables_orders():
     text = WORKFLOW.read_text()
     assert "POLYBOLT_COMPOUND_BUNDLE_B64" in text
     assert "redacted fail-closed result" in text
+    materialize = text.split("name: Materialize private bundle only in runner temp", 1)[1].split(
+        "name: Run v2 offline consistency checks", 1
+    )[0]
+    assert "raise SystemExit(0)" not in materialize
+    assert "if not value:" in materialize
     assert "private bundle secret is unavailable" not in text
     assert "tests/test_polymarket_receipt_adapter.py" in text
     assert "tests/test_polymarket_user_stream_adapter.py" in text

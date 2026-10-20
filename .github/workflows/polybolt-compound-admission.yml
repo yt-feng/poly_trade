@@ -48,16 +48,16 @@ jobs:
           value = os.environ.get('POLYBOLT_COMPOUND_BUNDLE_B64', '')
           if not value:
               print('private bundle secret unavailable; continuing with redacted fail-closed result')
-              raise SystemExit(0)
-          data = base64.b64decode(value, validate=True)
-          if not data or len(data) > 2 * 1024 * 1024:
-              raise SystemExit('private bundle size is invalid')
-          path = Path(sys.argv[1])
-          fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-          with os.fdopen(fd, 'wb') as handle:
-              handle.write(data)
-              handle.flush()
-              os.fsync(handle.fileno())
+          else:
+              data = base64.b64decode(value, validate=True)
+              if not data or len(data) > 2 * 1024 * 1024:
+                  raise SystemExit('private bundle size is invalid')
+              path = Path(sys.argv[1])
+              fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+              with os.fdopen(fd, 'wb') as handle:
+                  handle.write(data)
+                  handle.flush()
+                  os.fsync(handle.fileno())
           PY
 
       - name: Run v2 offline consistency checks and retain only redacted result
