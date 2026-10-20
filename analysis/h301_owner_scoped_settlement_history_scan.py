@@ -114,6 +114,13 @@ def _rpc_call(rpc_url: str, method: str, params: list[Any]) -> Any:
     with urlopen(request, timeout=30) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if payload.get("error") or "result" not in payload:
+        # Preserve only a bounded provider error code.  The full provider
+        # message can contain request details and is never written to the
+        # public/redacted report.
+        error = payload.get("error") if isinstance(payload, dict) else None
+        code = error.get("code") if isinstance(error, dict) else None
+        if isinstance(code, (int, str)) and str(code)[:32]:
+            raise RuntimeError(f"history_rpc_error:{str(code)[:32]}")
         raise RuntimeError("history_rpc_error")
     return payload["result"]
 

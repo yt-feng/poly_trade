@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -98,6 +99,17 @@ V2_COLLATERAL_TOKENS = frozenset(set(DEFAULT_COLLATERAL_TOKENS) | {V2_COLLATERAL
 POSITION_REDEEMED_TOPIC = "0x4fd474b703f46b453536518b4cbc159dfbea6fd663233763d321a9bc8ccdf97f"
 # keccak256("PositionsMerged(address,bytes31,address,uint256)")
 POSITIONS_MERGED_TOPIC = "0xf233f7be4ce81130a78e8eb2fa626497586c56094d27bfec2e196471e9c60301"
+
+
+def _failure_category(exc: Exception) -> str:
+    """Return a bounded, non-sensitive category for a history query failure."""
+    text = str(exc)
+    match = re.fullmatch(r"history_rpc_error:([A-Za-z0-9_.:+-]{1,32})", text)
+    if match:
+        return f"rpc_error_{match.group(1)}"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    return type(exc).__name__.lower()[:32] or "unknown"
 
 
 def _topic_word(value: Any) -> str:
@@ -304,6 +316,7 @@ def capture_account(
     log_rows: list[dict[str, Any]] = []
     query_count = 0
     query_failures = 0
+    query_failure_categories: dict[str, int] = {}
     event_addresses = sorted(V2_MODULES)
     transfer_tokens = sorted(V2_COLLATERAL_TOKENS)
     for lower, upper in _chunk_ranges(start, latest_block, chunk_blocks):
@@ -319,8 +332,10 @@ def capture_account(
             query_count += 1
             try:
                 log_rows.extend(_normalize_log_rows(rpc_call("eth_getLogs", [log_filter])))
-            except Exception:
+            except Exception as exc:
                 query_failures += 1
+                category = _failure_category(exc)
+                query_failure_categories[category] = query_failure_categories.get(category, 0) + 1
             if len(log_rows) >= MAX_LOG_ROWS:
                 log_rows = log_rows[:MAX_LOG_ROWS]
                 break
@@ -374,6 +389,7 @@ def capture_account(
         "history_transaction_count": len(history_hashes),
         "history_query_count": query_count,
         "history_query_failures": query_failures,
+        "history_query_failure_categories": query_failure_categories,
         "history_confirmed_receipts": history_receipts,
         "history_receipt_fetch_failures": receipt_failures,
         "unbound_payout_rows": unbound_payout_rows,
