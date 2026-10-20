@@ -91,6 +91,15 @@ def replay_series(rows: list[dict[str, Any]], *, split_size: Decimal = SPLIT_SIZ
     ten = eligible[:TEN_ROWS]
     ten_row_chain = len(ten) == TEN_ROWS
     ten_min_cash = min((_decimal(row["cash_before"]) for row in ten), default=Decimal("0"))
+    # A ten-row cash chain is only a candidate when it also grows the same
+    # starting ledger after all ten outcomes settle.  The older adapter used
+    # the row-count/free-cash check as ``paper_chain_passed`` and could label
+    # a ten-row losing sequence as a pass.  Keep the row-count gate separate
+    # so diagnostics retain the distinction while promotion remains growth
+    # aware.
+    ten_net_pnl = sum((_decimal(row["pnl"]) for row in ten), Decimal("0"))
+    ten_ending_cash = INITIAL_CASH + ten_net_pnl
+    ten_growth_positive = ten_ending_cash > INITIAL_CASH
     return {
         "initial_cash": str(INITIAL_CASH),
         "split_size": str(split_size),
@@ -102,8 +111,24 @@ def replay_series(rows: list[dict[str, Any]], *, split_size: Decimal = SPLIT_SIZ
         "first_ten_consecutive_rows": len(ten),
         "ten_row_same_ledger_gate": ten_row_chain,
         "first_ten_min_cash_before_entry": str(ten_min_cash),
+        "first_ten_net_pnl": str(ten_net_pnl),
+        "first_ten_ending_cash_after_settlement": str(ten_ending_cash),
+        "first_ten_growth_positive": ten_growth_positive,
         "ending_cash_after_pending_release": str(cash),
-        "paper_chain_passed": ten_row_chain and ten_min_cash >= split_size,
+        "paper_chain_passed": ten_row_chain and ten_min_cash >= split_size and ten_growth_positive,
+        "paper_chain_failure_reason": (
+            None
+            if ten_row_chain and ten_min_cash >= split_size and ten_growth_positive
+            else (
+                "fewer_than_required_consecutive_rows"
+                if not ten_row_chain
+                else (
+                    "insufficient_free_cash_before_entry"
+                    if ten_min_cash < split_size
+                    else "compound_chain_not_growth_positive"
+                )
+            )
+        ),
         "ledger_reset_count": 0,
         "concatenation_count": 0,
         "ledger_rows": ledger_rows,

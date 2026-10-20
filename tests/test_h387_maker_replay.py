@@ -33,6 +33,20 @@ def test_insufficient_free_cash_blocks_a_row_and_never_mints_cash():
     assert result["ending_cash_after_pending_release"] == "0"
 
 
+def test_ten_rows_without_positive_net_growth_do_not_pass_promotion_gate():
+    rows = _rows(10, pnl="-0.003")
+    # The first two small wins keep every later $5 split fundable; the eight
+    # losses make the complete ten-row sequence net negative.
+    rows[0]["pnl"] = "0.01"
+    rows[1]["pnl"] = "0.01"
+    result = MOD.replay_series(rows)
+    assert result["ten_row_same_ledger_gate"] is True
+    assert result["first_ten_growth_positive"] is False
+    assert result["first_ten_ending_cash_after_settlement"] == "9.996"
+    assert result["paper_chain_passed"] is False
+    assert result["paper_chain_failure_reason"] == "compound_chain_not_growth_positive"
+
+
 def test_report_marks_paper_only_and_no_canary():
     report = MOD.build_report(
         {"windows": [0], "per_window": {"v1,queue=0": _rows(1)}},
