@@ -204,8 +204,8 @@ def test_notional_unit_claim_is_rejected_when_share_unit_is_required():
     assert result["failure_reason"] == "minimum_order_size_unit_must_be_shares"
 
 
-def test_five_share_fill_can_use_less_than_five_dollars_of_cash():
-    """A share floor must not become an accidental universal notional floor."""
+def test_five_share_fill_below_frozen_strategy_notional_is_rejected():
+    """The H30 paper protocol requires $5 entry notional as well as 5 shares."""
     doc = bundle()
     for snapshot in doc["depth_snapshots"]:
         snapshot["ask_price"] = "0.20"
@@ -230,8 +230,8 @@ def test_five_share_fill_can_use_less_than_five_dollars_of_cash():
         previous_after = after
     doc["closing_balance"] = format(previous_after + payout, "f")
     result = validate_bundle_document(doc)
-    assert result["offline_consistency_passed"] is True
-    assert Decimal(result["ending_cash"]) == Decimal("10.44")
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "entry_cost_below_frozen_minimum_notional"
 
 
 def test_executed_price_must_follow_market_tick_size():

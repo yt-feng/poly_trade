@@ -37,12 +37,15 @@ REQUIRED_FILLS = 10
 FROZEN_EXECUTION_ROLE = "TAKER"
 FROZEN_TAKER_FEE_RATE = Decimal("0.07")
 FEE_AMOUNT_TOLERANCE = Decimal("0.000001")
-# The CLOB book's ``min_order_size`` is a quantity of shares.  The cash
-# required for a fill is still checked against the evolving ledger, but there
-# is no universal $5 notional floor in this boundary.
+# The CLOB book's ``min_order_size`` is a quantity of shares.  Keep that venue
+# field separate from the frozen H30 strategy protocol: every admitted H30
+# fill must also carry at least $5 of entry notional, matching the paper
+# compound replay.  This is a strategy-level execution floor, not a claim
+# about a universal venue minimum or the unit of Gamma's orderMinSize field.
 FROZEN_MINIMUM_ORDER_SIZE_UNIT = "shares"
 FROZEN_MINIMUM_ORDER_SIZE = Decimal("5")
 FROZEN_MINIMUM_ORDER_SHARES = Decimal("5")
+FROZEN_MINIMUM_ENTRY_NOTIONAL_USD = Decimal("5")
 MINIMUM_ENTRY_COST_FOR_LEDGER = Decimal("0.0000001")
 FROZEN_STRATEGY_ID = "h30_move_uncertainty"
 FROZEN_STRATEGY_VERSION = "h54-execution-contract-prefix-v1"
@@ -492,6 +495,8 @@ def _validate_same_ledger(
                 return "shares_must_be_positive"
             if shares < window["min_order_shares"]:
                 return "shares_below_market_minimum"
+            if entry_cost < FROZEN_MINIMUM_ENTRY_NOTIONAL_USD:
+                return "entry_cost_below_frozen_minimum_notional"
             if depth["available_shares"] < shares:
                 return "depth_available_shares_insufficient"
             if price <= 0 or price >= 1:
@@ -638,10 +643,11 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
     result = reconcile_authenticated_chain(
         reconcile_events,
         owner=owner,
-        # The market-window check above enforces the current documented share
-        # floor before this compatibility reconciler runs.  This tiny ledger
-        # floor only rejects zero-cost arithmetic and must not create a
-        # universal notional minimum that the market did not report.
+        # The market-window check above enforces the documented share floor,
+        # and _validate_same_ledger enforces the frozen H30 strategy notional
+        # floor before this compatibility reconciler runs.  Keep this tiny
+        # ledger floor as a final zero-cost arithmetic guard; it is not a
+        # second venue-unit interpretation.
         minimum_order=str(MINIMUM_ENTRY_COST_FOR_LEDGER),
         required_fills=REQUIRED_FILLS,
         starting_checkpoint_id=document.get("starting_checkpoint_id"),

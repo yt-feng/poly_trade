@@ -10,6 +10,8 @@ An authenticated bundle must make that identity check explicit. The v2 admission
 
 For paper research, report the first-ten prefix, the full selection/holdout chain and independent time blocks separately. The first-ten prefix is a paper upper bound only: it can show that the frozen data and execution assumptions produce a continuous compound chain, but it cannot become a real Canary without ten authenticated fills, settlement receipts and independently reconciled cash checkpoints.
 
+The frozen H30 execution protocol also requires at least $5 entry notional per fill in addition to the venue book's separately recorded share minimum. The admission validator enforces both fields; this protocol floor must not be confused with an inferred universal exchange minimum.
+
 ## Each research cycle
 
 1. Read the current code, in-flight runs, sealed journal and source watermarks. Do not duplicate an active job. A new release can revise old data; compare content hashes and observation times before claiming fresh evidence.
