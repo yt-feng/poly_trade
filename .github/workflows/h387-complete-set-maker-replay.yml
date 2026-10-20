@@ -43,32 +43,18 @@ jobs:
           git clone --filter=blob:none "https://github.com/${SOURCE_REPOSITORY}.git" "$RUNNER_TEMP/spork30-source" >/dev/null 2>&1
           clone_status=$?
           if [ "$clone_status" -ne 0 ]; then
-            python - "$RUNNER_TEMP/h387-report.json" "$clone_status" <<'PY'
-            import json, sys
-            from pathlib import Path
-            Path(sys.argv[1]).write_text(json.dumps({
-                "status": "source_unavailable",
-                "stage": "clone",
-                "exit_code": int(sys.argv[2]),
-                "live_orders_enabled": False,
-            }) + "\n")
-            PY
+            python tools/h387_replay_diagnostic.py \
+              --output "$RUNNER_TEMP/h387-report.json" \
+              --stage clone --exit-code "$clone_status"
             echo "source_ok=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git -C "$RUNNER_TEMP/spork30-source" checkout --quiet "$SOURCE_COMMIT" >/dev/null 2>&1
           checkout_status=$?
           if [ "$checkout_status" -ne 0 ]; then
-            python - "$RUNNER_TEMP/h387-report.json" "$checkout_status" <<'PY'
-            import json, sys
-            from pathlib import Path
-            Path(sys.argv[1]).write_text(json.dumps({
-                "status": "source_unavailable",
-                "stage": "pin",
-                "exit_code": int(sys.argv[2]),
-                "live_orders_enabled": False,
-            }) + "\n")
-            PY
+            python tools/h387_replay_diagnostic.py \
+              --output "$RUNNER_TEMP/h387-report.json" \
+              --stage pin --exit-code "$checkout_status"
             echo "source_ok=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -98,25 +84,11 @@ jobs:
             > "$RUNNER_TEMP/h387-source.log" 2>&1)
           replay_status=$?
           if [ "$replay_status" -ne 0 ] || [ ! -s "$RUNNER_TEMP/h387-backtest.json" ]; then
-            python - "$RUNNER_TEMP/h387-report.json" "$RUNNER_TEMP/h387-source.log" "$RUNNER_TEMP/h387-backtest.json" "$replay_status" <<'PY'
-            import hashlib, json, sys
-            from pathlib import Path
-            report_path = Path(sys.argv[1])
-            log_path = Path(sys.argv[2])
-            backtest_path = Path(sys.argv[3])
-            exit_code = int(sys.argv[4])
-            log_bytes = log_path.read_bytes() if log_path.exists() else b""
-            tail = log_bytes.decode("utf-8", "replace").splitlines()[-40:]
-            report_path.write_text(json.dumps({
-                "status": "source_replay_failed",
-                "stage": "public_tape_replay",
-                "exit_code": exit_code,
-                "backtest_json_present": backtest_path.exists() and backtest_path.stat().st_size > 0,
-                "source_log_sha256": hashlib.sha256(log_bytes).hexdigest(),
-                "source_log_tail": tail,
-                "live_orders_enabled": False,
-            }) + "\n")
-            PY
+            python tools/h387_replay_diagnostic.py \
+              --output "$RUNNER_TEMP/h387-report.json" \
+              --stage public_tape_replay --exit-code "$replay_status" \
+              --log "$RUNNER_TEMP/h387-source.log" \
+              --backtest "$RUNNER_TEMP/h387-backtest.json"
             echo "source_ok=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
