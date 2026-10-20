@@ -143,3 +143,33 @@ def test_v2_merge_event_is_condition_bound_and_counted_as_cash_release():
     assert report["cash_release_receipt_rows"] == 1
     assert report["verified_canary_fills"] == 0
 
+
+def test_wide_history_batches_event_and_transfer_filters():
+    tx_buy = "0x" + "05" * 32
+    calls = []
+
+    def rpc(method, params):
+        if method == "eth_getTransactionReceipt":
+            return {"transactionHash": tx_buy, "status": "0x1", "blockNumber": "0x64", "logs": []}
+        if method == "eth_blockNumber":
+            return "0x78"
+        if method == "eth_getLogs":
+            calls.append(params[0])
+            return []
+        raise AssertionError(method)
+
+    report = capture_account(
+        {"owner": OWNER, "btc_transaction_hashes": [tx_buy], "activity": [{
+            "type": "TRADE", "side": "BUY", "transactionHash": tx_buy,
+            "timestamp": 1000, "usdcSize": "5", "slug": "btc-updown-5m-123",
+            "conditionId": CONDITION,
+        }]},
+        rpc_call=rpc, max_history_blocks=20, chunk_blocks=10,
+    )
+    assert report["history_query_count"] == 4
+    assert len(calls) == 4
+    assert isinstance(calls[0]["topics"][0], list)
+    assert isinstance(calls[1]["address"], list)
+    assert isinstance(calls[2]["topics"][0], list)
+    assert isinstance(calls[3]["address"], list)
+
