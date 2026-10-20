@@ -129,7 +129,7 @@ def main() -> None:
     selection_rows: list[dict[str, object]] = []
     for label, (frame, strategy, diagnostic) in prepared.items():
         prefix = frame[frame["run_name"].isin(prefix_runs)]
-        _, metrics = simulate_cash_locked(
+        prefix_logs, metrics = simulate_cash_locked(
             prefix,
             strategy,
             study.ExecutionConfig(fixed_slippage=args.selection_slippage, **envelope),
@@ -139,21 +139,34 @@ def main() -> None:
             12,
             capture_logs=True,
         )
+        prefix_chain = evaluate_compound_chain(
+            _paper_events(prefix_logs),
+            initial_cash=args.bankroll0,
+            minimum_order=args.min_cost,
+            required_fills=10,
+            evidence_mode="paper_upper_bound",
+            stop_after_required_fills=True,
+        )
         selection_rows.append(
             {
                 "candidate": label,
                 "selection_slippage": args.selection_slippage,
                 "selection_runs": args.selection_runs,
                 "selection_score": float(metrics["net_return"] - 0.5 * metrics["max_cash_drawdown"]),
+                "selection_compound_eligible": bool(prefix_chain["paper_replay_passed"]),
+                "selection_compound_fills": int(prefix_chain["fills"]),
+                "selection_compound_ending_cash": float(prefix_chain["ending_cash"]),
+                "selection_compound_failure_reason": prefix_chain["failure_reason"],
                 **envelope,
                 **metrics,
                 **{f"diagnostic_{k}": v for k, v in diagnostic.items()},
             }
         )
     selection = pd.DataFrame(selection_rows).sort_values(
-        ["selection_score", "ending_cash"], ascending=[False, False]
+        ["selection_compound_eligible", "selection_score", "ending_cash"],
+        ascending=[False, False, False],
     ).reset_index(drop=True)
-    selected = str(selection.iloc[0]["candidate"])
+    selected = str(selection.iloc[0]["candidate"]) if bool(selection.iloc[0]["selection_compound_eligible"]) else None
 
     rows: list[dict[str, object]] = []
     blocks: list[dict[str, object]] = []
@@ -185,7 +198,7 @@ def main() -> None:
                         "candidate": label,
                         "split": split,
                         "slippage": slip,
-                        "selected_by_prefix": label == selected,
+                        "selected_by_prefix": selected is not None and label == selected,
                         "selection_score": score,
                         "paper_chain_fills": int(chain["fills"]),
                         "paper_chain_ending_cash": float(chain["ending_cash"]),
@@ -232,7 +245,7 @@ def main() -> None:
         "holdout_runs": len(test_runs) - args.selection_runs,
         "candidates": list(prepared),
         "selected_candidate": selected,
-        "selection_rule": "prefix net_return - 0.5 * max_cash_drawdown at fixed 0.50% slippage",
+        "selection_rule": "compound-eligible prefix first, then net_return - 0.5 * max_cash_drawdown at fixed 0.50% slippage",
         "causal_hypothesis": "replace the minute-two median Down spread gate with the minute-one Down spread at the minute-one entry",
         "spread_threshold": CAUSAL_THRESHOLD,
         "execution_profile": envelope,

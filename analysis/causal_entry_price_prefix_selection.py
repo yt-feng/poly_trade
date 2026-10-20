@@ -63,20 +63,35 @@ def main() -> None:
 
     selection_rows = []
     for label, (frame, strategy, diagnostic) in prepared.items():
-        _, metrics = simulate_cash_locked(
+        prefix_logs, metrics = simulate_cash_locked(
             frame[frame["run_name"].isin(prefix_runs)], strategy,
             study.ExecutionConfig(fixed_slippage=args.selection_slippage, **envelope),
             args.bankroll0, args.min_cost, args.cash_release_delay_seconds, 12, capture_logs=True,
+        )
+        prefix_chain = evaluate_compound_chain(
+            _paper_events(prefix_logs),
+            initial_cash=args.bankroll0,
+            minimum_order=args.min_cost,
+            required_fills=10,
+            evidence_mode="paper_upper_bound",
+            stop_after_required_fills=True,
         )
         selection_rows.append({
             "candidate": label, "selection_slippage": args.selection_slippage,
             "selection_runs": args.selection_runs,
             "selection_score": float(metrics["net_return"] - 0.5 * metrics["max_cash_drawdown"]),
+            "selection_compound_eligible": bool(prefix_chain["paper_replay_passed"]),
+            "selection_compound_fills": int(prefix_chain["fills"]),
+            "selection_compound_ending_cash": float(prefix_chain["ending_cash"]),
+            "selection_compound_failure_reason": prefix_chain["failure_reason"],
             **envelope, **metrics,
             **{f"diagnostic_{k}": v for k, v in diagnostic.items()},
         })
-    selection = pd.DataFrame(selection_rows).sort_values(["selection_score", "ending_cash"], ascending=[False, False]).reset_index(drop=True)
-    selected = str(selection.iloc[0]["candidate"])
+    selection = pd.DataFrame(selection_rows).sort_values(
+        ["selection_compound_eligible", "selection_score", "ending_cash"],
+        ascending=[False, False, False],
+    ).reset_index(drop=True)
+    selected = str(selection.iloc[0]["candidate"]) if bool(selection.iloc[0]["selection_compound_eligible"]) else None
 
     rows, blocks, confidence = [], [], []
     for label, (frame, strategy, diagnostic) in prepared.items():
@@ -89,7 +104,7 @@ def main() -> None:
                     args.bankroll0, args.min_cost, args.cash_release_delay_seconds, 12, capture_logs=True,
                 )
                 chain = evaluate_compound_chain(_paper_events(logs), initial_cash=args.bankroll0, minimum_order=args.min_cost, required_fills=10, evidence_mode="paper_upper_bound", stop_after_required_fills=True)
-                rows.append({"candidate": label, "split": split, "slippage": slip, "selected_by_prefix": label == selected, "selection_score": score, "paper_chain_fills": int(chain["fills"]), "paper_chain_ending_cash": float(chain["ending_cash"]), "paper_chain_minimum_cash": float(chain["minimum_cash"]), "paper_chain_passed": bool(chain["paper_replay_passed"]), "paper_chain_failure_reason": chain["failure_reason"], **envelope, **metrics, **{f"diagnostic_{k}": v for k, v in diagnostic.items()}})
+                rows.append({"candidate": label, "split": split, "slippage": slip, "selected_by_prefix": selected is not None and label == selected, "selection_score": score, "paper_chain_fills": int(chain["fills"]), "paper_chain_ending_cash": float(chain["ending_cash"]), "paper_chain_minimum_cash": float(chain["minimum_cash"]), "paper_chain_passed": bool(chain["paper_replay_passed"]), "paper_chain_failure_reason": chain["failure_reason"], **envelope, **metrics, **{f"diagnostic_{k}": v for k, v in diagnostic.items()}})
                 blocks.append({"candidate": label, "split": split, "slippage": slip, "trades": int(len(logs)), "sum_pnl": float(logs["pnl_usd"].sum()) if not logs.empty else 0.0, "win_rate": float((logs["pnl_usd"] > 0).mean()) if not logs.empty else float("nan"), "paper_chain_fills": int(chain["fills"]), "paper_chain_ending_cash": float(chain["ending_cash"]), "paper_chain_passed": bool(chain["paper_replay_passed"])})
                 confidence.append({"candidate": label, "split": split, "slippage": slip, **bootstrap_run_pnl(logs, names, args.bankroll0, args.replicates, args.seed)})
 
@@ -103,7 +118,7 @@ def main() -> None:
         "format": "old-data-causal-entry-price-prefix-selection-v2", "source_root": str(source_root),
         "complete_runs": len(runs), "test_runs": len(test_runs), "selection_runs": args.selection_runs,
         "holdout_runs": len(test_runs) - args.selection_runs, "candidates": list(prepared), "selected_candidate": selected,
-        "selection_rule": "prefix net_return - 0.5 * max_cash_drawdown at fixed 0.50% slippage",
+        "selection_rule": "compound-eligible prefix first, then net_return - 0.5 * max_cash_drawdown at fixed 0.50% slippage",
         "causal_base": "btc_move_1m <= -20 and spread_down_1m <= 0.06; enter at minute 1",
         "price_hypothesis": "retain only base signals with buy_down_price_1m <= 0.65 at the same minute-one snapshot",
         "price_cap": PRICE_CAP, "execution_profile": envelope, "slippages": slippages,
