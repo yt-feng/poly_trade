@@ -202,6 +202,13 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, o
         "summary": {
             "test_blocks": len(test_rows),
             "test_trades": selected_test_count,
+            # Each outer test block is an independent historical evaluation
+            # that starts from INITIAL_CASH.  Summing trades across blocks is
+            # useful for transfer diagnostics, but it is never one continuous
+            # compounding ledger and must not satisfy the ten-Canary gate.
+            "same_ledger_compounding_rows": 0,
+            "same_ledger_gate_passed": False,
+            "cross_block_trade_sum_is_not_same_ledger": True,
             "test_block_ending_cash": test_block_cash,
             "test_block_net_return": test_block_net,
             "minimum_test_block_ending_cash": None if not test_block_cash else min(test_block_cash),
