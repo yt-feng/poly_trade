@@ -142,7 +142,21 @@ def replay(frame: pd.DataFrame, candidate: str, names: list[str], delay: float, 
     return replay_execution(inject_delay_execution(frame, candidate, delay), candidate, names, delay, depth)
 
 
-def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, Any]:
+def evaluate(
+    source_root: Path,
+    output: Path,
+    source_commit: str,
+    *,
+    crossing_cents: tuple[float, ...] = CROSSING_CENTS,
+    delays_seconds: tuple[float, ...] = DELAYS_SECONDS,
+    depth_floors: tuple[float, ...] = DEPTH_FLOORS,
+) -> dict[str, Any]:
+    if not crossing_cents or any(float(value) < 0 for value in crossing_cents):
+        raise ValueError("crossing_cents must contain non-negative values")
+    if not delays_seconds or any(float(value) < 0 for value in delays_seconds):
+        raise ValueError("delays_seconds must contain non-negative values")
+    if not depth_floors or any(float(value) <= 0 for value in depth_floors):
+        raise ValueError("depth_floors must contain positive values")
     observed = subprocess.check_output(
         ["git", "-C", str(source_root.parent.parent), "rev-parse", "HEAD"], text=True
     ).strip()
@@ -154,27 +168,27 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, A
     splits = [("selection20", selection_runs), ("holdout59", holdout_runs)]
     splits.extend((f"holdout_block_{i}", block) for i, block in enumerate(holdout_blocks(holdout_runs), 1))
     rows: list[dict[str, Any]] = []
-    total_cells = len(CROSSING_CENTS) * len(DELAYS_SECONDS) * len(CANDIDATES) * len(splits) * len(DEPTH_FLOORS)
+    total_cells = len(crossing_cents) * len(delays_seconds) * len(CANDIDATES) * len(splits) * len(depth_floors)
     completed_cells = 0
     print(json.dumps({"format": "h373-progress-v1", "stage": "start", "total_cells": total_cells}, sort_keys=True), flush=True)
-    for crossing in CROSSING_CENTS:
+    for crossing in crossing_cents:
         # Reuse the same feature columns for every crossing value; only the
         # touch label changes.  This keeps the sensitivity grid auditable.
         crossed = attach_maker_snapshots(
             features,
             quotes,
-            delays=DELAYS_SECONDS,
+            delays=delays_seconds,
             minutes=(1, 2, 4),
             crossing_cents=crossing,
         )
-        for delay in DELAYS_SECONDS:
+        for delay in delays_seconds:
             for candidate in CANDIDATES:
                 touch = maker_touch_mask(crossed, candidate, delay)
                 gated = crossed.copy()
                 gated.loc[~touch, [f"{candidate}_side", f"{candidate}_minute", f"{candidate}_fraction"]] = ["skip", -1, 0.0]
                 execution = inject_delay_execution(gated, candidate, delay)
                 for split, names in splits:
-                    for depth in DEPTH_FLOORS:
+                    for depth in depth_floors:
                         metrics = replay_execution(execution, candidate, names, delay, depth)
                         rows.append({
                             "candidate": candidate,
@@ -209,7 +223,7 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, A
         eligible.groupby(["candidate", "crossing_cents", "delay_seconds"], as_index=False)
         .agg(worst_selection_cash=("first_ten_ending_cash_usd", "min"), depth_cells=("depth_floor", "count"))
     )
-    choices = choices[choices["depth_cells"] == len(DEPTH_FLOORS)].sort_values(
+    choices = choices[choices["depth_cells"] == len(depth_floors)].sort_values(
         ["worst_selection_cash", "candidate", "crossing_cents", "delay_seconds"], ascending=[False, True, True, True]
     )
     selected = None if choices.empty else choices.iloc[0].to_dict()
@@ -221,13 +235,13 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, A
     holdout = selected_rows[selected_rows["split"].eq("holdout59")]
     blocks = selected_rows[selected_rows["split"].str.startswith("holdout_block_")]
     holdout_passed = bool(
-        len(holdout) == len(DEPTH_FLOORS)
+        len(holdout) == len(depth_floors)
         and (holdout["first_ten_fills"] == REQUIRED_FILLS).all()
         and holdout["first_ten_passed"].all()
         and (holdout["first_ten_ending_cash_usd"] >= INITIAL_CASH).all()
     )
     block_stability = bool(
-        len(blocks) == len(HOLDOUT_BLOCK_SIZES) * len(DEPTH_FLOORS)
+        len(blocks) == len(HOLDOUT_BLOCK_SIZES) * len(depth_floors)
         and (blocks["first_ten_fills"] == REQUIRED_FILLS).all()
         and blocks["first_ten_passed"].all()
         and (blocks["first_ten_ending_cash_usd"] >= INITIAL_CASH).all()
@@ -239,7 +253,7 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, A
         "complete_runs": len(runs),
         "feature_rows": len(features),
         "candidates": list(CANDIDATES),
-        "grid": {"crossing_cents": list(CROSSING_CENTS), "delay_seconds": list(DELAYS_SECONDS), "depth_floors": list(DEPTH_FLOORS)},
+        "grid": {"crossing_cents": list(crossing_cents), "delay_seconds": list(delays_seconds), "depth_floors": list(depth_floors)},
         "protocol": {"initial_cash_usd": INITIAL_CASH, "minimum_order_usd": MINIMUM_ORDER, "minimum_order_shares": 5.0, "maker_fee_rate": MAKER_FEE_RATE, "settlement_seconds": 300.0, "cash_release_delay_seconds": CASH_RELEASE_DELAY, "same_ledger": True, "single_position_only": True, "required_fills": REQUIRED_FILLS, "paper_only": True},
         "selection_choice": selected,
         "holdout_passed": holdout_passed,
@@ -266,8 +280,19 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--source-commit", default=SOURCE_COMMIT)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--crossing-cents", default=",".join(str(value) for value in CROSSING_CENTS))
+    parser.add_argument("--delays-seconds", default=",".join(str(value) for value in DELAYS_SECONDS))
+    parser.add_argument("--depth-floors", default=",".join(str(value) for value in DEPTH_FLOORS))
     args = parser.parse_args()
-    evaluate(args.source_root, args.output, args.source_commit)
+    parse_values = lambda value: tuple(float(item.strip()) for item in value.split(",") if item.strip())
+    evaluate(
+        args.source_root,
+        args.output,
+        args.source_commit,
+        crossing_cents=parse_values(args.crossing_cents),
+        delays_seconds=parse_values(args.delays_seconds),
+        depth_floors=parse_values(args.depth_floors),
+    )
 
 
 if __name__ == "__main__":
