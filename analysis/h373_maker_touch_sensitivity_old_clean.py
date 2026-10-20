@@ -112,8 +112,7 @@ def prepare(source_root: Path) -> tuple[pd.DataFrame, list[str], pd.DataFrame]:
     return features, runs, quotes
 
 
-def replay(frame: pd.DataFrame, candidate: str, names: list[str], delay: float, depth: float) -> dict[str, Any]:
-    execution = inject_delay_execution(frame, candidate, delay)
+def replay_execution(execution: pd.DataFrame, candidate: str, names: list[str], delay: float, depth: float) -> dict[str, Any]:
     logs, metrics = simulate_cash_locked(
         execution[execution["run_name"].astype(str).isin([str(name) for name in names])],
         candidate,
@@ -136,6 +135,11 @@ def replay(frame: pd.DataFrame, candidate: str, names: list[str], delay: float, 
         single_position_only=True,
     )
     return {**metrics, **chain_summary(paper_events(logs))}
+
+
+def replay(frame: pd.DataFrame, candidate: str, names: list[str], delay: float, depth: float) -> dict[str, Any]:
+    """Compatibility wrapper for one-off callers and unit fixtures."""
+    return replay_execution(inject_delay_execution(frame, candidate, delay), candidate, names, delay, depth)
 
 
 def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, Any]:
@@ -168,9 +172,10 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, A
                 touch = maker_touch_mask(crossed, candidate, delay)
                 gated = crossed.copy()
                 gated.loc[~touch, [f"{candidate}_side", f"{candidate}_minute", f"{candidate}_fraction"]] = ["skip", -1, 0.0]
+                execution = inject_delay_execution(gated, candidate, delay)
                 for split, names in splits:
                     for depth in DEPTH_FLOORS:
-                        metrics = replay(gated, candidate, names, delay, depth)
+                        metrics = replay_execution(execution, candidate, names, delay, depth)
                         rows.append({
                             "candidate": candidate,
                             "crossing_cents": crossing,
