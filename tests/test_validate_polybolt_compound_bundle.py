@@ -409,6 +409,16 @@ def test_current_fill_payout_cannot_be_released_before_its_entry():
     assert result["failure_reason"] == "cash_release_before_entry"
 
 
+def test_prior_release_at_next_entry_timestamp_is_not_admissible():
+    doc = bundle()
+    next_entry = doc["events"][1]["entry_ts_ms"]
+    doc["cash_release_receipts"][0]["release_ts_ms"] = next_entry
+    doc["events"][0]["cash_available_ts_ms"] = next_entry
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "cash_release_timestamp_must_precede_next_entry"
+
+
 def test_source_is_bound_to_each_fill_and_must_precede_entry():
     doc = bundle()
     after_entry = doc["events"][0]["entry_ts_ms"] + 1

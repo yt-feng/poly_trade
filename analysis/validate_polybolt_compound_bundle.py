@@ -516,7 +516,13 @@ def _validate_same_ledger(
                 if prior is row:
                     break
                 prior_receipt = receipt_by_id.get(prior.get("cash_release_receipt_id"))
-                if prior_receipt and prior_receipt["release_ts_ms"] <= entry_ms and prior_receipt["receipt_id"] not in released_receipt_ids:
+                if (
+                    prior_receipt
+                    and prior_receipt["release_ts_ms"] == entry_ms
+                    and prior_receipt["receipt_id"] not in released_receipt_ids
+                ):
+                    return "cash_release_timestamp_must_precede_next_entry"
+                if prior_receipt and prior_receipt["release_ts_ms"] < entry_ms and prior_receipt["receipt_id"] not in released_receipt_ids:
                     due += prior_receipt["amount"]
                     due_receipt_ids.add(prior_receipt["receipt_id"])
             if released_cash != due:
