@@ -65,6 +65,16 @@ def attach_maker_snapshots(
         if g.empty:
             continue
         ts = pd.to_datetime(g["ts_utc"], utc=True, errors="coerce")
+        # Keep the original timestamp ordering and inclusion semantics, but
+        # turn the repeated ``ts >= fill_cut`` DataFrame filters below into
+        # bounded search slices.  H373 evaluates hundreds of cells over the
+        # same markets; rescanning every suffix for every side and delay made
+        # the frozen replay unnecessarily quadratic in snapshot count.
+        ts_index = pd.DatetimeIndex(ts)
+        token_ask_cents = {
+            token: pd.to_numeric(g[f"buy_{token}_cents"], errors="coerce").to_numpy(dtype=float)
+            for token in ("up", "down")
+        }
         first_ts = ts.iloc[0]
         close_ts = g["close_ts_utc"].dropna().iloc[0] if g["close_ts_utc"].notna().any() else pd.NaT
         rec = {"market_id": market_id}
@@ -88,16 +98,18 @@ def attach_maker_snapshots(
                     touch = 0
                     if pd.notna(signal_ts) and pd.notna(maker_price):
                         fill_cut = pd.Timestamp(signal_ts) + pd.Timedelta(seconds=float(delay))
-                        after = g[ts >= fill_cut]
+                        start_pos = int(ts_index.searchsorted(fill_cut, side="left"))
+                        end_pos = len(g)
+                        if pd.notna(close_ts):
+                            end_pos = int(ts_index.searchsorted(close_ts, side="right"))
+                        after_asks = token_ask_cents[token][start_pos:end_pos]
                         # A resting bid can only be treated as a trade-through
                         # proxy when a later observed ask crosses it by the
                         # declared amount. A later bid moving down is not
                         # evidence that our bid was filled.
-                        after = after[pd.to_numeric(after[f"buy_{token}_cents"], errors="coerce").notna()]
-                        if pd.notna(close_ts):
-                            after = after[after["ts_utc"] <= close_ts]
                         maker_cents = pd.to_numeric(signal_row.get(f"sell_{token}_cents"), errors="coerce")
-                        if not after.empty and (pd.to_numeric(after[f"buy_{token}_cents"], errors="coerce") <= maker_cents - float(crossing_cents) + 1e-12).any():
+                        valid_asks = np.isfinite(after_asks)
+                        if valid_asks.any() and (after_asks[valid_asks] <= maker_cents - float(crossing_cents) + 1e-12).any():
                             touch = 1
                     rec.update({
                         f"{prefix}_price": maker_price,
