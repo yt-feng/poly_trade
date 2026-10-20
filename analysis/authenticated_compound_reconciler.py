@@ -239,7 +239,15 @@ def reconcile_authenticated_chain(
         expected_released = Decimal("0")
         due_receipt_ids: set[str] = set()
         for due_ts, due_amount, due_receipt_id in scheduled_releases:
-            if due_ts <= entry_ts and due_receipt_id not in released_receipt_ids:
+            if due_ts == entry_ts and due_receipt_id not in released_receipt_ids:
+                return {
+                    "gate_passed": False,
+                    "fills": 0,
+                    "failure_reason": "cash_available_timestamp_must_precede_next_entry",
+                    "owner_scoped": True,
+                    "identity_complete": False,
+                }
+            if due_ts < entry_ts and due_receipt_id not in released_receipt_ids:
                 expected_released += due_amount
                 due_receipt_ids.add(due_receipt_id)
         if released != expected_released:
