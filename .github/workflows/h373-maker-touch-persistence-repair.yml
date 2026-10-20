@@ -23,6 +23,8 @@ jobs:
       max-parallel: 2
       matrix:
         include:
+          - crossing_cents: "0.0"
+            run_suffix: "000"
           - crossing_cents: "0.25"
             run_suffix: "025"
           - crossing_cents: "1.0"
