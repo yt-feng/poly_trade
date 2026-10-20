@@ -326,13 +326,12 @@ def capture_account(
     transfer_tokens = sorted(V2_COLLATERAL_TOKENS)
     for lower, upper in _chunk_ranges(start, latest_block, chunk_blocks):
         filters = [
-            _log_filter(lower, upper, event_addresses, [POSITION_REDEEMED_TOPIC, None, None, _owner_topic(owner)]),
-            _log_filter(lower, upper, event_addresses, [POSITIONS_MERGED_TOPIC, None, None, _owner_topic(owner)]),
+            # JSON-RPC permits OR lists in topic position 0 and address.
+            # Combining equivalent filters preserves decoding semantics while
+            # materially reducing provider calls for a wide historical audit.
+            _log_filter(lower, upper, event_addresses, [[POSITION_REDEEMED_TOPIC, POSITIONS_MERGED_TOPIC], None, None, _owner_topic(owner)]),
+            _log_filter(lower, upper, transfer_tokens, [TRANSFER_TOPIC, None, _owner_topic(owner)]),
         ]
-        filters.extend(
-            _log_filter(lower, upper, token, [TRANSFER_TOPIC, None, _owner_topic(owner)])
-            for token in transfer_tokens
-        )
         for log_filter in filters:
             query_count += 1
             try:

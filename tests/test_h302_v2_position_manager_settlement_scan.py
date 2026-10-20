@@ -64,6 +64,8 @@ def test_v2_position_redeemed_and_collateral_transfer_join_cash():
                     "logs": [redeemed_log(5_000_000, 5_500_000), transfer_log(MODULE, OWNER, 5_500_000)]},
     }
 
+    event_kind = "redeemed"
+
     def rpc(method, params):
         if method == "eth_getTransactionReceipt":
             return receipts.get(params[0])
@@ -73,6 +75,8 @@ def test_v2_position_redeemed_and_collateral_transfer_join_cash():
             return {"timestamp": "0x7d0"}
         if method == "eth_getLogs":
             topic0 = params[0]["topics"][0]
+            if isinstance(topic0, list):
+                topic0 = POSITION_REDEEMED_TOPIC if event_kind == "redeemed" else topic0[0]
             if topic0 == POSITION_REDEEMED_TOPIC:
                 log = redeemed_log(5_000_000, 5_500_000)
             elif topic0 == POSITIONS_MERGED_TOPIC:
@@ -110,6 +114,8 @@ def test_v2_merge_event_is_condition_bound_and_counted_as_cash_release():
                    "logs": [merged_log(5_500_000), transfer_log(MODULE, OWNER, 5_500_000)]},
     }
 
+    event_kind = "merged"
+
     def rpc(method, params):
         if method == "eth_getTransactionReceipt":
             return receipts.get(params[0])
@@ -119,6 +125,8 @@ def test_v2_merge_event_is_condition_bound_and_counted_as_cash_release():
             return {"timestamp": "0x7d0"}
         if method == "eth_getLogs":
             topic0 = params[0]["topics"][0]
+            if isinstance(topic0, list):
+                topic0 = POSITIONS_MERGED_TOPIC if event_kind == "merged" else topic0[0]
             log = merged_log(5_500_000) if topic0 == POSITIONS_MERGED_TOPIC else transfer_log(MODULE, OWNER, 5_500_000)
             return [{**log, "transactionHash": tx_merge, "blockNumber": "0x6e"}]
         raise AssertionError(method)
