@@ -1,0 +1,35 @@
+name: H373 matrix continuation
+
+on:
+  workflow_run:
+    workflows: [H373 old-clean maker touch sensitivity]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    if: github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch matrix only when no current-branch matrix exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          current_sha="$(gh api "repos/$REPOSITORY/commits/main" --jq '.sha')"
+          runs="$(gh run list --repo "$REPOSITORY" --workflow h373-maker-touch-sensitivity-matrix.yml --limit 100 --json databaseId,headSha,status,conclusion)"
+          if printf '%s' "$runs" | jq -e --arg sha "$current_sha" 'any(.[]; .headSha == $sha)' >/dev/null; then
+            echo 'A matrix run already exists for the current main commit; no duplicate dispatch.'
+            exit 0
+          fi
+          gh workflow run h373-maker-touch-sensitivity-matrix.yml \
+            --repo "$REPOSITORY" \
+            --ref main \
+            --field source_commit=bbda5f2050685f63153621a54641ebdfab943487
+          echo 'H373 matrix continuation dispatched after the serial run reached a terminal state.'
