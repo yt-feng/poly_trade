@@ -95,6 +95,11 @@ V2_MODULES = frozenset({
 V2_COLLATERAL_TOKEN = "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb"
 V2_COLLATERAL_TOKENS = frozenset(set(DEFAULT_COLLATERAL_TOKENS) | {V2_COLLATERAL_TOKEN})
 
+# Keep the historical default conservative, but allow a separately registered
+# wider read-only audit to cover the gap between old seed receipts and the
+# latest block.  This is a query bound, never an admission or trading change.
+MAX_HISTORY_BLOCKS_ALLOWED = 5_000_000
+
 # keccak256("PositionRedeemed(address,uint256,address,uint256,uint256)")
 POSITION_REDEEMED_TOPIC = "0x4fd474b703f46b453536518b4cbc159dfbea6fd663233763d321a9bc8ccdf97f"
 # keccak256("PositionsMerged(address,bytes31,address,uint256)")
@@ -447,8 +452,8 @@ def main() -> None:
     parser.add_argument("--max-history-blocks", type=int, default=MAX_HISTORY_BLOCKS)
     parser.add_argument("--chunk-blocks", type=int, default=DEFAULT_CHUNK_BLOCKS)
     args = parser.parse_args()
-    if not 1 <= args.max_history_blocks <= MAX_HISTORY_BLOCKS:
-        raise SystemExit(f"max-history-blocks must be between 1 and {MAX_HISTORY_BLOCKS}")
+    if not 1 <= args.max_history_blocks <= MAX_HISTORY_BLOCKS_ALLOWED:
+        raise SystemExit(f"max-history-blocks must be between 1 and {MAX_HISTORY_BLOCKS_ALLOWED}")
     if not 1 <= args.chunk_blocks <= args.max_history_blocks:
         raise SystemExit("chunk-blocks must be positive and no larger than max-history-blocks")
     document = json.loads(args.input.read_text(encoding="utf-8"))
