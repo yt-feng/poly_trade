@@ -66,3 +66,18 @@ def test_selection_returns_no_candidate_without_a_ten_fill_growth_chain():
         ]
     )
     assert _select_strategy(frame) == (None, 0)
+
+
+def test_selection_rejects_chain_that_dips_below_minimum_free_cash():
+    frame = pd.DataFrame(
+        [
+            {
+                "strategy": "ending_cash_only_false_positive",
+                "paper_chain_passed": True,
+                "paper_chain_fills": 24,
+                "paper_chain_ending_cash": 14.7,
+                "paper_chain_minimum_cash": 0.03,
+            }
+        ]
+    )
+    assert _select_strategy(frame) == (None, 0)
