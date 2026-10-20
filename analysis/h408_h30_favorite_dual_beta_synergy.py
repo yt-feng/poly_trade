@@ -159,6 +159,7 @@ def replay(frame: pd.DataFrame, names: list[str], slippage: float) -> dict[str, 
         minimum_order=MINIMUM_ORDER,
         required_fills=10,
         evidence_mode="paper_upper_bound",
+        require_prior_cash_release=True,
     )
     full = evaluate_compound_chain(
         events,
@@ -166,6 +167,7 @@ def replay(frame: pd.DataFrame, names: list[str], slippage: float) -> dict[str, 
         minimum_order=MINIMUM_ORDER,
         required_fills=10,
         evidence_mode="paper_upper_bound",
+        require_prior_cash_release=True,
     )
     return {
         "paper_trades": int(metrics["trades"]),
@@ -263,6 +265,7 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
             "entry_minute": ENTRY_MINUTE,
             "fraction": FRACTION,
             "cash_release_delay_seconds": 600.0,
+            "prior_cash_release_required": True,
             "slippages": list(SLIPPAGES),
             "same_ledger": True,
             "no_concatenation": True,
