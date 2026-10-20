@@ -123,7 +123,6 @@ jobs:
               'status': 'complete',
               'stage': 'sealed_delivery',
               'strategy_evaluated': report.get('format') == 'h387-complete-set-maker-replay-v1',
-              'source_replay_status': report.get('status', 'paper_report'),
               'live_orders_enabled': False,
               'plaintext_published': False,
               'sealed_parts': 1,

@@ -12,6 +12,6 @@ def test_h387_is_pinned_small_cash_and_sealed():
     assert "publish_quality_first_journal.py" in text
     assert "'live_orders_enabled': False" in text
     assert "report.get('format') == 'h387-complete-set-maker-replay-v1'" in text
-    assert "'source_replay_status': report.get('status', 'paper_report')" in text
+    assert "source_replay_status" not in text
     assert "POLYMARKET_PRIVATE_KEY" not in text
 
