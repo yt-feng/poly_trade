@@ -94,6 +94,37 @@ class MakerPathEfficiencyShadowTests(unittest.TestCase):
         )
         self.assertEqual(int(result.loc[0, "maker_buy_up_1m_d30_touch"]), 1)
 
+    def test_indexed_touch_respects_delay_and_inclusive_close_boundary(self):
+        first = pd.Timestamp("2026-01-01T00:00:00Z")
+        features = pd.DataFrame({"market_id": ["m"]})
+        close = first + pd.Timedelta(minutes=5)
+        quotes = pd.DataFrame(
+            {
+                "market_id": ["m"] * 4,
+                "ts_utc": [
+                    first,
+                    first + pd.Timedelta(minutes=1, seconds=2),
+                    first + pd.Timedelta(minutes=1, seconds=4),
+                    close,
+                ],
+                "close_ts_utc": [close] * 4,
+                "sell_up_cents": [41, 41, 41, 41],
+                "buy_up_cents": [43, 40, 43, 40],
+                "sell_up_size": [200] * 4,
+                "buy_up_size": [200] * 4,
+                "spread_up_cents": [2] * 4,
+                "sell_down_cents": [50] * 4,
+                "buy_down_cents": [52] * 4,
+                "sell_down_size": [200] * 4,
+                "spread_down_cents": [2] * 4,
+                "mid_overround_cents": [1] * 4,
+            }
+        )
+        result = attach_maker_snapshots(features, quotes, delays=(4,), minutes=(1,))
+        # The 1:02 crossing is before the 1:04 delayed fill cutoff; the
+        # crossing exactly at the five-minute close remains admissible.
+        self.assertEqual(int(result.loc[0, "maker_buy_up_1m_d4_touch"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
