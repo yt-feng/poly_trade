@@ -1,0 +1,93 @@
+name: H373 old-clean maker touch persistence repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Pinned old-clean source commit
+        required: true
+        default: bbda5f2050685f63153621a54641ebdfab943487
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  replay:
+    # These are already-computed H373 cells.  This workflow only recreates the
+    # encrypted delivery with the fixed publisher; it is not a new hypothesis.
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        crossing_cents: ["0.0", "0.25", "1.0"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout pinned clean source
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: ${{ inputs.source_commit }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest scikit-learn
+      - name: Validate H373 contracts
+        run: |
+          python -m py_compile analysis/h373_maker_touch_sensitivity_old_clean.py
+          python -m pytest -q tests/test_maker_path_efficiency_shadow.py tests/test_sequential_compound_gate.py tests/test_capital_floor_feasibility.py
+      - name: Recompute frozen H373 crossing cell
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h373-repair-${{ matrix.crossing_cents }}"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h373_maker_touch_sensitivity_old_clean.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "${{ inputs.source_commit }}" \
+            --crossing-cents "${{ matrix.crossing_cents }}" \
+            --output "$PRIVATE_DIR/results" \
+            2>&1 | tee "$PRIVATE_DIR/analysis-output.txt"
+      - name: Seal and publish repaired H373 crossing cell
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+          SOURCE_DATA_COMMIT: ${{ inputs.source_commit }}
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h373-repair-${{ matrix.crossing_cents }}"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          recipient = research_vault.load_json_bytes(base64.b64decode(os.environ['QUALITY_FIRST_RECIPIENT_JSON_B64'], validate=True), 4096)
+          research_vault.validate_recipient(recipient, os.environ['QUALITY_FIRST_RECIPIENT_ID'])
+          results = private / 'results'
+          payload = {'format': 'old-clean-h373-maker-touch-sensitivity-matrix-sealed-v1', 'summary': json.loads((results / 'report.json').read_text()), 'metrics_csv': (results / 'metrics.csv').read_text(), 'analysis_output': (private / 'analysis-output.txt').read_text(), 'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'crossing_cents': '${{ matrix.crossing_cents }}', 'source_commit': os.environ['SOURCE_DATA_COMMIT'], 'purpose': 'persistence_repair'}}
+          delivery = Path('sealed-delivery'); delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, os.environ['QUALITY_FIRST_RECIPIENT_ID']), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py --source sealed-delivery --repository yt-feng/poly_trade --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --recipient-id "$RESEARCH_RECIPIENT_ID"
+      - name: Redacted summary
+        if: always()
+        run: echo "H373 persistence repair crossing_cents=${{ matrix.crossing_cents }} completed; no live order or Canary row." >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove runner-local plaintext
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/h373-repair-${{ matrix.crossing_cents }}" sealed-delivery
