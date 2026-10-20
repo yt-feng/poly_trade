@@ -1,0 +1,134 @@
+name: H384 old-clean cash release delay sensitivity
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Pinned old-clean source commit
+        required: true
+        default: bbda5f2050685f63153621a54641ebdfab943487
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  h384-cash-clock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout frozen clean-data source
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: ${{ inputs.source_commit }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest scikit-learn
+
+      - name: Validate H384 contract
+        run: |
+          python -m py_compile analysis/h384_old_clean_cash_release_delay.py
+          python -m pytest -q tests/test_cash_release_sensitivity.py tests/test_sequential_compound_gate.py
+
+      - name: Run H384 on pinned old-clean source
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          umask 077
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h384"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h384_old_clean_cash_release_delay.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "${{ inputs.source_commit }}" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt" 2>&1
+
+      - name: Seal and publish H384 results
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+          SOURCE_DATA_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          umask 077
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h384"
+          python - "$PRIVATE_DIR" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+
+          private = Path(sys.argv[1])
+          recipient = research_vault.load_json_bytes(
+              base64.b64decode(os.environ['QUALITY_FIRST_RECIPIENT_JSON_B64'], validate=True), 4096
+          )
+          research_vault.validate_recipient(recipient, os.environ['QUALITY_FIRST_RECIPIENT_ID'])
+          results = private / 'results'
+          payload = {
+              'format': 'old-clean-h384-cash-release-delay-sensitivity-sealed-v1',
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'summary': json.loads((results / 'summary.json').read_text()),
+              'results_csv': (results / 'results.csv').read_text(),
+              'workflow': {
+                  'run_id': os.environ['GITHUB_RUN_ID'],
+                  'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                  'source_commit': os.environ['SOURCE_DATA_COMMIT'],
+                  'hypothesis_id': 'H384-old-clean-cash-release-delay-sensitivity',
+              },
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(
+              delivery / 'part-0000.vault',
+              research_vault.seal(research_vault.canonical(payload), recipient, os.environ['QUALITY_FIRST_RECIPIENT_ID']),
+              0o600,
+          )
+          research_vault.write_new(
+              delivery / 'status.json',
+              research_vault.canonical({
+                  'version': 1,
+                  'status': 'complete',
+                  'stage': 'sealed_delivery',
+                  'strategy_evaluated': True,
+                  'live_orders_enabled': False,
+                  'plaintext_published': False,
+                  'sealed_parts': 1,
+              }) + b'\n',
+              0o644,
+          )
+          PY
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID" \
+            --cell-id h384-cash-clock
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/old-data-h384" sealed-delivery
+
+      - name: Redacted summary
+        if: always()
+        run: |
+          echo "H384 workflow status: ${{ job.status }}." >> "$GITHUB_STEP_SUMMARY"
