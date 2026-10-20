@@ -112,6 +112,13 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, o
         raise RuntimeError("SOURCE_SNAPSHOT_RUN_COUNT_MISMATCH")
     folds = outer_folds(runs)
 
+    # Signal construction is deterministic for a frozen feature table.  Build
+    # each registry frame once so nested folds spend their time on the
+    # chronological cash replay rather than repeating identical transforms.
+    strategy_frames = {
+        strategy: add_signals(features, strategy) for strategy in REGISTRY_NAMES
+    }
+
     train_validation_rows: list[dict[str, object]] = []
     test_rows: list[dict[str, object]] = []
     selected_rows: list[dict[str, object]] = []
@@ -124,7 +131,7 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, o
         test_names = list(fold["test_runs"])
         candidates: list[dict[str, object]] = []
         for strategy in REGISTRY_NAMES:
-            frame = add_signals(features, strategy)
+            frame = strategy_frames[strategy]
             train = {"strategy": strategy, "fold": fold_index, "split": "train", **_metric(frame, strategy, train_names)}
             validation = {"strategy": strategy, "fold": fold_index, "split": "validation", **_metric(frame, strategy, validation_names)}
             train_validation_rows.extend([train, validation])
@@ -144,7 +151,7 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, o
         selected_validation = None if not candidates else candidates[0]
         selected_test = None
         if selected_strategy is not None:
-            frame = add_signals(features, selected_strategy)
+            frame = strategy_frames[selected_strategy]
             selected_test = {"strategy": selected_strategy, "fold": fold_index, "split": "test", **_metric(frame, selected_strategy, test_names)}
             test_rows.append(selected_test)
             selected_rows.append({**selected_test, "validation_ending_cash": selected_validation["ending_cash"], "validation_trades": selected_validation["trades"]})
