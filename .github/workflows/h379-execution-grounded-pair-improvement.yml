@@ -24,7 +24,10 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install vault dependencies
-        run: python -m pip install -r requirements-vault.txt
+        # The replay runs a focused pytest contract before touching the fixed
+        # source; keep the dependency explicit so a clean runner cannot fail
+        # before analysis for an environment-only reason.
+        run: python -m pip install -r requirements-vault.txt pytest
       - name: Download fixed fills and resolution labels
         run: |
           set -euo pipefail
