@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from analysis.h324_polyorderbooks_5m_replay import load_entries, replay
+from analysis.h324_polyorderbooks_5m_replay import _shares, _taker_fee, load_entries, replay
 
 
 def _row(market, token, outcome, winner, tte=120.0, ask=0.40, bid=0.39, pressure=0.6):
@@ -25,6 +25,15 @@ def _row(market, token, outcome, winner, tte=120.0, ask=0.40, bid=0.39, pressure
 
 
 class H324Tests(unittest.TestCase):
+    def test_uses_price_dependent_polymarket_taker_fee(self):
+        self.assertEqual(_taker_fee(100.0, 0.50), 1.75)
+        self.assertEqual(_taker_fee(5.0, 0.99), 0.00347)
+        self.assertEqual(_taker_fee(5.0, 0.01), 0.00347)
+
+    def test_share_budget_accounts_for_each_complement_leg_fee(self):
+        shares = _shares(10.0, [0.40, 0.40], 1.0)
+        self.assertEqual(shares, 11.996)
+
     def test_load_entries_enforces_two_tokens_and_horizon(self):
         rows = [_row(1, "u", "Up", True), _row(1, "d", "Down", False)]
         with tempfile.TemporaryDirectory() as td:

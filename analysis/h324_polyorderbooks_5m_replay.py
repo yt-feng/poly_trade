@@ -33,6 +33,7 @@ DECISION_SECONDS_TO_CLOSE = 120.0
 INITIAL_CASH = 10.0
 MIN_ORDER_SHARES = 5.0
 FEE_RATE = 0.07
+FEE_EXPONENT = 1.0
 RELEASE_DELAY_SECONDS = 600.0
 REQUIRED_FILLS = 10
 FRACTIONS = (0.04, 0.10, 0.20)
@@ -159,12 +160,22 @@ def _pressure(row: pd.Series, side: str) -> float:
     return (bid - ask) / (bid + ask)
 
 
-def _shares(cash: float, price: float, fraction: float, legs: int) -> float:
-    if not (_finite(price) and price > 0):
+def _taker_fee(shares: float, price: float) -> float:
+    """Polymarket crypto taker fee for one leg, rounded to 5 decimals."""
+    if not (_finite(shares) and shares >= 0 and _finite(price) and 0 < price < 1):
+        return float("nan")
+    return round(shares * FEE_RATE * (price ** FEE_EXPONENT) * (1.0 - price), 5)
+
+
+def _shares(cash: float, prices: list[float], fraction: float) -> float:
+    if not prices or not all(_finite(price) and 0 < price < 1 for price in prices):
         return 0.0
     budget = cash * fraction
-    per_share = price * (1.0 + FEE_RATE)
-    return math.floor(min(budget / (per_share * legs), cash / (per_share * legs)) * 1000.0) / 1000.0
+    # A complement trade pays each leg's price and each leg's fee for the
+    # same number of shares.  Using a flat 7% of notional here overstated the
+    # fee and was inconsistent with the official C*rate*p*(1-p) schedule.
+    per_share = sum(price + _taker_fee(1.0, price) for price in prices)
+    return math.floor(min(budget / per_share, cash / per_share) * 1000.0) / 1000.0
 
 
 def _paper_event(
@@ -182,12 +193,19 @@ def _paper_event(
         return None
     if candidate == "complement_arb":
         total = float(row.ask_up) + float(row.ask_down)
-        if total + FEE_RATE * total > 1.0 - ARBITRAGE_MARGIN:
+        pair_fee = _taker_fee(1.0, float(row.ask_up)) + _taker_fee(1.0, float(row.ask_down))
+        if total + pair_fee > 1.0 - ARBITRAGE_MARGIN:
             return None
-        shares = _shares(cash, total, fraction, 1)
+        shares = _shares(cash, [float(row.ask_up), float(row.ask_down)], fraction)
         if shares < MIN_ORDER_SHARES:
             return None
-        return {"legs": 2, "price": total, "shares": shares, "winner": True}
+        return {
+            "legs": 2,
+            "prices": [float(row.ask_up), float(row.ask_down)],
+            "price": total,
+            "shares": shares,
+            "winner": True,
+        }
     pressure_up = _pressure(row, "up")
     pressure_down = _pressure(row, "down")
     if not (_finite(pressure_up) and _finite(pressure_down)):
@@ -197,11 +215,12 @@ def _paper_event(
     if not side:
         return None
     price = float(row[f"ask_{side}"])
-    shares = _shares(cash, price, fraction, 1)
+    shares = _shares(cash, [price], fraction)
     if shares < MIN_ORDER_SHARES:
         return None
     return {
         "legs": 1,
+        "prices": [price],
         "price": price,
         "shares": shares,
         "winner": bool(row[f"winner_{side}"]),
@@ -220,10 +239,9 @@ def replay(entries: pd.DataFrame, candidate: str, fraction: float, depth_floor: 
         event = _paper_event(row, candidate, fraction, depth_floor, cash)
         if event is None:
             continue
-        total_cost = float(event["shares"]) * float(event["price"])
-        if event["legs"] == 2:
-            total_cost *= 1.0
-        fee = total_cost * FEE_RATE
+        prices = [float(price) for price in event["prices"]]
+        total_cost = float(event["shares"]) * sum(prices)
+        fee = sum(_taker_fee(float(event["shares"]), price) for price in prices)
         if cash + 1e-12 < total_cost + fee:
             blocked += 1
             continue
@@ -293,6 +311,7 @@ def evaluate(path: Path, output: Path) -> dict[str, Any]:
             "required_fills": REQUIRED_FILLS,
             "minimum_order_shares": MIN_ORDER_SHARES,
             "fee_rate": FEE_RATE,
+            "fee_exponent": FEE_EXPONENT,
             "settlement_seconds": 300.0,
             "cash_release_delay_seconds": RELEASE_DELAY_SECONDS,
             "same_ledger": True,
