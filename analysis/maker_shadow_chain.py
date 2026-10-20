@@ -40,7 +40,25 @@ def prepare(source_root: Path):
     return features, runs
 
 
-def attach_maker_snapshots(features: pd.DataFrame, quotes: pd.DataFrame, delays, minutes) -> pd.DataFrame:
+def attach_maker_snapshots(
+    features: pd.DataFrame,
+    quotes: pd.DataFrame,
+    delays,
+    minutes,
+    *,
+    crossing_cents: float = 1.0,
+) -> pd.DataFrame:
+    """Attach passive-bid snapshots and a parameterized trade-through proxy.
+
+    ``crossing_cents`` is a sensitivity parameter for an offline upper bound,
+    not evidence that a resting order was filled.  The default preserves the
+    original one-cent proxy used by the H345 audit.
+    """
+    if float(crossing_cents) < 0:
+        raise ValueError("crossing_cents must be non-negative")
+    delay_values = tuple(delays)
+    if any(float(delay) < 0 for delay in delay_values):
+        raise ValueError("delays must be non-negative")
     records = []
     for market_id, group in quotes.groupby("market_id", dropna=False):
         g = group.sort_values("ts_utc").reset_index(drop=True)
@@ -55,38 +73,39 @@ def attach_maker_snapshots(features: pd.DataFrame, quotes: pd.DataFrame, delays,
             signal_pos = int(ts.searchsorted(signal_cut, side="right") - 1)
             signal_row = None if signal_pos < 0 else g.iloc[signal_pos]
             signal_ts = pd.NaT if signal_row is None else signal_row["ts_utc"]
-            for side in ("buy_up", "buy_down"):
-                token = "up" if side == "buy_up" else "down"
-                prefix = f"maker_{side}_{minute}m_d4"
-                if signal_row is None:
-                    rec.update({f"{prefix}_{k}": np.nan for k in ("price", "size", "spread", "overround", "touch")})
-                    continue
-                maker_price = pd.to_numeric(signal_row.get(f"sell_{token}_cents"), errors="coerce") / 100.0
-                maker_size = pd.to_numeric(signal_row.get(f"sell_{token}_size"), errors="coerce")
-                spread = pd.to_numeric(signal_row.get(f"spread_{token}_cents"), errors="coerce") / 100.0
-                overround = pd.to_numeric(signal_row.get("mid_overround_cents"), errors="coerce") / 100.0
-                touch = 0
-                if pd.notna(signal_ts) and pd.notna(maker_price):
-                    fill_cut = pd.Timestamp(signal_ts) + pd.Timedelta(seconds=4)
-                    after = g[ts >= fill_cut]
-                    # A resting bid can only be treated as a trade-through
-                    # proxy when a later observed ask crosses it by at least
-                    # one cent.  A later bid moving down is not evidence that
-                    # our bid was filled and was the old, overly permissive
-                    # touch test.
-                    after = after[pd.to_numeric(after[f"buy_{token}_cents"], errors="coerce").notna()]
-                    if pd.notna(close_ts):
-                        after = after[after["ts_utc"] <= close_ts]
-                    maker_cents = pd.to_numeric(signal_row.get(f"sell_{token}_cents"), errors="coerce")
-                    if not after.empty and (pd.to_numeric(after[f"buy_{token}_cents"], errors="coerce") <= maker_cents - 1.0 + 1e-12).any():
-                        touch = 1
-                rec.update({
-                    f"{prefix}_price": maker_price,
-                    f"{prefix}_size": maker_size,
-                    f"{prefix}_spread": spread,
-                    f"{prefix}_overround": overround,
-                    f"{prefix}_touch": touch,
-                })
+            for delay in delay_values:
+                delay_label = str(int(delay)) if float(delay).is_integer() else str(delay).replace(".", "p")
+                for side in ("buy_up", "buy_down"):
+                    token = "up" if side == "buy_up" else "down"
+                    prefix = f"maker_{side}_{minute}m_d{delay_label}"
+                    if signal_row is None:
+                        rec.update({f"{prefix}_{k}": np.nan for k in ("price", "size", "spread", "overround", "touch")})
+                        continue
+                    maker_price = pd.to_numeric(signal_row.get(f"sell_{token}_cents"), errors="coerce") / 100.0
+                    maker_size = pd.to_numeric(signal_row.get(f"sell_{token}_size"), errors="coerce")
+                    spread = pd.to_numeric(signal_row.get(f"spread_{token}_cents"), errors="coerce") / 100.0
+                    overround = pd.to_numeric(signal_row.get("mid_overround_cents"), errors="coerce") / 100.0
+                    touch = 0
+                    if pd.notna(signal_ts) and pd.notna(maker_price):
+                        fill_cut = pd.Timestamp(signal_ts) + pd.Timedelta(seconds=float(delay))
+                        after = g[ts >= fill_cut]
+                        # A resting bid can only be treated as a trade-through
+                        # proxy when a later observed ask crosses it by the
+                        # declared amount. A later bid moving down is not
+                        # evidence that our bid was filled.
+                        after = after[pd.to_numeric(after[f"buy_{token}_cents"], errors="coerce").notna()]
+                        if pd.notna(close_ts):
+                            after = after[after["ts_utc"] <= close_ts]
+                        maker_cents = pd.to_numeric(signal_row.get(f"sell_{token}_cents"), errors="coerce")
+                        if not after.empty and (pd.to_numeric(after[f"buy_{token}_cents"], errors="coerce") <= maker_cents - float(crossing_cents) + 1e-12).any():
+                            touch = 1
+                    rec.update({
+                        f"{prefix}_price": maker_price,
+                        f"{prefix}_size": maker_size,
+                        f"{prefix}_spread": spread,
+                        f"{prefix}_overround": overround,
+                        f"{prefix}_touch": touch,
+                    })
         records.append(rec)
     return features.merge(pd.DataFrame(records), on="market_id", how="left")
 

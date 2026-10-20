@@ -66,6 +66,34 @@ class MakerPathEfficiencyShadowTests(unittest.TestCase):
         result = attach_maker_snapshots(features, quotes, delays=(4,), minutes=(1,))
         self.assertEqual(int(result.loc[0, "maker_buy_up_1m_d4_touch"]), 0)
 
+    def test_touch_sensitivity_can_use_zero_cent_crossing_and_distinct_delay(self):
+        first = pd.Timestamp("2026-01-01T00:00:00Z")
+        features = pd.DataFrame({"market_id": ["m"], "first_quote_ts": [first]})
+        quotes = pd.DataFrame(
+            {
+                "market_id": ["m", "m", "m"],
+                "ts_utc": [first, first + pd.Timedelta(minutes=1), first + pd.Timedelta(minutes=1, seconds=30)],
+                "close_ts_utc": [first + pd.Timedelta(minutes=5)] * 3,
+                "sell_up_cents": [41, 41, 41],
+                "buy_up_cents": [43, 43, 41],
+                "sell_up_size": [200, 200, 200],
+                "spread_up_cents": [2, 2, 0],
+                "mid_overround_cents": [1, 1, 1],
+                "sell_down_cents": [50, 50, 50],
+                "buy_down_cents": [52, 52, 52],
+                "sell_down_size": [200, 200, 200],
+                "spread_down_cents": [2, 2, 2],
+            }
+        )
+        result = attach_maker_snapshots(
+            features,
+            quotes,
+            delays=(30,),
+            minutes=(1,),
+            crossing_cents=0.0,
+        )
+        self.assertEqual(int(result.loc[0, "maker_buy_up_1m_d30_touch"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
