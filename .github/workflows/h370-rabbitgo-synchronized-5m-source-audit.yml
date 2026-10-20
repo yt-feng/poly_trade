@@ -33,6 +33,7 @@ jobs:
             curl --fail --location --retry 3 --max-time 600 "$DATASET_BASE/$name" --output "$private_dir/$name"
           done
       - name: Run source contract audit
+        id: source_audit
         run: |
           set -euo pipefail
           private_dir="$RUNNER_TEMP/h370"
@@ -41,6 +42,8 @@ jobs:
             --output "$private_dir/results" \
             > "$private_dir/analysis-output.txt" 2>&1
       - name: Seal H370 results
+        id: seal_h370
+        if: always()
         env:
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
@@ -55,19 +58,23 @@ jobs:
           recipient = research_vault.load_json_bytes(base64.b64decode(os.environ['QUALITY_FIRST_RECIPIENT_JSON_B64'], validate=True), 4096)
           recipient_id = os.environ['QUALITY_FIRST_RECIPIENT_ID']
           research_vault.validate_recipient(recipient, recipient_id)
-          report = json.loads((private / 'results' / 'report.json').read_text())
+          report_path = private / 'results' / 'report.json'
+          report = json.loads(report_path.read_text()) if report_path.exists() else None
+          analysis_output_path = private / 'analysis-output.txt'
           payload = {
               'format': 'h370-rabbitgo-synchronized-5m-source-audit-sealed-v1',
+              'status': 'complete' if report is not None else 'failed',
               'report': report,
-              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'analysis_output': analysis_output_path.read_text() if analysis_output_path.exists() else '',
               'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
           }
           delivery = Path('sealed-delivery')
           delivery.mkdir(mode=0o700)
           research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
-          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': False, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': payload['status'], 'stage': 'sealed_delivery', 'strategy_evaluated': False, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
           PY
       - name: Publish encrypted H370 journal
+        if: always() && steps.seal_h370.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}

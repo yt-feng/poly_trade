@@ -11,11 +11,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 
 FORMAT = "h370-rabbitgo-synchronized-5m-source-audit-v1"
@@ -48,72 +49,134 @@ def _first_column(frame: pd.DataFrame, names: tuple[str, ...]) -> str | None:
     return next((name for name in names if name in frame.columns), None)
 
 
-def _clock_contract(frame: pd.DataFrame) -> dict[str, Any]:
-    result: dict[str, Any] = {"rows": int(len(frame))}
-    missing = sorted(REQUIRED_COMMON - set(frame.columns))
+def _parquet_file(path: Path) -> pq.ParquetFile:
+    """Open metadata without materialising the complete public sample."""
+    return pq.ParquetFile(path, memory_map=True)
+
+
+def _batches(path: Path, columns: list[str]):
+    parquet = _parquet_file(path)
+    selected = [column for column in columns if column in parquet.schema_arrow.names]
+    if not selected:
+        return
+    yield from parquet.iter_batches(columns=selected, batch_size=250_000, use_threads=True)
+
+
+def _numeric(values: list[Any]) -> np.ndarray:
+    return pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(dtype=float)
+
+
+def _clock_contract(path: Path, names: list[str]) -> dict[str, Any]:
+    result: dict[str, Any] = {"rows": int(_parquet_file(path).metadata.num_rows)}
+    missing = sorted(REQUIRED_COMMON - set(names))
     result["missing_common_fields"] = missing
-    if missing or frame.empty:
+    if missing or result["rows"] == 0:
         result.update({"monotonic_seq": False, "monotonic_ts": False})
         return result
-    seq = pd.to_numeric(frame["seq_local"], errors="coerce")
-    ts = pd.to_numeric(frame["ts_local"], errors="coerce")
-    result["null_seq_rows"] = int(seq.isna().sum())
-    result["null_ts_rows"] = int(ts.isna().sum())
-    result["monotonic_seq"] = bool(seq.notna().all() and seq.is_monotonic_increasing)
-    result["monotonic_ts"] = bool(ts.notna().all() and ts.is_monotonic_increasing)
-    if ts.notna().any():
-        result["first_ts_local"] = int(ts.min())
-        result["last_ts_local"] = int(ts.max())
-        result["span_seconds"] = float((ts.max() - ts.min()) / 1_000_000.0)
+    null_seq = 0
+    null_ts = 0
+    monotonic_seq = True
+    monotonic_ts = True
+    previous_seq: float | None = None
+    previous_ts: float | None = None
+    first_ts: float | None = None
+    last_ts: float | None = None
+    for batch in _batches(path, ["seq_local", "ts_local"]):
+        seq = _numeric(batch.column("seq_local").to_pylist())
+        ts = _numeric(batch.column("ts_local").to_pylist())
+        null_seq += int(np.isnan(seq).sum())
+        null_ts += int(np.isnan(ts).sum())
+        valid_seq = seq[~np.isnan(seq)]
+        valid_ts = ts[~np.isnan(ts)]
+        if len(valid_seq):
+            monotonic_seq = monotonic_seq and bool(np.all(np.diff(valid_seq) >= 0))
+            if previous_seq is not None:
+                monotonic_seq = monotonic_seq and bool(valid_seq[0] >= previous_seq)
+            previous_seq = float(valid_seq[-1])
+        if len(valid_ts):
+            monotonic_ts = monotonic_ts and bool(np.all(np.diff(valid_ts) >= 0))
+            if previous_ts is not None:
+                monotonic_ts = monotonic_ts and bool(valid_ts[0] >= previous_ts)
+            previous_ts = float(valid_ts[-1])
+            if first_ts is None:
+                first_ts = float(valid_ts[0])
+            last_ts = float(valid_ts[-1])
+    result["null_seq_rows"] = null_seq
+    result["null_ts_rows"] = null_ts
+    result["monotonic_seq"] = bool(null_seq == 0 and monotonic_seq)
+    result["monotonic_ts"] = bool(null_ts == 0 and monotonic_ts)
+    if first_ts is not None and last_ts is not None:
+        result["first_ts_local"] = int(first_ts)
+        result["last_ts_local"] = int(last_ts)
+        result["span_seconds"] = float((last_ts - first_ts) / 1_000_000.0)
     return result
 
 
-def _coverage(frame: pd.DataFrame, candidates: tuple[str, ...]) -> dict[str, Any]:
-    column = _first_column(frame, candidates)
+def _coverage(path: Path, names: list[str], candidates: tuple[str, ...]) -> dict[str, Any]:
+    column = _first_column(pd.DataFrame(columns=names), candidates)
+    rows = int(_parquet_file(path).metadata.num_rows)
     if column is None:
-        return {"column": None, "rows": int(len(frame)), "non_null_rows": 0, "coverage": 0.0}
-    values = frame[column]
-    non_null = int(values.notna().sum())
-    return {"column": column, "rows": int(len(frame)), "non_null_rows": non_null,
-            "coverage": float(non_null / len(frame)) if len(frame) else 0.0}
+        return {"column": None, "rows": rows, "non_null_rows": 0, "coverage": 0.0}
+    null_rows = 0
+    for batch in _batches(path, [column]):
+        null_rows += int(batch.column(column).null_count)
+    non_null = rows - null_rows
+    return {"column": column, "rows": rows, "non_null_rows": non_null,
+            "coverage": float(non_null / rows) if rows else 0.0}
 
 
-def _market_count(frame: pd.DataFrame) -> dict[str, Any]:
-    column = _first_column(frame, ("market", "market_id", "condition_id", "slug"))
+def _market_count(path: Path, names: list[str]) -> dict[str, Any]:
+    column = _first_column(pd.DataFrame(columns=names), ("market", "market_id", "condition_id", "slug"))
     if column is None:
         return {"identity_column": None, "unique_markets": 0, "btc_5m_markets": 0}
-    values = frame[column].astype(str)
-    unique = set(values[values.ne("nan")])
+    unique: set[str] = set()
+    for batch in _batches(path, [column]):
+        for value in batch.column(column).to_pylist():
+            if value is not None:
+                unique.add(str(value))
     five_minute = sum("btc" in value.lower() and "5m" in value.lower() for value in unique)
     return {"identity_column": column, "unique_markets": len(unique), "btc_5m_markets": int(five_minute)}
 
 
-def _lead_lag_probe(polymarket: pd.DataFrame, binance: pd.DataFrame) -> dict[str, Any]:
+def _read_numeric(path: Path, column: str) -> np.ndarray:
+    arrays = []
+    for batch in _batches(path, [column]):
+        arrays.append(_numeric(batch.column(column).to_pylist()))
+    return np.concatenate(arrays) if arrays else np.array([], dtype=float)
+
+
+def _lead_lag_probe(polymarket: Path, polymarket_names: list[str], binance: Path, binance_names: list[str]) -> dict[str, Any]:
     """Count only causal timestamp candidates; do not infer a trade signal."""
-    pm_ts_col = _first_column(polymarket, ("ts_local",))
-    bn_ts_col = _first_column(binance, ("ts_local",))
-    price_col = _first_column(binance, ("p", "price"))
+    pm_ts_col = _first_column(pd.DataFrame(columns=polymarket_names), ("ts_local",))
+    bn_ts_col = _first_column(pd.DataFrame(columns=binance_names), ("ts_local",))
+    price_col = _first_column(pd.DataFrame(columns=binance_names), ("p", "price"))
     if pm_ts_col is None or bn_ts_col is None or price_col is None:
         return {"large_move_events": 0, "candidate_pairs": 0, "threshold_bps": 5.0,
                 "window_ms": 500.0, "available": False}
-    pm_ts = pd.to_numeric(polymarket[pm_ts_col], errors="coerce").dropna().sort_values().to_numpy()
-    bn = binance[[bn_ts_col, price_col]].copy()
-    bn[bn_ts_col] = pd.to_numeric(bn[bn_ts_col], errors="coerce")
-    bn[price_col] = pd.to_numeric(bn[price_col], errors="coerce")
-    bn = bn.dropna().sort_values(bn_ts_col, kind="stable")
-    if len(bn) < 2 or len(pm_ts) == 0:
+    pm_ts = _read_numeric(polymarket, pm_ts_col)
+    bn_ts = _read_numeric(binance, bn_ts_col)
+    price = _read_numeric(binance, price_col)
+    pm_ts = np.sort(pm_ts[~np.isnan(pm_ts)])
+    valid = ~np.isnan(bn_ts) & ~np.isnan(price)
+    bn_ts = bn_ts[valid]
+    price = price[valid]
+    order = np.argsort(bn_ts, kind="stable")
+    bn_ts = bn_ts[order]
+    price = price[order]
+    if len(price) < 2 or len(pm_ts) == 0:
         return {"large_move_events": 0, "candidate_pairs": 0, "threshold_bps": 5.0,
                 "window_ms": 500.0, "available": True}
-    price = bn[price_col].to_numpy(dtype=float)
-    previous = pd.Series(price).shift(1).to_numpy(dtype=float)
+    previous = np.roll(price, 1)
+    previous[0] = np.nan
     move_bps = (price / previous - 1.0) * 10_000.0
-    event_ts = bn[bn_ts_col].to_numpy(dtype=float)
-    large = (pd.Series(move_bps).abs() >= 5.0).to_numpy()
-    large_ts = event_ts[large & math.isfinite(float(event_ts[-1]))]
+    event_ts = bn_ts
+    large = np.abs(move_bps) >= 5.0
+    large &= np.isfinite(event_ts)
+    large_ts = event_ts[large]
     if len(large_ts) == 0:
         return {"large_move_events": 0, "candidate_pairs": 0, "threshold_bps": 5.0,
                 "window_ms": 500.0, "available": True}
-    positions = pd.Series(pm_ts).searchsorted(large_ts, side="left")
+    positions = np.searchsorted(pm_ts, large_ts, side="left")
     valid = positions < len(pm_ts)
     positions = positions[valid]
     source = large_ts[valid]
@@ -131,28 +194,28 @@ def audit(input_dir: Path, output: Path) -> dict[str, Any]:
     missing_files = [name for name, path in files.items() if not path.is_file()]
     if missing_files:
         raise ValueError("MISSING_INPUT_FILES:" + ",".join(missing_files))
-    frames = {name: pd.read_parquet(path) for name, path in files.items()}
-    pm, bn, cl = frames["polymarket"], frames["binance"], frames["chainlink"]
+    parquet = {name: _parquet_file(path) for name, path in files.items()}
+    names = {name: list(parquet[name].schema_arrow.names) for name in files}
     fields = {}
-    for name, frame in frames.items():
+    for name, path in files.items():
         fields[name] = {
-            "columns": sorted(str(column) for column in frame.columns),
-            "clock": _clock_contract(frame),
+            "columns": sorted(str(column) for column in names[name]),
+            "clock": _clock_contract(path, names[name]),
         }
     field_coverage = {
-        name: {field: _coverage(frame, candidates) for field, candidates in PREDECLARED_FIELDS.items()}
-        for name, frame in frames.items()
+        name: {field: _coverage(path, names[name], candidates) for field, candidates in PREDECLARED_FIELDS.items()}
+        for name, path in files.items()
     }
     report = {
         "format": FORMAT,
         "sample_id": SAMPLE_ID,
         "source_scope": "one-hour public synchronized sample; source-contract audit only",
-        "files": {name: {"rows": int(len(frame)), "sha256": _sha256(path)} for name, (frame, path) in
-                  ((name, (frames[name], path)) for name, path in files.items())},
+        "files": {name: {"rows": int(parquet[name].metadata.num_rows), "sha256": _sha256(path)}
+                  for name, path in files.items()},
         "field_contract": fields,
         "field_coverage": field_coverage,
-        "market_identity": _market_count(pm),
-        "lead_lag_probe": _lead_lag_probe(pm, bn),
+        "market_identity": _market_count(files["polymarket"], names["polymarket"]),
+        "lead_lag_probe": _lead_lag_probe(files["polymarket"], names["polymarket"], files["binance"], names["binance"]),
         "h369_activation": {
             "synchronized_public_fields_available": bool(
                 fields["polymarket"]["clock"]["monotonic_seq"]
