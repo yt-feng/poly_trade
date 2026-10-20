@@ -42,11 +42,11 @@ def blob_id(data):
     return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
 
 
-def publish(source, repository, run_id, run_attempt, recipient_id, api=github_api):
+def publish(source, repository, run_id, run_attempt, recipient_id, api=github_api, *, cell_id=None):
     if repository != REPOSITORY:
         raise ValueError('UNEXPECTED_REPOSITORY')
     with tempfile.TemporaryDirectory(prefix='sealed-journal-validated-') as temporary:
-        receipt = persist_delivery(source, temporary, repository, run_id, run_attempt, recipient_id)
+        receipt = persist_delivery(source, temporary, repository, run_id, run_attempt, recipient_id, cell_id=cell_id)
         episode = Path(temporary) / receipt['episode_id']
         files = {f'research_vault/episodes/{receipt["episode_id"]}/{p.name}': p.read_bytes()
                  for p in episode.iterdir()}
@@ -124,9 +124,10 @@ def main():
     parser.add_argument('--run-id', required=True)
     parser.add_argument('--run-attempt', required=True)
     parser.add_argument('--recipient-id', default=os.environ.get('RESEARCH_RECIPIENT_ID'))
+    parser.add_argument('--cell-id', help='Optional stable matrix-cell label; omission keeps legacy episode names.')
     args = parser.parse_args()
     try:
-        result = publish(args.source, args.repository, args.run_id, args.run_attempt, args.recipient_id)
+        result = publish(args.source, args.repository, args.run_id, args.run_attempt, args.recipient_id, cell_id=args.cell_id)
         print(json.dumps(result, sort_keys=True))
         return 0
     except Exception:

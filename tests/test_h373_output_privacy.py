@@ -122,6 +122,7 @@ def synthetic_workspace(tmp_path, failure):
         parser = argparse.ArgumentParser()
         for flag in ('source', 'repository', 'run-id', 'run-attempt', 'recipient-id'):
             parser.add_argument('--' + flag, required=True)
+        parser.add_argument('--cell-id')
         args = parser.parse_args()
         Path('publisher-called.json').write_text(json.dumps(vars(args)))
         validate_delivery(args.source, args.recipient_id)
@@ -219,6 +220,7 @@ def test_private_output_and_fail_closed_delivery(filename, failure, tmp_path):
         assert receipt["repository"] == "yt-feng/poly_trade"
         assert receipt["run_id"] == env["GITHUB_RUN_ID"]
         assert receipt["run_attempt"] == env["GITHUB_RUN_ATTEMPT"]
+        assert receipt["cell_id"] == ("h373-crossing-0.25" if "matrix" in filename or "repair" in filename else None)
     else:
         assert not (tmp_path / "synthetic-published.json").exists()
     if failure in {"analysis", "seal", "partial_seal", "stale_private", "stale_delivery"}:

@@ -53,7 +53,7 @@ def validate_status(value):
     return {key: value[key] for key in sorted(expected)}
 
 
-def episode_identity(repository, run_id, run_attempt):
+def episode_identity(repository, run_id, run_attempt, *, cell_id=None):
     if not isinstance(repository, str) or not re.fullmatch(
             r'[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}', repository):
         raise ValueError('INVALID_REPOSITORY_IDENTITY')
@@ -66,6 +66,12 @@ def episode_identity(repository, run_id, run_attempt):
         if not isinstance(value, str) or not re.fullmatch(r'[1-9][0-9]{0,19}', value):
             raise ValueError('INVALID_RUN_IDENTITY')
         identity[name] = value
+    # Omission preserves every legacy episode name. A caller may opt into a
+    # stable cell label; never derive it from ciphertext or empirical status.
+    if cell_id is not None:
+        if not isinstance(cell_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}', cell_id):
+            raise ValueError('INVALID_CELL_IDENTITY')
+        identity['cell_id'] = cell_id
     return hashlib.sha256(b'quality-first-sealed-episode-v1\0' + research_vault.canonical(identity)).hexdigest()
 
 
@@ -136,8 +142,8 @@ def validate_delivery(source, expected_recipient):
     return result
 
 
-def persist_delivery(source, episodes_dir, repository, run_id, run_attempt, expected_recipient):
-    opaque_id = episode_identity(repository, run_id, run_attempt)
+def persist_delivery(source, episodes_dir, repository, run_id, run_attempt, expected_recipient, *, cell_id=None):
+    opaque_id = episode_identity(repository, run_id, run_attempt, cell_id=cell_id)
     source, episodes_dir = Path(source), Path(episodes_dir)
     delivery = inspect_delivery(source, expected_recipient)
     status_bytes = research_vault.canonical(delivery['status']) + b'\n'
@@ -197,10 +203,11 @@ def main():
     parser.add_argument('--run-id', required=True)
     parser.add_argument('--run-attempt', required=True)
     parser.add_argument('--recipient-id', required=True)
+    parser.add_argument('--cell-id', help='Optional stable matrix-cell label; omission keeps legacy episode names.')
     args = parser.parse_args()
     try:
         result = persist_delivery(args.input, args.episodes_dir, args.repository,
-                                  args.run_id, args.run_attempt, args.recipient_id)
+                                  args.run_id, args.run_attempt, args.recipient_id, cell_id=args.cell_id)
     except Exception:
         # No malformed source content, filenames, or exception text in public CI.
         print('{"version":1,"status":"rejected","plaintext_published":false}')

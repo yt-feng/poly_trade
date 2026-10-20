@@ -1,13 +1,16 @@
 """Fake Git Data API tests: no GitHub calls, credentials or real research."""
 import base64
 import copy
+from contextlib import redirect_stdout
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
@@ -104,6 +107,7 @@ class JournalPublisherTests(unittest.TestCase):
         self.source.mkdir()
         private = X25519PrivateKey.generate()
         recipient = research_vault.recipient_for(private)
+        self.recipient = recipient
         self.rid = recipient['recipient_id']
         (self.source / 'part-0000.vault').write_bytes(research_vault.seal(b'synthetic research only', recipient, self.rid))
         (self.source / 'status.json').write_text(json.dumps({
@@ -185,6 +189,93 @@ class JournalPublisherTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'CONFLICT'):
                 self.publish()
             self.assertTrue(all(method == 'GET' for method, _, _ in self.api.calls[before:]))
+
+    def test_unscoped_distinct_matrix_deliveries_still_conflict_without_overwrite(self):
+        self.publish()
+        original = self.api.current_files()
+        before = len(self.api.calls)
+        (self.source / 'part-0000.vault').write_bytes(research_vault.seal(
+            b'synthetic different matrix cell', self.recipient, self.rid))
+        with self.assertRaisesRegex(ValueError, 'EXISTING_EPISODE_CONFLICT'):
+            self.publish()
+        self.assertEqual(self.api.current_files(), original)
+        self.assertTrue(all(method == 'GET' for method, _, _ in self.api.calls[before:]))
+
+    def test_opt_in_cells_coexist_with_legacy_retry_and_reject_changed_same_cell(self):
+        legacy = self.publish()
+        identities = {legacy['episode_id']}
+        for label in ('h373-crossing-0.0', 'h373-crossing-0.25'):
+            previous = self.api.current_files()
+            (self.source / 'part-0000.vault').write_bytes(research_vault.seal(
+                ('synthetic ' + label).encode(), self.recipient, self.rid))
+            result = publisher.publish(self.source, publisher.REPOSITORY, '123', '1',
+                                       self.rid, self.api, cell_id=label)
+            identities.add(result['episode_id'])
+            self.assertEqual(result['status'], 'verified_remote')
+            actual = self.api.current_files()
+            self.assertTrue(all(actual[path] == value for path, value in previous.items()))
+            self.assertFalse(any(label in path for path in actual))
+            before = len(self.api.calls)
+            retry = publisher.publish(self.source, publisher.REPOSITORY, '123', '1',
+                                      self.rid, api=self.api, cell_id=label)
+            self.assertEqual(retry['episode_id'], result['episode_id'])
+            self.assertTrue(all(method == 'GET' for method, _, _ in self.api.calls[before:]))
+        self.assertEqual(len(identities), 3)
+        self.assertEqual(len(self.api.current_files()), 6)
+        previous = self.api.current_files()
+        before = len(self.api.calls)
+        (self.source / 'part-0000.vault').write_bytes(research_vault.seal(
+            b'changed same cell', self.recipient, self.rid))
+        with self.assertRaisesRegex(ValueError, 'EXISTING_EPISODE_CONFLICT'):
+            publisher.publish(self.source, publisher.REPOSITORY, '123', '1',
+                              self.rid, api=self.api, cell_id='h373-crossing-0.25')
+        self.assertEqual(self.api.current_files(), previous)
+        self.assertTrue(all(method == 'GET' for method, _, _ in self.api.calls[before:]))
+
+    def test_cell_identity_survives_concurrent_ref_retry(self):
+        self.publish()
+        self.api.concurrent_patch_once = True
+        with patch.object(publisher.time, 'sleep'):
+            result = publisher.publish(self.source, publisher.REPOSITORY, '123', '1',
+                                       self.rid, api=self.api, cell_id='h373-crossing-0.25')
+        actual = self.api.current_files()
+        self.assertIn(self.api.concurrent_path, actual)
+        self.assertIn(self.prefix + 'part-0000.vault', actual)
+        self.assertIn('research_vault/episodes/' + result['episode_id'] + '/part-0000.vault', actual)
+        self.assertEqual(result['status'], 'verified_remote')
+
+    def test_invalid_cell_is_rejected_before_api_access(self):
+        for label in ('', '../escape', 'a' * 65, True):
+            with self.subTest(cell=label), self.assertRaisesRegex(ValueError, 'INVALID_CELL_IDENTITY'):
+                publisher.publish(self.source, publisher.REPOSITORY, '123', '1',
+                                  self.rid, api=self.api, cell_id=label)
+        self.assertEqual(self.api.calls, [])
+
+    def test_cli_optional_cell_uses_real_publisher_with_fake_api(self):
+        original_publish = publisher.publish
+        def offline_publish(*args, **kwargs):
+            return original_publish(*args, api=self.api, **kwargs)
+        identities = []
+        for label in (None, 'h373-crossing-0.25', '../invalid'):
+            argv = ['publish', '--source', str(self.source), '--repository', publisher.REPOSITORY,
+                    '--run-id', '123', '--run-attempt', '1', '--recipient-id', self.rid]
+            if label is not None:
+                argv += ['--cell-id', label]
+            output = io.StringIO()
+            before = len(self.api.calls)
+            with patch.object(sys, 'argv', argv), patch.object(publisher, 'publish', side_effect=offline_publish), redirect_stdout(output):
+                code = publisher.main()
+            result = json.loads(output.getvalue())
+            if label == '../invalid':
+                self.assertEqual(code, 2)
+                self.assertEqual(result['status'], 'publication_failed')
+                self.assertEqual(len(self.api.calls), before)
+            else:
+                self.assertEqual(code, 0)
+                identities.append(result['episode_id'])
+            if label:
+                self.assertNotIn(label, output.getvalue())
+        self.assertNotEqual(*identities)
 
 
 if __name__ == '__main__':

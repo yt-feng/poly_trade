@@ -1,5 +1,7 @@
 """Synthetic sealed journal persistence contracts; no keys/accounts/network."""
 import copy
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
 import sys
@@ -182,6 +184,70 @@ class SealedJournalTests(unittest.TestCase):
         report = research_journal_guard.audit_paths([prefix + 'status.json'], self.root)
         self.assertFalse(report['passed'])
         self.assertEqual(report['reason_codes'], ['INVALID_EPISODE_STATUS'])
+
+    def test_legacy_episode_name_is_byte_for_byte_unchanged(self):
+        expected = '1a14da7c34e7847ecd72ea0f70bd2b40848bf20c56013a0131acd79c4c8e59b4'
+        self.assertEqual(journal.episode_identity('yt-feng/poly_trade', '123456789', '2'), expected)
+        self.assertEqual(journal.episode_identity('YT-FENG/poly_trade', 123456789, 2, cell_id=None), expected)
+
+    def test_cell_delivery_isolation_idempotency_and_conflict(self):
+        legacy = self.persist()
+        def cell(label):
+            return journal.persist_delivery(self.source, self.episodes, 'example/research',
+                                            '123456', '1', self.rid, cell_id=label)
+        first = cell('h373-crossing-0.0')
+        original = (self.source / 'part-0000.vault').read_bytes()
+        (self.source / 'part-0000.vault').write_bytes(research_vault.seal(b'synthetic second cell', self.recipient, self.rid))
+        second = cell('h373-crossing-0.25')
+        self.assertEqual(cell('h373-crossing-0.25')['status'], 'already_present')
+        self.assertEqual(len({legacy['episode_id'], first['episode_id'], second['episode_id']}), 3)
+        for result in (legacy, first):
+            self.assertEqual((self.episodes / result['episode_id'] / 'part-0000.vault').read_bytes(), original)
+        (self.source / 'part-0000.vault').write_bytes(research_vault.seal(b'changed same cell', self.recipient, self.rid))
+        with self.assertRaisesRegex(ValueError, 'DIFFERENT_DELIVERY'):
+            cell('h373-crossing-0.25')
+        self.assertEqual(len(list(self.episodes.iterdir())), 3)
+
+    def test_cell_identity_rejects_invalid_labels_before_writing(self):
+        for bad in [True, 0, 1.0, '', '.', '..', '../x', 'a/b', 'a\\b', 'a:b',
+                    'a\n', 'a b', 'é', 'a' * 65, {}, []]:
+            with self.subTest(cell=bad), self.assertRaisesRegex(ValueError, 'INVALID_CELL_IDENTITY'):
+                journal.persist_delivery(self.source, self.episodes, 'example/research',
+                                         '123456', '1', self.rid, cell_id=bad)
+            self.assertFalse(self.episodes.exists())
+
+    def test_cell_identity_keeps_run_dimensions_and_exact_labels(self):
+        base = journal.episode_identity('example/research', '123456', '1', cell_id='0.25')
+        self.assertEqual(base, journal.episode_identity('Example/Research', 123456, 1, cell_id='0.25'))
+        others = [
+            journal.episode_identity('example/research', '123456', '1'),
+            journal.episode_identity('example/research', '123456', '1', cell_id='0.250'),
+            journal.episode_identity('example/research', '123456', '2', cell_id='0.25'),
+            journal.episode_identity('example/research', '123457', '1', cell_id='0.25'),
+            journal.episode_identity('example/other', '123456', '1', cell_id='0.25'),
+            journal.episode_identity('example/research', '123456', '1', cell_id='a' * 64),
+        ]
+        self.assertEqual(len(set([base] + others)), 7)
+
+    def test_cli_cell_opt_in_and_legacy_default(self):
+        identities = []
+        for label in (None, 'h373-crossing-0.25'):
+            argv = ['persist', '--input', str(self.source), '--episodes-dir', str(self.episodes),
+                    '--repository', 'example/research', '--run-id', '123456',
+                    '--run-attempt', '1', '--recipient-id', self.rid]
+            if label is not None:
+                argv += ['--cell-id', label]
+            for expected in ('persisted', 'already_present'):
+                output = io.StringIO()
+                with patch.object(sys, 'argv', argv), redirect_stdout(output):
+                    self.assertEqual(journal.main(), 0)
+                result = json.loads(output.getvalue())
+                self.assertEqual(result['status'], expected)
+                if label:
+                    self.assertNotIn(label, output.getvalue())
+            identities.append(result['episode_id'])
+        self.assertNotEqual(*identities)
+        self.assertEqual({p.name for p in self.episodes.iterdir()}, set(identities))
 
 
 if __name__ == '__main__':
