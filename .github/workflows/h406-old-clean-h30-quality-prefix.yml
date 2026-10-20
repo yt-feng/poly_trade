@@ -1,0 +1,127 @@
+name: H406 old-clean H30 strict-quality prefix
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Pinned old-clean source commit
+        required: true
+        default: bbda5f2050685f63153621a54641ebdfab943487
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout pinned clean-data source
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: ${{ inputs.source_commit }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install replay dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy pytest scikit-learn
+
+      - name: Validate fixed H30 contract
+        run: python -m pytest -q tests/test_h406_old_clean_h30_quality_prefix.py tests/test_sequential_compound_gate.py
+
+      - name: Run fixed strict-quality H30 replay
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h406-old-clean-h30-quality-prefix"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h406_old_clean_h30_quality_prefix.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "${{ inputs.source_commit }}" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+
+      - name: Seal H406 results
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+          SOURCE_DATA_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/h406-old-clean-h30-quality-prefix" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          results = private / 'results'
+          payload = {
+              'format': 'old-clean-h406-h30-quality-prefix-sealed-v1',
+              'summary': json.loads((results / 'report.json').read_text()),
+              'metrics_csv': (results / 'metrics.csv').read_text(),
+              'coverage_csv': (results / 'coverage.csv').read_text(),
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'workflow': {
+                  'run_id': os.environ['GITHUB_RUN_ID'],
+                  'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                  'ref': os.environ['GITHUB_REF'],
+                  'source_commit': os.environ['SOURCE_DATA_COMMIT'],
+              },
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish encrypted H406 journal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Write redacted summary
+        if: always()
+        run: |
+          echo '## H406 old-clean H30 strict-quality prefix' >> "$GITHUB_STEP_SUMMARY"
+          echo '- One frozen H30 candidate was replayed on the pinned quality-first source.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- No new data, threshold tuning, refit, live order, or Canary count is allowed.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Detailed results remain in the encrypted research vault.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove runner-local plaintext
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'h406-old-clean-h30-quality-prefix', Path('sealed-delivery')):
+              if path.exists():
+                  shutil.rmtree(path)
+          PY
