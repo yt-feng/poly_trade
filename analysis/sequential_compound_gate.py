@@ -148,6 +148,13 @@ def evaluate_compound_chain(
         while pending and pending[0][0] <= entry_ts:
             _, payout_due = heapq.heappop(pending)
             cash += payout_due
+        # The venue minimum is an account-level free-cash requirement, not
+        # merely a condition on the amount eventually filled.  A partial
+        # paper fill must not turn a balance below the minimum into a valid
+        # next compound entry.
+        if cash < floor:
+            failure_reason = "insufficient_cash_for_minimum_order"
+            break
         reserved = cost + fee
         if reserved > cash:
             failure_reason = "insufficient_cash_for_next_entry"

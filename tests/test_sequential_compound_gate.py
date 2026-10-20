@@ -72,6 +72,19 @@ def test_resetting_cash_between_fills_cannot_hide_an_unfunded_next_entry():
     assert result["failure_reason"] == "insufficient_cash_for_next_entry"
 
 
+def test_free_cash_must_stay_at_minimum_order_before_each_entry():
+    # A partial or low-cost paper fill cannot make a balance below the venue
+    # minimum eligible for the next compound entry.
+    first = event(0, cost="5", payout="0")
+    first["fee"] = "0.1"
+    events = [first, event(1, cost="5", payout="5")]
+    result = evaluate_compound_chain(
+        events, required_fills=2, evidence_mode="paper_upper_bound"
+    )
+    assert result["fills"] == 1
+    assert result["failure_reason"] == "insufficient_cash_for_minimum_order"
+
+
 def test_unconfirmed_event_breaks_the_chain():
     result = evaluate_compound_chain([event(0), event(1, status="paper")])
     assert result["gate_passed"] is False

@@ -64,6 +64,7 @@ def _select_strategy(selection: pd.DataFrame) -> tuple[str | None, int]:
         selection["paper_chain_passed"].astype(bool)
         & selection["paper_chain_fills"].ge(10)
         & selection["paper_chain_ending_cash"].ge(MINIMUM_ORDER)
+        & selection["paper_chain_minimum_cash"].ge(MINIMUM_ORDER)
     ].sort_values(
         ["paper_chain_ending_cash", "paper_chain_fills", "strategy"],
         ascending=[False, False, True],
@@ -159,7 +160,7 @@ def evaluate(source_root: Path, output: Path, source_commit: str | None = None) 
             "cash_release_delay_seconds": DELAY_SECONDS,
         },
         "selected_by_paper_selection": best_strategy,
-        "selection_rule": "eligible only when one-ledger ten-fill paper chain is growth-positive and ending cash >= $5; rank by ending cash, then fills, then strategy",
+        "selection_rule": "eligible only when one-ledger ten-fill paper chain is growth-positive, every entry has >= $5 free cash, and ending cash >= $5; rank by ending cash, then fills, then strategy",
         "selection_eligible_count": selection_eligible_count,
         "selected_holdout": selected_holdout,
         "selected_all_test": selected_all,

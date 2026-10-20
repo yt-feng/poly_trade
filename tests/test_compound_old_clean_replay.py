@@ -16,24 +16,28 @@ def test_selection_requires_growth_positive_ten_fill_chain_before_ranking_cash()
                 "paper_chain_passed": False,
                 "paper_chain_fills": 50,
                 "paper_chain_ending_cash": 25.0,
+                "paper_chain_minimum_cash": 10.0,
             },
             {
                 "strategy": "eligible_lower_cash",
                 "paper_chain_passed": True,
                 "paper_chain_fills": 10,
                 "paper_chain_ending_cash": 11.0,
+                "paper_chain_minimum_cash": 5.0,
             },
             {
                 "strategy": "eligible_higher_cash",
                 "paper_chain_passed": True,
                 "paper_chain_fills": 10,
                 "paper_chain_ending_cash": 12.0,
+                "paper_chain_minimum_cash": 5.5,
             },
             {
                 "strategy": "short_chain",
                 "paper_chain_passed": True,
                 "paper_chain_fills": 9,
                 "paper_chain_ending_cash": 30.0,
+                "paper_chain_minimum_cash": 10.0,
             },
         ]
     )
@@ -50,12 +54,14 @@ def test_selection_returns_no_candidate_without_a_ten_fill_growth_chain():
                 "paper_chain_passed": False,
                 "paper_chain_fills": 20,
                 "paper_chain_ending_cash": 20.0,
+                "paper_chain_minimum_cash": 5.0,
             },
             {
                 "strategy": "short",
                 "paper_chain_passed": True,
                 "paper_chain_fills": 9,
                 "paper_chain_ending_cash": 20.0,
+                "paper_chain_minimum_cash": 5.0,
             },
         ]
     )
