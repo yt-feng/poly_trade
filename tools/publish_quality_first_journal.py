@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 
 from persist_quality_first_journal import persist_delivery
 
@@ -74,7 +75,10 @@ def publish(source, repository, run_id, run_attempt, recipient_id, api=github_ap
                           for entry in tree['tree']}
 
     uploaded = False
-    for _ in range(3):
+    # Parallel matrix cells can all read the same branch tip and race on the
+    # compare-and-swap ref update.  Re-read and rebase with bounded backoff so
+    # a transient publication race is not reported as a research failure.
+    for attempt in range(6):
         parent = read_ref()
         tree_sha, existing = read_tree(parent)
         episode_prefix = f'research_vault/episodes/{receipt["episode_id"]}/'
@@ -104,6 +108,7 @@ def publish(source, repository, run_id, run_attempt, recipient_id, api=github_ap
                 api('POST', prefix + '/git/refs', {'ref': 'refs/heads/' + BRANCH, 'sha': commit['sha']})
         except (ApiError, subprocess.TimeoutExpired):
             # An uncertain write is resolved by readback before any retry.
+            time.sleep(min(0.25 * (2 ** attempt), 2.0))
             continue
         # Read the actual branch tree on the next iteration, even after success.
     _, actual = read_tree(read_ref())
