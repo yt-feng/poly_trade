@@ -8,6 +8,11 @@ on:
         required: false
         default: https://polygon-bor-rpc.publicnode.com
         type: string
+      receipt_rpc_url:
+        description: Optional read-only Polygon JSON-RPC endpoint for transaction receipts
+        required: false
+        default: https://polygon-bor-rpc.publicnode.com
+        type: string
       max_history_blocks:
         description: Maximum historical block span per account
         required: false
@@ -49,6 +54,7 @@ jobs:
           POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
           BTC5M_POLYMARKET_PRIVATE_KEY: ${{ secrets.BTC5M_POLYMARKET_PRIVATE_KEY }}
           RPC_URL: ${{ inputs.rpc_url }}
+          RECEIPT_RPC_URL: ${{ inputs.receipt_rpc_url }}
           MAX_HISTORY_BLOCKS: ${{ inputs.max_history_blocks }}
           CHUNK_BLOCKS: ${{ inputs.chunk_blocks }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
@@ -118,6 +124,7 @@ jobs:
                 --input "$private_dir/h302-input.json" \
                 --output "$private_dir/h302.json" \
                 --rpc-url "$RPC_URL" \
+                --receipt-rpc-url "$RECEIPT_RPC_URL" \
                 --max-history-blocks "$MAX_HISTORY_BLOCKS" \
                 --chunk-blocks "$CHUNK_BLOCKS"
               h302_rc=$?
@@ -153,7 +160,8 @@ jobs:
                    'workflow':{'run_id':os.environ['GITHUB_RUN_ID'],
                                'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],
                                'ref':os.environ['GITHUB_REF'],
-                               'rpc_url_sha256':hashlib.sha256(os.environ.get('RPC_URL','').encode()).hexdigest()}}
+                               'rpc_url_sha256':hashlib.sha256(os.environ.get('RPC_URL','').encode()).hexdigest(),
+                               'receipt_rpc_url_sha256':hashlib.sha256(os.environ.get('RECEIPT_RPC_URL','').encode()).hexdigest()}}
           delivery=Path('sealed-delivery'); delivery.mkdir(mode=0o700)
           research_vault.write_new(delivery/'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
           complete=int(os.environ.get('H279_RC','1')) == 0 and int(os.environ.get('H302_RC','1')) == 0

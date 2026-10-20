@@ -439,6 +439,11 @@ def main() -> None:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--rpc-url", required=True)
+    parser.add_argument(
+        "--receipt-rpc-url",
+        default="",
+        help="Optional read-only endpoint for transaction receipts; history RPC remains --rpc-url.",
+    )
     parser.add_argument("--max-history-blocks", type=int, default=MAX_HISTORY_BLOCKS)
     parser.add_argument("--chunk-blocks", type=int, default=DEFAULT_CHUNK_BLOCKS)
     args = parser.parse_args()
@@ -447,9 +452,19 @@ def main() -> None:
     if not 1 <= args.chunk_blocks <= args.max_history_blocks:
         raise SystemExit("chunk-blocks must be positive and no larger than max-history-blocks")
     document = json.loads(args.input.read_text(encoding="utf-8"))
+    receipt_rpc_url = args.receipt_rpc_url.strip() or args.rpc_url
+
+    def rpc_call(method: str, params: list[Any]) -> Any:
+        # Some public providers support broad eth_getLogs ranges but fail on
+        # transaction receipts (and the reverse is also observed).  Keep the
+        # two read-only surfaces independently selectable without changing the
+        # settlement admission logic.
+        endpoint = receipt_rpc_url if method == "eth_getTransactionReceipt" else args.rpc_url
+        return _rpc_call(endpoint, method, params)
+
     result = capture(
         document.get("accounts") or [],
-        rpc_call=lambda method, params: _rpc_call(args.rpc_url, method, params),
+        rpc_call=rpc_call,
         max_history_blocks=args.max_history_blocks,
         chunk_blocks=args.chunk_blocks,
     )
