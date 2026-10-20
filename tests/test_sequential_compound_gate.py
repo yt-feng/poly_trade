@@ -141,6 +141,35 @@ def test_overlapping_entries_use_one_cash_ledger_and_are_compounding():
     assert result["gate_passed"] is True
 
 
+def test_strict_canary_chain_requires_prior_release_before_next_entry():
+    first = event(0, payout="5.50")
+    second = event(1, cost="4", payout="5")
+    second["entry_ts"] = "5"
+    result = evaluate_compound_chain(
+        [first, second],
+        required_fills=2,
+        minimum_order="4",
+        require_prior_cash_release=True,
+        evidence_mode="paper_upper_bound",
+    )
+    assert result["fills"] == 1
+    assert result["failure_reason"] == "prior_cash_release_must_precede_next_entry"
+
+
+def test_strict_canary_chain_rejects_leftover_cash_after_zero_payout():
+    first = event(0, payout="0")
+    second = event(1, cost="4", payout="5")
+    result = evaluate_compound_chain(
+        [first, second],
+        required_fills=2,
+        minimum_order="4",
+        require_prior_cash_release=True,
+        evidence_mode="paper_upper_bound",
+    )
+    assert result["fills"] == 1
+    assert result["failure_reason"] == "prior_cash_release_required"
+
+
 def test_events_must_be_chronological():
     first = event(1)
     second = event(0)

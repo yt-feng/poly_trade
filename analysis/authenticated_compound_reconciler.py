@@ -252,6 +252,8 @@ def reconcile_authenticated_chain(
                 due_receipt_ids.add(due_receipt_id)
         if released != expected_released:
             return {"gate_passed": False, "fills": 0, "failure_reason": "released_cash_amount_mismatch", "owner_scoped": True, "identity_complete": False}
+        if index > 0 and released <= Decimal("0"):
+            return {"gate_passed": False, "fills": 0, "failure_reason": "prior_cash_release_required", "owner_scoped": True, "identity_complete": False}
         released_receipt_ids.update(due_receipt_ids)
         scheduled_releases.append((Decimal(str(available_ts)), payout, _text(row.get("cash_release_receipt_id"))))
         previous_checkpoint = checkpoint
@@ -265,6 +267,7 @@ def reconcile_authenticated_chain(
         required_fills=required_fills,
         evidence_mode="authenticated",
         require_cash_release_receipt=True,
+        require_prior_cash_release=True,
     )
     result.update({
         "owner_scoped": True,

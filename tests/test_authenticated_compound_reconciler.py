@@ -170,3 +170,17 @@ def test_prior_release_at_same_timestamp_as_next_entry_is_not_admissible():
     )
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "cash_available_timestamp_must_precede_next_entry"
+
+
+def test_prior_release_after_next_entry_is_not_admissible():
+    rows = [row(i) for i in range(10)]
+    rows[0]["cash_available_ts"] = "250"
+    result = reconcile_authenticated_chain(
+        rows,
+        owner="owner-1",
+        starting_checkpoint_id="opening",
+        closing_balance_checkpoint_id="closing",
+        closing_balance="15.00",
+    )
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "released_cash_amount_mismatch"

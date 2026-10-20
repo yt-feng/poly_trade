@@ -32,6 +32,7 @@ def evaluate_compound_chain(
     required_fills: int = 10,
     evidence_mode: str = "authenticated",
     require_cash_release_receipt: bool = False,
+    require_prior_cash_release: bool = False,
     stop_after_required_fills: bool = False,
 ) -> dict[str, Any]:
     """Evaluate a single no-reset sequence of settled account events.
@@ -45,8 +46,14 @@ def evaluate_compound_chain(
     ``require_cash_release_receipt=True``; this adds a distinct
     ``cash_release_receipt_id`` requirement.  A confirmed trade alone is not
     enough to establish that the cash was released for the next fill.  Events
-    may overlap, but every entry is funded from the same cash ledger: settled
-    payouts are released before each entry whose timestamp has arrived.  The
+    may overlap by default, but every entry is funded from the same cash ledger:
+    settled payouts are released before each entry whose timestamp has arrived.
+    When ``require_prior_cash_release`` is true, the chain is the stricter
+    single-position interpretation: after the first entry, each next entry
+    must occur strictly after the prior entry's cash release and must consume
+    a positive release.  This is the user-defined continuous-compound Canary
+    contract; leftover opening cash cannot be used to hide a missing release.
+    The
     returned ``fills`` count is therefore a consecutive, reusable-cash chain,
     rather than an aggregate count across independent trials.  When
     ``stop_after_required_fills`` is true, processing ends immediately after
@@ -60,6 +67,10 @@ def evaluate_compound_chain(
         raise ValueError("unsupported evidence_mode")
     if type(stop_after_required_fills) is not bool:
         raise ValueError("stop_after_required_fills must be a bool")
+    if type(require_cash_release_receipt) is not bool:
+        raise ValueError("require_cash_release_receipt must be a bool")
+    if type(require_prior_cash_release) is not bool:
+        raise ValueError("require_prior_cash_release must be a bool")
     cash = _money(initial_cash, "initial_cash")
     start_cash = cash
     floor = _money(minimum_order, "minimum_order")
@@ -72,6 +83,7 @@ def evaluate_compound_chain(
     minimum_cash_before_entry = cash
     pending: list[tuple[Decimal, Decimal]] = []
     previous_entry: Decimal | None = None
+    previous_cash_available: Decimal | None = None
     stopped_after_required = False
     # Paper rows normally do not carry account identities.  When a caller
     # does provide them, preserve the same-ledger contract instead of silently
@@ -145,10 +157,16 @@ def evaluate_compound_chain(
         if previous_entry is not None and entry_ts <= previous_entry:
             failure_reason = "events_not_chronological"
             break
+        if require_prior_cash_release and previous_entry is not None:
+            if previous_cash_available is None or entry_ts <= previous_cash_available:
+                failure_reason = "prior_cash_release_must_precede_next_entry"
+                break
         previous_entry = entry_ts
+        released_this_entry = Decimal("0")
         while pending and pending[0][0] <= entry_ts:
             _, payout_due = heapq.heappop(pending)
             cash += payout_due
+            released_this_entry += payout_due
         minimum_cash_before_entry = min(minimum_cash_before_entry, cash)
         # The venue minimum is an account-level free-cash requirement, not
         # merely a condition on the amount eventually filled.  A partial
@@ -156,6 +174,12 @@ def evaluate_compound_chain(
         # next compound entry.
         if cash < floor:
             failure_reason = "insufficient_cash_for_minimum_order"
+            break
+        if require_prior_cash_release and rows and released_this_entry <= 0:
+            # The prior release must be represented by a positive cash release
+            # before the next entry.  A zero-payout trade cannot be converted
+            # into a valid compound step by spending leftover opening cash.
+            failure_reason = "prior_cash_release_required"
             break
         reserved = cost + fee
         if reserved > cash:
@@ -165,6 +189,7 @@ def evaluate_compound_chain(
         cash -= reserved
         minimum_cash = min(minimum_cash, cash)
         heapq.heappush(pending, (available_ts, payout))
+        previous_cash_available = available_ts
         rows.append(
             {
                 "index": index,

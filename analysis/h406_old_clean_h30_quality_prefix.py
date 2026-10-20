@@ -76,6 +76,7 @@ def replay(frame: pd.DataFrame, run_names: list[str], slippage: float) -> dict[s
         minimum_order=MINIMUM_ORDER,
         required_fills=REQUIRED_FILLS,
         evidence_mode="paper_upper_bound",
+        require_prior_cash_release=True,
     )
     full = evaluate_compound_chain(
         events,
@@ -83,6 +84,7 @@ def replay(frame: pd.DataFrame, run_names: list[str], slippage: float) -> dict[s
         minimum_order=MINIMUM_ORDER,
         required_fills=REQUIRED_FILLS,
         evidence_mode="paper_upper_bound",
+        require_prior_cash_release=True,
     )
     return {
         "paper_trades": int(metrics["trades"]),
@@ -164,7 +166,7 @@ def evaluate(
         "selection_runs": len(selection_runs),
         "holdout_runs": len(holdout_runs),
         "candidate": CANDIDATE,
-        "selection_rule": "one frozen H30 candidate; selection must pass the exact ten-fill same-ledger prefix at both declared slippages before holdout is interpreted",
+        "selection_rule": "one frozen H30 candidate; selection must pass the exact ten-fill same-ledger prefix at both declared slippages, with every next entry strictly after the prior cash release, before holdout is interpreted",
         "selection_prefix_passed": selection_passed,
         "holdout_prefix_passed": holdout_passed,
         "holdout_block_diagnostics": block_rows.to_dict(orient="records"),
@@ -181,14 +183,16 @@ def evaluate(
             "cash_release_delay_seconds": DELAY_SECONDS,
             "slippages": list(SLIPPAGES),
             "same_ledger": True,
+            "cash_chain_contiguous": True,
+            "prior_cash_release_required": True,
             "no_concatenation": True,
             "paper_only": True,
         },
         "decision": "admit_for_receipt_join" if selection_passed and holdout_passed else "reject_h406_strict_quality_prefix",
         "root_cause": (
-            "The frozen H30 prefix passed the declared old-clean quality-first ten-fill gate."
+            "The frozen H30 prefix passed the declared old-clean quality-first ten-fill gate with a strictly sequential release chain."
             if selection_passed and holdout_passed
-            else "The strict-quality source did not preserve a fee-adjusted ten-fill prefix in both selection and holdout."
+            else "The strict-release gate rejected the H30 paper prefix because the next observed entry often precedes the prior cash release; chronological row counts therefore cannot be treated as a continuous compound chain."
         ),
         "new_data_collected": False,
         "model_refit": False,
