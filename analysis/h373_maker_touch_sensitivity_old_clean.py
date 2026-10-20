@@ -150,6 +150,9 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, A
     splits = [("selection20", selection_runs), ("holdout59", holdout_runs)]
     splits.extend((f"holdout_block_{i}", block) for i, block in enumerate(holdout_blocks(holdout_runs), 1))
     rows: list[dict[str, Any]] = []
+    total_cells = len(CROSSING_CENTS) * len(DELAYS_SECONDS) * len(CANDIDATES) * len(splits) * len(DEPTH_FLOORS)
+    completed_cells = 0
+    print(json.dumps({"format": "h373-progress-v1", "stage": "start", "total_cells": total_cells}, sort_keys=True), flush=True)
     for crossing in CROSSING_CENTS:
         # Reuse the same feature columns for every crossing value; only the
         # touch label changes.  This keeps the sensitivity grid auditable.
@@ -177,6 +180,19 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, A
                             "maker_touch_rows": int(touch[gated["run_name"].astype(str).isin([str(n) for n in names])].sum()),
                             **metrics,
                         })
+                        completed_cells += 1
+                        if completed_cells == 1 or completed_cells % 16 == 0 or completed_cells == total_cells:
+                            print(json.dumps({
+                                "format": "h373-progress-v1",
+                                "stage": "cell",
+                                "completed_cells": completed_cells,
+                                "total_cells": total_cells,
+                                "crossing_cents": crossing,
+                                "delay_seconds": delay,
+                                "candidate": candidate,
+                                "split": split,
+                                "depth_floor": depth,
+                            }, sort_keys=True), flush=True)
     table = pd.DataFrame(rows)
     selection = table[table["split"].eq("selection20")].copy()
     eligible = selection[

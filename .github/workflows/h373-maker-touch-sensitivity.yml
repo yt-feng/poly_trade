@@ -50,7 +50,7 @@ jobs:
             --source-root source_poly/data/monthly_runs \
             --source-commit "${{ inputs.source_commit }}" \
             --output "$PRIVATE_DIR/results" \
-            > "$PRIVATE_DIR/analysis-output.txt"
+            2>&1 | tee "$PRIVATE_DIR/analysis-output.txt"
       - name: Seal H373 results
         env:
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
