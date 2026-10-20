@@ -74,7 +74,14 @@ def _select_strategy(selection: pd.DataFrame) -> tuple[str | None, int]:
     return str(eligible.iloc[0]["strategy"]), int(len(eligible))
 
 
-def evaluate(source_root: Path, output: Path, source_commit: str | None = None) -> dict[str, object]:
+def evaluate(
+    source_root: Path,
+    output: Path,
+    source_commit: str | None = None,
+    *,
+    strict_quality: bool = False,
+    max_snapshot_age_seconds: float = 90.0,
+) -> dict[str, object]:
     if source_commit:
         repo_root = source_root.resolve().parents[1]
         observed = subprocess.check_output(
@@ -82,7 +89,11 @@ def evaluate(source_root: Path, output: Path, source_commit: str | None = None) 
         ).strip()
         if observed != source_commit:
             raise RuntimeError("SOURCE_SNAPSHOT_COMMIT_MISMATCH")
-    features, _coverage, runs = prepare_registry_data(source_root)
+    features, _coverage, runs = prepare_registry_data(
+        source_root,
+        strict_quality=strict_quality,
+        max_snapshot_age_seconds=max_snapshot_age_seconds,
+    )
     test_runs = runs[4:]
     selection_runs = test_runs[:20]
     holdout_runs = test_runs[20:]
@@ -147,6 +158,8 @@ def evaluate(source_root: Path, output: Path, source_commit: str | None = None) 
         "format": "old-clean-single-account-compound-replay-v1",
         "source_root": str(source_root),
         "source_repo_commit": source_commit,
+        "strict_quality": bool(strict_quality),
+        "max_snapshot_age_seconds": float(max_snapshot_age_seconds),
         "complete_runs": len(runs),
         "feature_rows": len(features),
         "selection_runs": len(selection_runs),
@@ -183,8 +196,16 @@ def main() -> None:
     parser.add_argument("--source-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--source-commit")
+    parser.add_argument("--strict-quality", action="store_true")
+    parser.add_argument("--max-snapshot-age-seconds", type=float, default=90.0)
     args = parser.parse_args()
-    evaluate(args.source_root, args.output, args.source_commit)
+    evaluate(
+        args.source_root,
+        args.output,
+        args.source_commit,
+        strict_quality=args.strict_quality,
+        max_snapshot_age_seconds=args.max_snapshot_age_seconds,
+    )
 
 
 if __name__ == "__main__":

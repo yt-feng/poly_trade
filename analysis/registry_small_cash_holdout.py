@@ -48,7 +48,12 @@ def holdout_blocks(runs: list[str]) -> list[list[str]]:
     return blocks
 
 
-def prepare_registry_data(source_root: Path) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+def prepare_registry_data(
+    source_root: Path,
+    *,
+    strict_quality: bool = False,
+    max_snapshot_age_seconds: float = 90.0,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     raw, coverage = base.read_all_monthly_runs(source_root)
     coverage = coverage.sort_values("run_name").reset_index(drop=True)
     maximum = int(coverage["file_count"].max())
@@ -57,7 +62,11 @@ def prepare_registry_data(source_root: Path) -> tuple[pd.DataFrame, pd.DataFrame
         raise RuntimeError("SOURCE_SNAPSHOT_RUN_COUNT_MISMATCH")
     raw = raw[raw["run_name"].astype(str).isin(runs)].copy()
     quotes = base.prepare_quotes(raw)
-    features = base.build_features(quotes)
+    features = base.build_features(
+        quotes,
+        strict_quality=bool(strict_quality),
+        max_snapshot_age_seconds=float(max_snapshot_age_seconds),
+    )
     features["pred_prob_up_logit"] = qrf.rolling_logit_safe(features)
     features = qrf.v1.add_session_labels(features)
     features = qrf.v1.add_quality_features(features)
