@@ -51,6 +51,28 @@ def _paper_events(logs: pd.DataFrame) -> list[dict[str, str]]:
     ]
 
 
+def _select_strategy(selection: pd.DataFrame) -> tuple[str | None, int]:
+    """Apply the pre-registered selection rule to one chronological prefix.
+
+    A candidate must first have a ten-fill, growth-positive single-ledger
+    paper chain and finish with at least the minimum order notional.  Only
+    then is ending cash used to rank candidates.  Ranking by fill count first
+    can promote a high-frequency loser and is a selection leak relative to
+    the small-cash holdout contract.
+    """
+    eligible = selection[
+        selection["paper_chain_passed"].astype(bool)
+        & selection["paper_chain_fills"].ge(10)
+        & selection["paper_chain_ending_cash"].ge(MINIMUM_ORDER)
+    ].sort_values(
+        ["paper_chain_ending_cash", "paper_chain_fills", "strategy"],
+        ascending=[False, False, True],
+    )
+    if eligible.empty:
+        return None, 0
+    return str(eligible.iloc[0]["strategy"]), int(len(eligible))
+
+
 def evaluate(source_root: Path, output: Path, source_commit: str | None = None) -> dict[str, object]:
     if source_commit:
         repo_root = source_root.resolve().parents[1]
@@ -108,14 +130,15 @@ def evaluate(source_root: Path, output: Path, source_commit: str | None = None) 
     result = pd.DataFrame(rows)
     output.mkdir(parents=True, exist_ok=True)
     result.to_csv(output / "compound_metrics.csv", index=False)
-    selection = result[result["split"].eq("selection20")].sort_values(
-        ["paper_chain_passed", "paper_chain_fills", "paper_chain_ending_cash"],
-        ascending=[False, False, False],
-    )
+    selection = result[result["split"].eq("selection20")]
     holdout = result[result["split"].eq("holdout59")]
     all_test = result[result["split"].eq("all_test79")]
-    best_selection = selection.iloc[0].to_dict() if not selection.empty else None
-    best_strategy = None if best_selection is None else str(best_selection["strategy"])
+    best_strategy, selection_eligible_count = _select_strategy(selection)
+    best_selection = (
+        selection[selection["strategy"].eq(best_strategy)].iloc[0].to_dict()
+        if best_strategy is not None
+        else None
+    )
     selected_holdout = holdout[holdout["strategy"].eq(best_strategy)].iloc[0].to_dict() if best_strategy and not holdout[holdout["strategy"].eq(best_strategy)].empty else None
     selected_all = all_test[all_test["strategy"].eq(best_strategy)].iloc[0].to_dict() if best_strategy and not all_test[all_test["strategy"].eq(best_strategy)].empty else None
     meta = {
@@ -136,6 +159,8 @@ def evaluate(source_root: Path, output: Path, source_commit: str | None = None) 
             "cash_release_delay_seconds": DELAY_SECONDS,
         },
         "selected_by_paper_selection": best_strategy,
+        "selection_rule": "eligible only when one-ledger ten-fill paper chain is growth-positive and ending cash >= $5; rank by ending cash, then fills, then strategy",
+        "selection_eligible_count": selection_eligible_count,
         "selected_holdout": selected_holdout,
         "selected_all_test": selected_all,
         "paper_only": True,
