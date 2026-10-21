@@ -70,18 +70,27 @@ jobs:
           recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
           research_vault.validate_recipient(recipient, recipient_id)
           report = json.loads((private / 'report.json').read_text(encoding='utf-8'))
-          sidecar = base64.b64encode((private / 'identity-sidecar.jsonl.gz').read_bytes()).decode('ascii')
-          payload = {
-              'format': 'h462-h391-identity-sidecar-sealed-v1',
-              'report': report,
-              'sidecar_encoding': 'base64-gzip-jsonl',
-              'sidecar_b64': sidecar,
-              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'head_sha': os.environ['GITHUB_SHA']},
-          }
+          sidecar_bytes = (private / 'identity-sidecar.jsonl.gz').read_bytes()
+          chunk_size = 6 * 1024 * 1024
+          chunks = [sidecar_bytes[offset:offset + chunk_size] for offset in range(0, len(sidecar_bytes), chunk_size)]
+          if not chunks or len(chunks) > 16:
+              raise SystemExit('sidecar_chunk_count_out_of_bounds')
           delivery = Path('sealed-delivery')
           delivery.mkdir(mode=0o700)
-          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
-          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': False, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          workflow = {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'head_sha': os.environ['GITHUB_SHA']}
+          for index, chunk in enumerate(chunks):
+              payload = {
+                  'format': 'h462-h391-identity-sidecar-sealed-v1',
+                  'report': report if index == 0 else {'format': report['format'], 'sidecar': report['sidecar']},
+                  'sidecar_encoding': 'base64-gzip-jsonl-chunk',
+                  'chunk_index': index,
+                  'chunk_count': len(chunks),
+                  'chunk_sha256': __import__('hashlib').sha256(chunk).hexdigest(),
+                  'chunk_b64': base64.b64encode(chunk).decode('ascii'),
+                  'workflow': workflow,
+              }
+              research_vault.write_new(delivery / f'part-{index:04d}.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': False, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': len(chunks)}) + b'\n', 0o644)
           PY
       - name: Publish encrypted sidecar
         env:
