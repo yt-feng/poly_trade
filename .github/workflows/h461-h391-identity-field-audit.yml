@@ -79,6 +79,18 @@ jobs:
         if: always()
         run: |
           echo '## H461 H391 raw execution identity field audit' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$RUNNER_TEMP/h461/report.json" ]; then
+            python - "$RUNNER_TEMP/h461/report.json" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          report = json.loads(open(sys.argv[1], encoding='utf-8').read())
+          rows = report.get('rows', {})
+          print(f"- Aggregate rows: total={rows.get('total', 0)}, complete identity rows={rows.get('complete_identity_rows', 0)}.")
+          fields = report.get('identity_fields', {})
+          print("- Public identity field coverage: " + ", ".join(f"{k}={v.get('present_rows', 0)}" for k, v in sorted(fields.items())) + ".")
+          missing = report.get('missing_for_causal_execution', [])
+          print("- Still missing for causal maker execution: " + ", ".join(missing) + ".")
+          PY
+          fi
           echo '- Audited aggregate coverage in the fixed H391 tape; raw addresses, order hashes and transaction hashes remain sealed.' >> "$GITHUB_STEP_SUMMARY"
           echo '- No strategy replay, model refit, new market data or order was performed.' >> "$GITHUB_STEP_SUMMARY"
           python - <<'PY'
