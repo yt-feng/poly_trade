@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
 import h467_pmdata_queue_latency_replay as h467
 import h468_pmdata_python_event_replay as h468
+import h469_public_onchain_crosscheck as h469
 
 
 def test_contract_is_fixed_to_one_evolving_ledger():
@@ -61,3 +62,14 @@ def test_h468_requires_post_latency_trade_to_fill_queue_proxy():
     assert result["fill"]["outcome"] == "yes"
     assert result["fill"]["exec_qty"] == 5.0
     assert result["fill"]["queue_ahead"] == 0.0
+
+
+def test_h469_public_match_requires_market_price_time_and_quantity():
+    proxy = {"market_slug": "m", "outcome": "no", "fill_ts": 10.0, "exec_price": 0.84, "exec_qty": 5.0}
+    rows = [
+        {"market_slug": "m", "outcome": "NO", "timestamp_seconds": 11.0, "price": 0.84, "token_amount": 5.0},
+        {"market_slug": "m", "outcome": "NO", "timestamp_seconds": 20.0, "price": 0.84, "token_amount": 100.0},
+    ]
+    assert h469._public_match_from_rows(proxy, rows)["public_match"] is True
+    rows[0]["token_amount"] = 4.99
+    assert h469._public_match_from_rows(proxy, rows)["public_match"] is False

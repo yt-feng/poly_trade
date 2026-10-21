@@ -1,0 +1,118 @@
+name: H469 public on-chain cross-check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DATASET_REVISION: acb8cecf4234677823ddd8ee1275de1db48aa995
+      DATASET_SOURCE_REPO_COMMIT: b7f29614a695740c2102760a4dacfb85b8d6e623
+      DATASET_BASE: https://huggingface.co/datasets/mileswangs/polymarket-btc-updown-5m-orderbook-tick-data/resolve/acb8cecf4234677823ddd8ee1275de1db48aa995
+      HYPOTHESIS_ID: H469_PMDATA_PUBLIC_ONCHAIN_SUPPORT_FOR_H468_CHAIN
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install replay dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install polars pyarrow pytest cryptography
+
+      - name: Download one fixed historical archive day
+        run: |
+          set -euo pipefail
+          private_dir="$RUNNER_TEMP/h469"
+          mkdir -m 700 "$private_dir"
+          curl --fail --location --retry 3 --max-time 900 \
+            "$DATASET_BASE/markets.parquet?download=true" --output "$private_dir/markets.parquet"
+          curl --fail --location --retry 3 --max-time 900 \
+            "$DATASET_BASE/l2/date=2026-08-08/part-0.parquet?download=true" --output "$private_dir/l2.parquet"
+          curl --fail --location --retry 3 --max-time 900 \
+            "$DATASET_BASE/trades/date=2026-08-08/part-0.parquet?download=true" --output "$private_dir/trades.parquet"
+          curl --fail --location --retry 3 --max-time 900 \
+            "$DATASET_BASE/onchain_fills/date=2026-08-08/part-0.parquet?download=true" --output "$private_dir/fills.parquet"
+
+      - name: Run H469 public on-chain cross-check
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_h467_pmdata_queue_latency_replay.py
+          python -u analysis/h469_public_onchain_crosscheck.py \
+            --l2 "$RUNNER_TEMP/h469/l2.parquet" \
+            --trades "$RUNNER_TEMP/h469/trades.parquet" \
+            --markets "$RUNNER_TEMP/h469/markets.parquet" \
+            --fills "$RUNNER_TEMP/h469/fills.parquet" \
+            --output "$RUNNER_TEMP/h469/results" > "$RUNNER_TEMP/h469/analysis-output.txt"
+
+      - name: Seal H469 results
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/h469" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          report = json.loads((private / 'results' / 'report.json').read_text())
+          payload = {
+              'format': 'old-pmdata-h469-public-onchain-crosscheck-sealed-v1',
+              'hypothesis_id': os.environ['HYPOTHESIS_ID'],
+              'report': report,
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'workflow': {
+                  'run_id': os.environ['GITHUB_RUN_ID'],
+                  'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                  'ref': os.environ['GITHUB_REF'],
+                  'head_sha': os.environ['GITHUB_SHA'],
+                  'dataset_revision': os.environ['DATASET_REVISION'],
+                  'dataset_source_repo_commit': os.environ['DATASET_SOURCE_REPO_COMMIT'],
+              },
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+
+      - name: Publish encrypted H469 journal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+
+      - name: Redacted completion and cleanup
+        if: always()
+        run: |
+          echo '## H469 public on-chain cross-check' >> "$GITHUB_STEP_SUMMARY"
+          echo '- One immutable historical day, one fixed trigger, explicit queue proxy and one evolving $10 ledger.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- No live order, owner receipt or Canary row is created; detailed metrics remain encrypted.' >> "$GITHUB_STEP_SUMMARY"
