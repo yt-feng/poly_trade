@@ -9,6 +9,7 @@ from h302_v2_position_manager_settlement_scan import (  # noqa: E402
     POSITIONS_MERGED_TOPIC,
     V2_COLLATERAL_TOKEN,
     V2_MODULES,
+    _adaptive_get_logs,
     capture_account,
 )
 
@@ -172,4 +173,36 @@ def test_wide_history_batches_event_and_transfer_filters():
     assert isinstance(calls[1]["address"], list)
     assert isinstance(calls[2]["topics"][0], list)
     assert isinstance(calls[3]["address"], list)
+
+
+def test_adaptive_log_query_splits_provider_sensitive_or_filters():
+    calls = []
+    first = {
+        "fromBlock": "0x64",
+        "toBlock": "0x78",
+        "address": [MODULE, V2_COLLATERAL_TOKEN],
+        "topics": [[POSITION_REDEEMED_TOPIC, POSITIONS_MERGED_TOPIC], None, None, topic_address(OWNER)],
+    }
+
+    def rpc(method, params):
+        assert method == "eth_getLogs"
+        query = params[0]
+        calls.append(query)
+        if isinstance(query.get("address"), list) or isinstance(query["topics"][0], list):
+            raise RuntimeError("history_rpc_error:http_400")
+        return [{
+            "transactionHash": "0x" + "09" * 32,
+            "logIndex": "0x0",
+            "blockNumber": "0x6e",
+            "address": query["address"],
+            "topics": [query["topics"][0]],
+            "data": "0x",
+        }]
+
+    rows, splits = _adaptive_get_logs(rpc, first)
+    assert splits > 0
+    assert rows
+    assert len(calls) > 1
+    assert all(not isinstance(item.get("address"), list) for item in calls[-2:])
+    assert all(not isinstance(item["topics"][0], list) for item in calls[-2:])
 

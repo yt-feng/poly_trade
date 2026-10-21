@@ -133,6 +133,81 @@ def _v2_condition_from_position(value: Any) -> str:
     return "0x" + f"{position & ~0xff:064x}"
 
 
+def _split_log_filter(log_filter: dict[str, Any]) -> list[dict[str, Any]]:
+    """Split a provider-sensitive filter without changing its event meaning.
+
+    Some public Polygon RPCs reject OR-valued address/topic filters with HTTP
+    400.  The fallback first removes OR lists, then halves the block range so
+    a successful narrow query can distinguish provider shape limits from an
+    empty event set.  The caller bounds the number of leaves through the
+    existing chunk and row limits.
+    """
+    topics = list(log_filter.get("topics") or [])
+    topic_zero = topics[0] if topics else None
+    if isinstance(topic_zero, list) and len(topic_zero) > 1:
+        return [
+            {**log_filter, "topics": [topic] + topics[1:]}
+            for topic in topic_zero
+        ]
+    address = log_filter.get("address")
+    if isinstance(address, list) and len(address) > 1:
+        return [{**log_filter, "address": item} for item in address]
+    try:
+        lower = int(str(log_filter["fromBlock"]), 16)
+        upper = int(str(log_filter["toBlock"]), 16)
+    except (KeyError, TypeError, ValueError):
+        return []
+    if lower >= upper:
+        return []
+    middle = (lower + upper) // 2
+    return [
+        {**log_filter, "fromBlock": hex(lower), "toBlock": hex(middle)},
+        {**log_filter, "fromBlock": hex(middle + 1), "toBlock": hex(upper)},
+    ]
+
+
+def _adaptive_get_logs(
+    rpc_call: Callable[[str, list[Any]], Any],
+    log_filter: dict[str, Any],
+    *,
+    max_leaves: int = 128,
+) -> tuple[list[dict[str, Any]], int]:
+    """Read logs with bounded shape/range fallback and return (rows, splits)."""
+    pending = [log_filter]
+    rows: list[dict[str, Any]] = []
+    splits = 0
+    leaves = 0
+    last_error: Exception | None = None
+    while pending:
+        current = pending.pop()
+        try:
+            rows.extend(_normalize_log_rows(rpc_call("eth_getLogs", [current])))
+            leaves += 1
+            continue
+        except Exception as exc:
+            last_error = exc
+        parts = _split_log_filter(current)
+        if not parts or leaves + len(pending) + len(parts) > max_leaves:
+            raise last_error  # type: ignore[misc]
+        splits += 1
+        pending.extend(parts)
+    # A provider may return the same log through multiple equivalent filters;
+    # dedupe only on its stable log identity and preserve all other fields.
+    unique: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        topics = row.get("topics")
+        key = (
+            str(row.get("transactionHash") or row.get("transaction_hash") or "").lower(),
+            str(row.get("logIndex") or row.get("log_index") or "").lower(),
+            str(row.get("blockNumber") or row.get("block_number") or "").lower(),
+            str(row.get("address") or "").lower(),
+            tuple(str(item).lower() for item in topics) if isinstance(topics, list) else str(topics),
+            str(row.get("data") or "").lower(),
+        )
+        unique.setdefault(key, row)
+    return list(unique.values()), splits
+
+
 def _v2_receipt_logs(
     receipt: dict[str, Any],
     *,
@@ -321,6 +396,7 @@ def capture_account(
     log_rows: list[dict[str, Any]] = []
     query_count = 0
     query_failures = 0
+    query_recovery_splits = 0
     query_failure_categories: dict[str, int] = {}
     event_addresses = sorted(V2_MODULES)
     transfer_tokens = sorted(V2_COLLATERAL_TOKENS)
@@ -335,7 +411,9 @@ def capture_account(
         for log_filter in filters:
             query_count += 1
             try:
-                log_rows.extend(_normalize_log_rows(rpc_call("eth_getLogs", [log_filter])))
+                recovered_rows, splits = _adaptive_get_logs(rpc_call, log_filter)
+                log_rows.extend(recovered_rows)
+                query_recovery_splits += int(splits)
             except Exception as exc:
                 query_failures += 1
                 category = _failure_category(exc)
@@ -393,6 +471,7 @@ def capture_account(
         "history_transaction_count": len(history_hashes),
         "history_query_count": query_count,
         "history_query_failures": query_failures,
+        "history_query_recovery_splits": query_recovery_splits,
         "history_query_failure_categories": query_failure_categories,
         "history_confirmed_receipts": history_receipts,
         "history_receipt_fetch_failures": receipt_failures,
