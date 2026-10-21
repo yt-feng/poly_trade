@@ -54,6 +54,7 @@ RESULT_KEYS = (
     "same_ledger_identity_verified",
     "cash_amounts_reconciled",
     "source_fill_references_verified",
+    "strategy_decision_trace_verified",
     "strategy_profile",
 )
 

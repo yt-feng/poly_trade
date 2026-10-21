@@ -52,6 +52,11 @@ H530_STRATEGY_PROFILE = "h530_fixed_half_cash"
 H546_STRATEGY_PROFILE = "h546_adaptive_one_profit"
 H549_STRATEGY_PROFILE = "h549_adaptive_one_profit"
 PRIVATE_STRATEGY_PROFILE = "private_exact"
+TRACE_PROFILES = {
+    H530_STRATEGY_PROFILE,
+    H546_STRATEGY_PROFILE,
+    H549_STRATEGY_PROFILE,
+}
 FROZEN_STRATEGY_ID = "h30_move_uncertainty"
 FROZEN_STRATEGY_VERSION = "h54-execution-contract-prefix-v1"
 FROZEN_STRATEGY_CONFIG = {
@@ -112,6 +117,13 @@ H549_STRATEGY_CONFIG = {
     "minimum_order_usd": "5",
     "minimum_order_shares": "5",
     "required_fills": 10,
+}
+
+STRATEGY_DECISION_TRACE_KEYS = {
+    "decision_ref",
+    "sequence_no",
+    "cash_fraction",
+    "profitable_released_exits_before",
 }
 
 
@@ -671,6 +683,91 @@ def _validate_same_ledger(
     return None
 
 
+def _validate_strategy_decision_trace(
+    document: dict[str, Any],
+    events: list[dict[str, Any]],
+    *,
+    strategy_profile: str,
+    strategy_config: dict[str, Any],
+) -> str | None:
+    """Bind each account event to the frozen online sizing state.
+
+    A top-level profile digest alone does not prove that every fill used that
+    profile.  Known public profiles therefore carry a compact per-fill trace;
+    each event's existing decision hash must commit to its trace row, and the
+    trace state must follow the declared profitable-release transition rule.
+    This remains an offline evidence check; it never authenticates the rows.
+    """
+    if strategy_profile not in TRACE_PROFILES:
+        return None
+    raw_trace = document.get("strategy_decisions")
+    if not isinstance(raw_trace, list) or len(raw_trace) != len(events):
+        return "strategy_decision_trace_required"
+    by_ref: dict[str, dict[str, Any]] = {}
+    for raw in raw_trace:
+        if not isinstance(raw, dict) or set(raw) != STRATEGY_DECISION_TRACE_KEYS:
+            return "strategy_decision_trace_invalid"
+        try:
+            ref = _text(raw.get("decision_ref"), "strategy_trace_decision_ref")
+            sequence = raw.get("sequence_no")
+            if type(sequence) is not int or sequence < 1:
+                return "strategy_trace_sequence_invalid"
+            fraction = _decimal(raw.get("cash_fraction"), "strategy_trace_cash_fraction")
+            profit_count = raw.get("profitable_released_exits_before")
+            if type(profit_count) is not int or profit_count < 0:
+                return "strategy_trace_profit_count_invalid"
+        except ValueError as exc:
+            return str(exc)
+        if ref in by_ref:
+            return "strategy_trace_decision_ref_reused"
+        by_ref[ref] = {
+            "decision_ref": ref,
+            "sequence_no": sequence,
+            "cash_fraction": str(raw["cash_fraction"]),
+            "profitable_released_exits_before": profit_count,
+        }
+    if len(by_ref) != len(events):
+        return "strategy_decision_trace_coverage_mismatch"
+    ordered = sorted(events, key=lambda row: row.get("sequence_no", -1))
+    prior_profitable = 0
+    for row in ordered:
+        ref = _text(row.get("strategy_decision_ref"), "strategy_decision_ref")
+        trace = by_ref.get(ref)
+        if trace is None:
+            return "strategy_decision_trace_ref_missing"
+        if trace["sequence_no"] != row.get("sequence_no"):
+            return "strategy_decision_trace_sequence_mismatch"
+        expected_hash = hashlib.sha256(
+            json.dumps(trace, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        ).hexdigest()
+        if _text(row.get("strategy_decision_sha256"), "strategy_decision_sha256").lower() != expected_hash:
+            return "strategy_decision_trace_hash_mismatch"
+        if strategy_profile == H530_STRATEGY_PROFILE:
+            expected_fraction = _decimal(strategy_config["gross_cash_fraction"], "gross_cash_fraction")
+            expected_profit_count = 0
+        else:
+            expected_profit_count = prior_profitable
+            fraction_key = (
+                "boost_gross_cash_fraction"
+                if prior_profitable >= int(strategy_config["boost_after_profitable_released_exits"])
+                else "base_gross_cash_fraction"
+            )
+            expected_fraction = _decimal(strategy_config[fraction_key], fraction_key)
+        if trace["profitable_released_exits_before"] != expected_profit_count:
+            return "strategy_decision_trace_state_mismatch"
+        if _decimal(trace["cash_fraction"], "strategy_trace_cash_fraction") != expected_fraction:
+            return "strategy_decision_trace_fraction_mismatch"
+        if strategy_profile != H530_STRATEGY_PROFILE:
+            payout = _decimal(row.get("payout"), "payout")
+            entry_cost = _decimal(row.get("entry_cost"), "entry_cost")
+            fee = _decimal(row.get("fee"), "fee")
+            if payout > entry_cost + fee:
+                prior_profitable += 1
+            elif strategy_config.get("reset_after_nonprofit") is True:
+                prior_profitable = 0
+    return None
+
+
 def validate_bundle_document(
     document: Any,
     *,
@@ -758,6 +855,27 @@ def validate_bundle_document(
             **_fail(ledger_failure, event_count=len(events), source_event_count=len(source_events)),
             "source_continuity_manifest": manifest,
         }
+    try:
+        _, _, strategy_config = _strategy_profile(
+            strategy_profile,
+            private_strategy_config=private_strategy_config,
+        )
+    except ValueError as exc:
+        return {
+            **_fail(str(exc), event_count=len(events), source_event_count=len(source_events)),
+            "source_continuity_manifest": manifest,
+        }
+    trace_failure = _validate_strategy_decision_trace(
+        document,
+        events,
+        strategy_profile=strategy_profile,
+        strategy_config=strategy_config,
+    )
+    if trace_failure:
+        return {
+            **_fail(trace_failure, event_count=len(events), source_event_count=len(source_events)),
+            "source_continuity_manifest": manifest,
+        }
     reconcile_events = []
     for row in events:
         converted = dict(row)
@@ -805,6 +923,7 @@ def validate_bundle_document(
         "same_ledger_identity_verified": True,
         "cash_amounts_reconciled": True,
         "source_fill_references_verified": True,
+        "strategy_decision_trace_verified": strategy_profile in TRACE_PROFILES,
         "depth_evidence_verified": True,
         "settlement_evidence_verified": True,
     }

@@ -26,6 +26,34 @@ START = 1_800_000_000_000
 MARKET_ID = "m-1"
 
 
+def attach_strategy_trace(
+    document: dict[str, object],
+    fractions: list[str],
+    *,
+    track_profits: bool = True,
+) -> dict[str, object]:
+    decisions = []
+    prior_profitable = 0
+    for event, fraction in zip(document["events"], fractions, strict=True):
+        decision = {
+            "decision_ref": event["strategy_decision_ref"],
+            "sequence_no": event["sequence_no"],
+            "cash_fraction": fraction,
+            "profitable_released_exits_before": prior_profitable if track_profits else 0,
+        }
+        event["strategy_decision_sha256"] = hashlib.sha256(
+            json.dumps(decision, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        decisions.append(decision)
+        if track_profits:
+            if Decimal(str(event["payout"])) > Decimal(str(event["entry_cost"])) + Decimal(str(event["fee"])):
+                prior_profitable += 1
+            else:
+                prior_profitable = 0
+    document["strategy_decisions"] = decisions
+    return document
+
+
 def source_event(seq: int, market_id: str = MARKET_ID, *, event_ms: int | None = None) -> dict[str, object]:
     timestamp = START + (seq - 1) * 1_000 if event_ms is None else event_ms
     digest = hashlib.sha256(f"event-{seq}".encode()).hexdigest()
@@ -180,11 +208,39 @@ def test_fixed_half_cash_profile_is_explicitly_bound():
         "version": H530_STRATEGY_VERSION,
         "config_sha256": H530_STRATEGY_CONFIG_SHA256,
     }
+    attach_strategy_trace(doc, ["0.5"] * 10, track_profits=False)
     legacy = validate_bundle_document(doc)
     assert legacy["offline_consistency_passed"] is False
     assert legacy["failure_reason"] == "strategy_id_not_frozen"
     fixed = validate_bundle_document(doc, strategy_profile=H530_STRATEGY_PROFILE)
     assert fixed["offline_consistency_passed"] is True
+
+
+def test_known_profile_requires_a_per_fill_strategy_trace():
+    doc = bundle()
+    doc["strategy"] = {
+        "id": H530_STRATEGY_ID,
+        "version": H530_STRATEGY_VERSION,
+        "config_sha256": H530_STRATEGY_CONFIG_SHA256,
+    }
+    result = validate_bundle_document(doc, strategy_profile=H530_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "strategy_decision_trace_required"
+
+
+def test_strategy_trace_hash_and_state_are_bound_per_fill():
+    doc = bundle()
+    doc["strategy"] = {
+        "id": H530_STRATEGY_ID,
+        "version": H530_STRATEGY_VERSION,
+        "config_sha256": H530_STRATEGY_CONFIG_SHA256,
+    }
+    attach_strategy_trace(doc, ["0.5"] * 10, track_profits=False)
+    assert validate_bundle_document(doc, strategy_profile=H530_STRATEGY_PROFILE)["offline_consistency_passed"] is True
+    doc["strategy_decisions"][0]["cash_fraction"] = "0.55"
+    result = validate_bundle_document(doc, strategy_profile=H530_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "strategy_decision_trace_hash_mismatch"
 
 
 def test_private_exact_profile_is_supplied_without_public_config():
