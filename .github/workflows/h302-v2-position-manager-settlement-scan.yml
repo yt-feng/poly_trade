@@ -23,6 +23,11 @@ on:
         required: false
         default: '5000'
         type: string
+      max_log_query_leaves:
+        description: Maximum adaptive eth_getLogs leaves per original filter
+        required: false
+        default: '16'
+        type: string
 
 permissions:
   contents: write
@@ -57,6 +62,7 @@ jobs:
           RECEIPT_RPC_URL: ${{ inputs.receipt_rpc_url }}
           MAX_HISTORY_BLOCKS: ${{ inputs.max_history_blocks }}
           CHUNK_BLOCKS: ${{ inputs.chunk_blocks }}
+          MAX_LOG_QUERY_LEAVES: ${{ inputs.max_log_query_leaves }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
         run: |
@@ -126,7 +132,8 @@ jobs:
                 --rpc-url "$RPC_URL" \
                 --receipt-rpc-url "$RECEIPT_RPC_URL" \
                 --max-history-blocks "$MAX_HISTORY_BLOCKS" \
-                --chunk-blocks "$CHUNK_BLOCKS"
+                --chunk-blocks "$CHUNK_BLOCKS" \
+                --max-log-query-leaves "$MAX_LOG_QUERY_LEAVES"
               h302_rc=$?
           else
               h302_rc=1

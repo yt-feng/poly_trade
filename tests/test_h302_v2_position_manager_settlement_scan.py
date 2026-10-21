@@ -206,3 +206,22 @@ def test_adaptive_log_query_splits_provider_sensitive_or_filters():
     assert all(not isinstance(item.get("address"), list) for item in calls[-2:])
     assert all(not isinstance(item["topics"][0], list) for item in calls[-2:])
 
+
+def test_adaptive_log_query_has_bounded_leaf_budget():
+    query = {
+        "fromBlock": "0x64",
+        "toBlock": "0x78",
+        "address": MODULE,
+        "topics": [POSITION_REDEEMED_TOPIC, None, None, topic_address(OWNER)],
+    }
+
+    def rpc(method, params):
+        raise RuntimeError("history_rpc_error:http_400")
+
+    try:
+        _adaptive_get_logs(rpc, query, max_leaves=1)
+    except RuntimeError as exc:
+        assert str(exc) == "history_rpc_error:http_400"
+    else:
+        raise AssertionError("provider failures must stop at the configured leaf budget")
+

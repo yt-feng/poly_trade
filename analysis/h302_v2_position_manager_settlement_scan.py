@@ -99,6 +99,8 @@ V2_COLLATERAL_TOKENS = frozenset(set(DEFAULT_COLLATERAL_TOKENS) | {V2_COLLATERAL
 # wider read-only audit to cover the gap between old seed receipts and the
 # latest block.  This is a query bound, never an admission or trading change.
 MAX_HISTORY_BLOCKS_ALLOWED = 5_000_000
+DEFAULT_MAX_LOG_QUERY_LEAVES = 16
+MAX_LOG_QUERY_LEAVES_ALLOWED = 128
 
 # keccak256("PositionRedeemed(address,uint256,address,uint256,uint256)")
 POSITION_REDEEMED_TOPIC = "0x4fd474b703f46b453536518b4cbc159dfbea6fd663233763d321a9bc8ccdf97f"
@@ -170,9 +172,11 @@ def _adaptive_get_logs(
     rpc_call: Callable[[str, list[Any]], Any],
     log_filter: dict[str, Any],
     *,
-    max_leaves: int = 128,
+    max_leaves: int = DEFAULT_MAX_LOG_QUERY_LEAVES,
 ) -> tuple[list[dict[str, Any]], int]:
     """Read logs with bounded shape/range fallback and return (rows, splits)."""
+    if not 1 <= int(max_leaves) <= MAX_LOG_QUERY_LEAVES_ALLOWED:
+        raise ValueError("max_log_query_leaves_invalid")
     pending = [log_filter]
     rows: list[dict[str, Any]] = []
     splits = 0
@@ -318,6 +322,7 @@ def capture_account(
     rpc_call: Callable[[str, list[Any]], Any],
     max_history_blocks: int = MAX_HISTORY_BLOCKS,
     chunk_blocks: int = DEFAULT_CHUNK_BLOCKS,
+    max_log_query_leaves: int = DEFAULT_MAX_LOG_QUERY_LEAVES,
 ) -> dict[str, Any]:
     owner = _lower_address(account.get("owner"))
     if not owner:
@@ -391,6 +396,8 @@ def capture_account(
         raise ValueError("latest_block_unavailable")
     if max_history_blocks < 1 or chunk_blocks < 1:
         raise ValueError("history_bounds_invalid")
+    if not 1 <= int(max_log_query_leaves) <= MAX_LOG_QUERY_LEAVES_ALLOWED:
+        raise ValueError("max_log_query_leaves_invalid")
     start = max(min(seed_blocks), latest_block - max_history_blocks + 1)
     history_truncated = start > min(seed_blocks)
     log_rows: list[dict[str, Any]] = []
@@ -411,7 +418,9 @@ def capture_account(
         for log_filter in filters:
             query_count += 1
             try:
-                recovered_rows, splits = _adaptive_get_logs(rpc_call, log_filter)
+                recovered_rows, splits = _adaptive_get_logs(
+                    rpc_call, log_filter, max_leaves=max_log_query_leaves
+                )
                 log_rows.extend(recovered_rows)
                 query_recovery_splits += int(splits)
             except Exception as exc:
@@ -493,12 +502,19 @@ def capture(
     rpc_call: Callable[[str, list[Any]], Any],
     max_history_blocks: int = MAX_HISTORY_BLOCKS,
     chunk_blocks: int = DEFAULT_CHUNK_BLOCKS,
+    max_log_query_leaves: int = DEFAULT_MAX_LOG_QUERY_LEAVES,
 ) -> dict[str, Any]:
     rows = list(accounts)
     if not 1 <= len(rows) <= MAX_ACCOUNTS:
         raise ValueError("one to four accounts are required")
     reports = [
-        capture_account(row, rpc_call=rpc_call, max_history_blocks=max_history_blocks, chunk_blocks=chunk_blocks)
+        capture_account(
+            row,
+            rpc_call=rpc_call,
+            max_history_blocks=max_history_blocks,
+            chunk_blocks=chunk_blocks,
+            max_log_query_leaves=max_log_query_leaves,
+        )
         for row in rows
     ]
     return {
@@ -529,11 +545,16 @@ def main() -> None:
     )
     parser.add_argument("--max-history-blocks", type=int, default=MAX_HISTORY_BLOCKS)
     parser.add_argument("--chunk-blocks", type=int, default=DEFAULT_CHUNK_BLOCKS)
+    parser.add_argument("--max-log-query-leaves", type=int, default=DEFAULT_MAX_LOG_QUERY_LEAVES)
     args = parser.parse_args()
     if not 1 <= args.max_history_blocks <= MAX_HISTORY_BLOCKS_ALLOWED:
         raise SystemExit(f"max-history-blocks must be between 1 and {MAX_HISTORY_BLOCKS_ALLOWED}")
     if not 1 <= args.chunk_blocks <= args.max_history_blocks:
         raise SystemExit("chunk-blocks must be positive and no larger than max-history-blocks")
+    if not 1 <= args.max_log_query_leaves <= MAX_LOG_QUERY_LEAVES_ALLOWED:
+        raise SystemExit(
+            f"max-log-query-leaves must be between 1 and {MAX_LOG_QUERY_LEAVES_ALLOWED}"
+        )
     document = json.loads(args.input.read_text(encoding="utf-8"))
     receipt_rpc_url = args.receipt_rpc_url.strip() or args.rpc_url
 
@@ -550,6 +571,7 @@ def main() -> None:
         rpc_call=rpc_call,
         max_history_blocks=args.max_history_blocks,
         chunk_blocks=args.chunk_blocks,
+        max_log_query_leaves=args.max_log_query_leaves,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
