@@ -86,6 +86,8 @@ def _allowlist(result: dict[str, Any]) -> dict[str, Any]:
 def _read_private_strategy_config(path: Path | None) -> dict[str, Any] | None:
     if path is None:
         return None
+    if not path.exists():
+        raise ValueError("private_strategy_profile_unavailable")
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
         raise ValueError("private_strategy_profile_invalid")
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -132,6 +134,12 @@ def main() -> int:
             strategy_profile=args.strategy_profile,
             private_strategy_config_path=args.private_strategy_config,
         )
+    except ValueError as exc:
+        reason = str(exc)
+        if reason in {"private_strategy_profile_unavailable", "private_strategy_profile_invalid"}:
+            result = _failure(reason)
+        else:
+            result = _failure("bundle_invalid")
     except Exception:
         # Keep malformed input fail-closed while still producing a generic
         # encrypted round record.  Never expose parser details or the bundle.

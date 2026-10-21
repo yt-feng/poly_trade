@@ -93,6 +93,21 @@ def test_tool_private_exact_profile_without_config_fails_closed(tmp_path):
     assert result["failure_reason"] == "private_strategy_profile_unavailable"
 
 
+def test_tool_private_exact_profile_missing_config_file_is_explicit(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    source.write_text(json.dumps(bundle()))
+    missing = tmp_path / "missing-profile.json"
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", PRIVATE_STRATEGY_PROFILE,
+        "--private-strategy-config", str(missing),
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "private_strategy_profile_unavailable"
+
+
 def test_tool_preserves_fail_closed_result(tmp_path):
     source = tmp_path / "bundle.json"
     output = tmp_path / "result.json"
