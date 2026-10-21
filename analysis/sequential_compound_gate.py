@@ -49,10 +49,12 @@ def evaluate_compound_chain(
     may overlap by default, but every entry is funded from the same cash ledger:
     settled payouts are released before each entry whose timestamp has arrived.
     When ``require_prior_cash_release`` is true, the chain is the stricter
-    single-position interpretation: after the first entry, each next entry
-    must occur strictly after the prior entry's cash release and must consume
-    a positive release.  This is the user-defined continuous-compound Canary
-    contract; leftover opening cash cannot be used to hide a missing release.
+    single-position timing interpretation: after the first entry, each next
+    entry must occur strictly after the prior entry's cash-release timestamp.
+    A settled loss is allowed to release zero cash; it may continue only when
+    the same evolving ledger still has enough free cash for the next order.
+    This preserves the user-defined continuous-compound Canary contract while
+    preventing a reset-per-trial calculation from hiding an unfunded entry.
     The
     returned ``fills`` count is therefore a consecutive, reusable-cash chain,
     rather than an aggregate count across independent trials.  When
@@ -174,12 +176,6 @@ def evaluate_compound_chain(
         # next compound entry.
         if cash < floor:
             failure_reason = "insufficient_cash_for_minimum_order"
-            break
-        if require_prior_cash_release and rows and released_this_entry <= 0:
-            # The prior release must be represented by a positive cash release
-            # before the next entry.  A zero-payout trade cannot be converted
-            # into a valid compound step by spending leftover opening cash.
-            failure_reason = "prior_cash_release_required"
             break
         reserved = cost + fee
         if reserved > cash:

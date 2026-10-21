@@ -156,7 +156,7 @@ def test_strict_canary_chain_requires_prior_release_before_next_entry():
     assert result["failure_reason"] == "prior_cash_release_must_precede_next_entry"
 
 
-def test_strict_canary_chain_rejects_leftover_cash_after_zero_payout():
+def test_strict_canary_chain_allows_zero_payout_when_leftover_cash_funds_next_entry():
     first = event(0, payout="0")
     second = event(1, cost="4", payout="5")
     result = evaluate_compound_chain(
@@ -166,8 +166,24 @@ def test_strict_canary_chain_rejects_leftover_cash_after_zero_payout():
         require_prior_cash_release=True,
         evidence_mode="paper_upper_bound",
     )
+    assert result["fills"] == 2
+    assert result["paper_replay_passed"] is False
+    assert result["failure_reason"] == "compound_chain_not_growth_positive"
+
+
+def test_strict_zero_payout_still_fails_when_leftover_cash_cannot_fund_next_entry():
+    first = event(0, payout="0")
+    first["fee"] = "0.1"
+    second = event(1, cost="5", payout="5")
+    result = evaluate_compound_chain(
+        [first, second],
+        required_fills=2,
+        minimum_order="5",
+        require_prior_cash_release=True,
+        evidence_mode="paper_upper_bound",
+    )
     assert result["fills"] == 1
-    assert result["failure_reason"] == "prior_cash_release_required"
+    assert result["failure_reason"] == "insufficient_cash_for_minimum_order"
 
 
 def test_events_must_be_chronological():

@@ -48,6 +48,33 @@ def test_valid_owner_scoped_receipts_form_one_compound_chain():
     assert result["unique_balance_checkpoints"] == 10
 
 
+def test_settled_zero_payout_can_continue_on_same_ledger_when_next_entry_is_fundable():
+    rows = [row(i) for i in range(10)]
+    cash_after = 10.0
+    prior_payout = 0.0
+    for i, current in enumerate(rows):
+        payout = 0.0 if i == 1 else 6.0
+        released = prior_payout
+        balance_before = cash_after + released
+        balance_after = balance_before - 5.0
+        current["payout"] = str(payout)
+        current["released_cash_since_previous_entry"] = str(released)
+        current["balance_before"] = str(balance_before)
+        current["balance_after"] = str(balance_after)
+        cash_after = balance_after
+        prior_payout = payout
+    result = reconcile_authenticated_chain(
+        rows,
+        owner="owner-1",
+        starting_checkpoint_id="opening",
+        closing_balance_checkpoint_id="closing",
+        closing_balance="14.0",
+    )
+    assert result["gate_passed"] is True
+    assert result["fills"] == 10
+    assert result["ending_cash"] == "14.0"
+
+
 def test_owner_mismatch_fails_closed_before_cash_replay():
     result = reconcile_authenticated_chain(
         [row(i, owner="other") for i in range(10)], owner="owner-1",

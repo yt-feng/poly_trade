@@ -38,4 +38,4 @@ def test_compound_prefix_stops_after_a_loss_breaks_minimum_order_floor():
     result = compound_prefix(logs, 10.0)
     assert result["fills"] == 1
     assert result["paper_replay_passed"] is False
-    assert result["failure_reason"] == "insufficient_cash_for_next_entry"
+    assert result["failure_reason"] == "insufficient_cash_for_minimum_order"
