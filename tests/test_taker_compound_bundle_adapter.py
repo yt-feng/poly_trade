@@ -1,5 +1,7 @@
 import unittest
+from decimal import Decimal
 
+from analysis.authenticated_compound_reconciler import reconcile_authenticated_chain
 from analysis.taker_compound_bundle_adapter import assemble_taker_compound_row
 
 
@@ -55,6 +57,7 @@ def ledger_fields():
         "entry_cost": "5",
         "fee": "0",
         "payout": "5.50",
+        "status": "confirmed",
         "released_cash_since_previous_entry": "0",
         "balance_before": "10",
         "balance_after": "5",
@@ -124,6 +127,63 @@ class TakerCompoundBundleAdapterTest(unittest.TestCase):
                 "settlement_receipt_id": "same",
                 "cash_release_receipt_id": "same",
             })
+
+    def test_ten_assembled_rows_pass_the_continuous_cash_reconciler(self):
+        rows = []
+        for sequence in range(1, 11):
+            order = order_event()
+            order["order_id"] = f"taker-order-{sequence}"
+            trade = trade_event(
+                taker_order_id=order["order_id"],
+                trade_id=f"trade-{sequence}",
+                transaction_ref=f"0xtx{sequence}",
+            )
+            fill = orderfilled_event(
+                event_id=f"0xtx{sequence}:7",
+                tx_hash=f"0xtx{sequence}",
+            )
+            ledger = ledger_fields()
+            before = Decimal("10") + Decimal("0.50") * (sequence - 1)
+            ledger.update({
+                "sequence_no": sequence,
+                "orderfilled_event_id": f"0xtx{sequence}:7",
+                "previous_checkpoint_id": "opening" if sequence == 1 else f"balance-{sequence - 1}",
+                "entry_ts": str(sequence * 100),
+                "cash_available_ts": str(sequence * 100 + 10),
+                "released_cash_since_previous_entry": "0" if sequence == 1 else "5.50",
+                "balance_before": str(before),
+                "balance_after": str(before - Decimal("5")),
+            })
+            settlement = {
+                "settlement_receipt_id": f"settlement-{sequence}",
+                "cash_release_receipt_id": f"cash-release-{sequence}",
+            }
+            balance = {
+                "balance_checkpoint_id": f"balance-{sequence}",
+                "cash_reconciled": True,
+                "independent_checkpoint": True,
+            }
+            rows.append(assemble_taker_compound_row(
+                order_event=order,
+                trade_event=trade,
+                orderfilled_event=fill,
+                ledger_fields=ledger,
+                settlement_fields=settlement,
+                balance_fields=balance,
+            ))
+        result = reconcile_authenticated_chain(
+            rows,
+            owner="owner-key",
+            initial_cash="10",
+            minimum_order="5",
+            required_fills=10,
+            starting_checkpoint_id="opening",
+            closing_balance_checkpoint_id="closing",
+            closing_balance="15.00",
+        )
+        self.assertTrue(result["gate_passed"])
+        self.assertEqual(result["fills"], 10)
+        self.assertEqual(result["ending_cash"], "15.00")
 
 
 if __name__ == "__main__":
