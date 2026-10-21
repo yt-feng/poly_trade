@@ -206,6 +206,13 @@ def reconcile_authenticated_chain(
         prior_checkpoint = _text(row.get("previous_checkpoint_id"))
         if not checkpoint or not prior_checkpoint:
             return {"gate_passed": False, "fills": 0, "failure_reason": "checkpoint_link_required", "owner_scoped": True, "identity_complete": False}
+        # These v2 flags distinguish a complete owner-scoped cash observation
+        # from a merely asserted balance number.  Enforce the contract here,
+        # before any arithmetic can admit the row.
+        if row.get("cash_reconciled") is not True:
+            return {"gate_passed": False, "fills": 0, "failure_reason": "cash_reconciliation_required", "owner_scoped": True, "identity_complete": False}
+        if row.get("independent_checkpoint") is not True:
+            return {"gate_passed": False, "fills": 0, "failure_reason": "independent_balance_checkpoint_required", "owner_scoped": True, "identity_complete": False}
         if prior_checkpoint != previous_checkpoint:
             return {"gate_passed": False, "fills": 0, "failure_reason": "previous_checkpoint_link_mismatch", "owner_scoped": True, "identity_complete": False}
         entry_raw = row.get("entry_ts")
