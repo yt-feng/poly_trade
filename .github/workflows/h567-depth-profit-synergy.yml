@@ -1,0 +1,110 @@
+name: H567 old-clean depth and released-profit synergy
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Pinned old-clean source commit
+        required: true
+        default: bbda5f2050685f63153621a54641ebdfab943487
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout strategy code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout pinned old-clean source
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: ${{ inputs.source_commit }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install research dependencies and validate synergy contract
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy scikit-learn pytest pycryptodome
+          python -m pytest -q tests/test_h567_depth_profit_synergy.py tests/test_h561_online_depth_proxy.py tests/test_h508_cash_fraction_depth_tradeoff.py
+      - name: Run the single pre-registered synergy on pinned old-clean data
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h567-depth-profit-synergy"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h567_depth_profit_synergy.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "${{ inputs.source_commit }}" \
+            --output "$PRIVATE_DIR/results" > "$PRIVATE_DIR/analysis-output.txt"
+      - name: Seal the result with the verified public recipient
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/h567-depth-profit-synergy" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          recipient = research_vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          recipient_id = recipient['recipient_id']
+          research_vault.validate_recipient(recipient, recipient_id)
+          results = private / 'results'
+          payload = {
+              'format': 'old-clean-h567-depth-profit-synergy-sealed-v1',
+              'preregistration': {
+                  'hypothesis_id': 'H567_H561_DEPTH_PROXY_H549_RELEASED_PROFIT_SYNERGY',
+                  'source_commit': os.environ['SOURCE_COMMIT'],
+                  'rule': 'max(depth_proxy_fraction_4_6_8, released_profit_fraction_0.55_to_0.5875_after_one_release)',
+                  'single_evolving_cash_ledger': True,
+                  'no_reset': True,
+                  'no_cross_window_concatenation': True,
+                  'required_consecutive_fills': 10,
+              },
+              'summary': json.loads((results / 'summary.json').read_text()),
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+      - name: Publish encrypted synergy journal
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RECIPIENT_ID="$(python -c 'import json; print(json.load(open("research_vault/recipient.json"))["recipient_id"])')"
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RECIPIENT_ID"
+      - name: Write redacted summary and clean runner files
+        if: always()
+        run: |
+          echo '## H567 depth and released-profit synergy' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Frozen H434 signal, H561 depth proxy and H549 released-profit boost were evaluated as one pre-registered policy.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Detailed metrics remain encrypted; no live orders or account access are enabled.' >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'h567-depth-profit-synergy', Path('sealed-delivery')):
+              if path.exists(): shutil.rmtree(path)
+          PY
