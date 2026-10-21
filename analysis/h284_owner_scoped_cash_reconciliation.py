@@ -166,6 +166,7 @@ def reconcile_observed_cash(
             first_negative = index
     required_initial = max(Decimal("0"), opening - minimum)
     exact_all = len(joined) == len(expected)
+    payout_transactions = set(payout_by_tx)
     return {
         "activity_rows": len(activities),
         "unique_activity_transactions": len(expected),
@@ -176,6 +177,15 @@ def reconcile_observed_cash(
         "exact_redeem_collateral_delta_join_transactions": len(redeem_txs & set(joined)),
         "payout_receipt_rows": payout_rows,
         "payout_redeem_transaction_matches": len(redeem_payout_matches),
+        "payout_transaction_count": len(payout_transactions),
+        "payout_amount_inbound_match_transactions": sum(
+            payout_by_tx.get(tx, 0) == inbound.get(tx, 0)
+            for tx in payout_transactions
+        ),
+        "payout_amount_activity_match_transactions": sum(
+            payout_by_tx.get(tx, 0) == expected.get(tx, 0)
+            for tx in payout_transactions
+        ),
         "cash_release_transaction_rows": sum(tx in inbound for tx in redeem_txs),
         "minimum_cash": str(minimum),
         "required_initial_cash": str(required_initial),

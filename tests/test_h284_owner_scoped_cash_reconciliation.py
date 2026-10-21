@@ -47,6 +47,8 @@ def test_trade_and_redeem_transfers_join_and_redeem_cash_is_distinct():
     )
     assert result["exact_collateral_delta_join_transactions"] == 4
     assert result["payout_redeem_transaction_matches"] == 1
+    assert result["payout_amount_inbound_match_transactions"] == 1
+    assert result["payout_amount_activity_match_transactions"] == 1
     assert result["cash_release_transaction_rows"] == 1
     assert result["historical_cash_reuse_evidence"] is True
     assert result["same_ledger_10_canary_eligible"] is False
