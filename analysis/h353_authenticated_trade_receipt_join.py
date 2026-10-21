@@ -92,6 +92,14 @@ def _direct_receipt_join(
             v2_transfers, v2_payouts, admitted, unbound, v2_confirmed = _v2_receipt_logs(
                 receipt, owner=owner, condition_ids=condition_ids
             )
+            # A single transaction can redeem several markets.  Keep legacy
+            # payout rows only when their condition belongs to the explicit
+            # BTC5m activity set; the V2 decoder already applies this bound.
+            if condition_ids:
+                legacy_payouts = [
+                    row for row in legacy_payouts
+                    if row.get("condition_id") in condition_ids
+                ]
             confirmed_receipts += int(legacy_confirmed or v2_confirmed)
             transfer_rows.extend(legacy_transfers)
             transfer_rows.extend(v2_transfers)
