@@ -11,6 +11,7 @@ from h302_v2_position_manager_settlement_scan import (  # noqa: E402
     V2_MODULES,
     _adaptive_get_logs,
     capture_account,
+    _seed_window_ranges,
 )
 
 
@@ -18,6 +19,16 @@ OWNER = "0x" + "11" * 20
 EXCHANGE = "0x" + "22" * 20
 CONDITION = "0x" + "07" * 31 + "00"
 MODULE = sorted(V2_MODULES)[0]
+
+
+def test_seed_window_ranges_merge_and_respect_causal_bound():
+    assert _seed_window_ranges([100, 105, 1000], latest_block=2000, before_blocks=0, after_blocks=20, max_total_blocks=100) == [(100, 125), (1000, 1020)]
+    try:
+        _seed_window_ranges([100, 1000], latest_block=2000, before_blocks=0, after_blocks=100, max_total_blocks=50)
+    except ValueError as exc:
+        assert str(exc) == "seed_windows_exceed_history_bound"
+    else:
+        raise AssertionError("seed window total must remain bounded")
 
 
 def word(value: int | str) -> str:
@@ -204,6 +215,37 @@ def test_scalar_local_decode_uses_provider_compatible_filters_and_owner_caps_row
     assert all(isinstance(item["address"], str) for item in calls)
     assert all(item["topics"] and isinstance(item["topics"][0], str) for item in calls)
     assert all(None not in item["topics"] for item in calls)
+
+
+def test_seed_windows_mode_queries_only_post_seed_causal_ranges():
+    tx_buy = "0x" + "07" * 32
+    calls = []
+
+    def rpc(method, params):
+        if method == "eth_getTransactionReceipt":
+            return {"transactionHash": tx_buy, "status": "0x1", "blockNumber": "0x64", "logs": []}
+        if method == "eth_blockNumber":
+            return "0x200"
+        if method == "eth_getLogs":
+            calls.append(params[0])
+            return []
+        raise AssertionError(method)
+
+    report = capture_account(
+        {"owner": OWNER, "btc_transaction_hashes": [tx_buy], "activity": [{
+            "type": "TRADE", "side": "BUY", "transactionHash": tx_buy,
+            "timestamp": 1000, "usdcSize": "5", "slug": "btc-updown-5m-123",
+            "conditionId": CONDITION,
+        }]},
+        rpc_call=rpc, max_history_blocks=100, chunk_blocks=10,
+        log_filter_mode="scalar_local_decode", history_mode="seed_windows",
+        seed_window_before_blocks=0, seed_window_after_blocks=20,
+    )
+    assert report["history_mode"] == "seed_windows"
+    assert report["history_block_from"] == 100
+    assert report["history_block_to"] == 120
+    assert report["history_range_count"] == 3
+    assert all(100 <= int(item["fromBlock"], 16) <= int(item["toBlock"], 16) <= 120 for item in calls)
 
 
 def test_adaptive_log_query_splits_provider_sensitive_or_filters():

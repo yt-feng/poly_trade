@@ -36,6 +36,24 @@ on:
         options:
           - owner_bound
           - scalar_local_decode
+      history_mode:
+        description: Latest window or causal windows around confirmed seed receipts
+        required: false
+        default: latest_window
+        type: choice
+        options:
+          - latest_window
+          - seed_windows
+      seed_window_before_blocks:
+        description: Blocks before each seed receipt for seed_windows mode
+        required: false
+        default: '0'
+        type: string
+      seed_window_after_blocks:
+        description: Blocks after each seed receipt for seed_windows mode
+        required: false
+        default: '2000'
+        type: string
 
 permissions:
   contents: write
@@ -72,6 +90,9 @@ jobs:
           CHUNK_BLOCKS: ${{ inputs.chunk_blocks }}
           MAX_LOG_QUERY_LEAVES: ${{ inputs.max_log_query_leaves }}
           LOG_FILTER_MODE: ${{ inputs.log_filter_mode }}
+          HISTORY_MODE: ${{ inputs.history_mode }}
+          SEED_WINDOW_BEFORE_BLOCKS: ${{ inputs.seed_window_before_blocks }}
+          SEED_WINDOW_AFTER_BLOCKS: ${{ inputs.seed_window_after_blocks }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
         run: |
@@ -143,7 +164,10 @@ jobs:
                 --max-history-blocks "$MAX_HISTORY_BLOCKS" \
                 --chunk-blocks "$CHUNK_BLOCKS" \
                 --max-log-query-leaves "$MAX_LOG_QUERY_LEAVES" \
-                --log-filter-mode "$LOG_FILTER_MODE"
+                --log-filter-mode "$LOG_FILTER_MODE" \
+                --history-mode "$HISTORY_MODE" \
+                --seed-window-before-blocks "$SEED_WINDOW_BEFORE_BLOCKS" \
+                --seed-window-after-blocks "$SEED_WINDOW_AFTER_BLOCKS"
               h302_rc=$?
           else
               h302_rc=1
