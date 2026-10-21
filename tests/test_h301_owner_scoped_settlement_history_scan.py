@@ -10,7 +10,7 @@ from h300_owner_scoped_payout_transfer_capture import (  # noqa: E402
     TRANSFER_TOPIC,
 )
 import h301_owner_scoped_settlement_history_scan as scan  # noqa: E402
-from h301_owner_scoped_settlement_history_scan import capture_account  # noqa: E402
+from h301_owner_scoped_settlement_history_scan import capture_account, _reconcile  # noqa: E402
 
 
 OWNER = "0x" + "11" * 20
@@ -20,6 +20,7 @@ COLLATERAL = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"
 PUSD = "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb"
 CTF = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
 CONDITION = "0x" + "07" * 32
+CONDITION_2 = "0x" + "08" * 32
 
 
 def word(value: int | str) -> str:
@@ -112,6 +113,29 @@ def test_separate_redemption_transaction_is_joined_to_cash_ledger():
     assert reconciliation["ending_cash"] == "10.5"
     assert report["verified_canary_fills"] == 0
     assert report["same_ledger_compounding_rows"] == 0
+
+
+def test_confirmed_payout_amount_replaces_activity_quote_for_shared_redeem_tx():
+    tx = "0x" + "09" * 32
+    btc_rows = [
+        {"type": "REDEEM", "side": "", "transaction_ref": tx, "timestamp": 1000,
+         "usdc_size": "5", "condition_id": CONDITION},
+        {"type": "REDEEM", "side": "", "transaction_ref": tx, "timestamp": 1001,
+         "usdc_size": "5", "condition_id": CONDITION_2},
+    ]
+    payout_rows = [
+        {"transaction_ref": tx, "amount_base_units": 2_000_000,
+         "collateral_token": COLLATERAL, "condition_id": CONDITION},
+        {"transaction_ref": tx, "amount_base_units": 0,
+         "collateral_token": COLLATERAL, "condition_id": CONDITION_2},
+    ]
+    transfer_rows = [{"transaction_ref": tx, "token": COLLATERAL,
+                      "from": ADAPTER, "to": OWNER,
+                      "amount_base_units": 2_000_000}]
+    reconciliation = _reconcile(btc_rows, transfer_rows, payout_rows, OWNER)[COLLATERAL]
+    assert reconciliation["payout_redeem_transaction_matches"] == 1
+    assert reconciliation["exact_redeem_collateral_delta_join_transactions"] == 1
+    assert reconciliation["historical_cash_reuse_evidence"] is True
 
 
 def test_unbound_payout_is_not_admitted_without_btc_condition_id():

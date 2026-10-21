@@ -204,10 +204,49 @@ def _reconcile(
 ) -> dict[str, dict[str, Any]]:
     if not btc_rows:
         return {}
-    activity = [
-        {key: row[key] for key in ("type", "side", "transaction_ref", "timestamp", "usdc_size")}
-        for row in btc_rows
-    ]
+    # The activity API's REDEEM ``usdc_size`` is a position/quote field and
+    # can differ from the confirmed payout (including a zero payout).  Once a
+    # confirmed owner-scoped PayoutRedemption is available, use its exact
+    # amount for the cash path, keyed by transaction and condition.  This
+    # keeps the three separate market rows in a shared redemption tx while
+    # preventing quote amounts from blocking a valid cash join.
+    payout_by_condition: dict[tuple[str, str], int] = {}
+    payout_by_tx: dict[str, int] = {}
+    for payout in payout_rows:
+        tx = payout["transaction_ref"]
+        amount = int(payout["amount_base_units"])
+        condition = _text(payout.get("condition_id")).lower()
+        payout_by_tx[tx] = payout_by_tx.get(tx, 0) + amount
+        if condition:
+            key = (tx, condition)
+            payout_by_condition[key] = payout_by_condition.get(key, 0) + amount
+
+    activity = []
+    redeemed_keys_seen: set[tuple[str, str]] = set()
+    for row in btc_rows:
+        item = {key: row[key] for key in ("type", "side", "transaction_ref", "timestamp", "usdc_size")}
+        if row["type"] == "REDEEM":
+            tx = row["transaction_ref"]
+            condition = _text(row.get("condition_id")).lower()
+            key = (tx, condition)
+            if condition and key in payout_by_condition:
+                amount = payout_by_condition[key] if key not in redeemed_keys_seen else 0
+                redeemed_keys_seen.add(key)
+            else:
+                amount = None
+            # Some older activity rows omit conditionId.  Only use the
+            # aggregate fallback when this transaction has one redeem row;
+            # ambiguous shared transactions remain unmodified and therefore
+            # fail closed.
+            if amount is None and not condition:
+                same_tx = [candidate for candidate in btc_rows
+                           if candidate["type"] == "REDEEM"
+                           and candidate["transaction_ref"] == tx]
+                if len(same_tx) == 1 and tx in payout_by_tx:
+                    amount = payout_by_tx[tx]
+            if amount is not None:
+                item["usdc_size"] = _amount_usdc(amount)
+        activity.append(item)
     existing_redeems = {row["transaction_ref"] for row in btc_rows if row["type"] == "REDEEM"}
     # A later payout transaction is added as a synthetic activity row solely
     # to build the chronological cash path.  Its timestamp is explicitly a
