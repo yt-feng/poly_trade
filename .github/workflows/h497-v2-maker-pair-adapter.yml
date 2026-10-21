@@ -1,0 +1,72 @@
+name: H497 V2 maker pair bundle adapter
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'analysis/authenticated_v2_maker_pair_bundle_adapter.py'
+      - 'analysis/h497_v2_maker_pair_bundle_adapter.py'
+      - 'analysis/validate_v2_settlement_path.py'
+      - 'analysis/validate_authenticated_maker_pair_bundle.py'
+      - 'tests/test_h497_v2_maker_pair_bundle_adapter.py'
+      - '.github/workflows/h497-v2-maker-pair-adapter.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  adapter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run H497 adapter audit
+        run: |
+          set -euo pipefail
+          python -m pip install pytest cryptography
+          python -m pytest -q tests/test_h497_v2_maker_pair_bundle_adapter.py
+          mkdir -m 700 "$RUNNER_TEMP/h497"
+          python -u analysis/h497_v2_maker_pair_bundle_adapter.py --output "$RUNNER_TEMP/h497/report.json" > "$RUNNER_TEMP/h497/analysis-output.txt"
+      - name: Seal H497 adapter audit
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/h497" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {'format': 'h497-v2-maker-pair-bundle-adapter-sealed-v1', 'hypothesis_id': 'H497_INTEGRATED_V2_MAKER_PAIR_BUNDLE_ADAPTER', 'report': json.loads((private / 'report.json').read_text()), 'analysis_output': (private / 'analysis-output.txt').read_text(), 'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'head_sha': os.environ['GITHUB_SHA']}}
+          delivery = Path('sealed-delivery'); delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': False, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+      - name: Publish encrypted H497 journal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py --source sealed-delivery --repository yt-feng/poly_trade --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --recipient-id "$RESEARCH_RECIPIENT_ID"
+      - name: Redacted completion
+        if: always()
+        run: |
+          echo '## H497 V2 maker pair bundle adapter' >> "$GITHUB_STEP_SUMMARY"
+          echo '- H493 pair assembly and H496 path validation are now one offline-only input chain.' >> "$GITHUB_STEP_SUMMARY"
