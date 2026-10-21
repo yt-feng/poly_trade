@@ -49,6 +49,7 @@ FROZEN_MINIMUM_ENTRY_NOTIONAL_USD = Decimal("5")
 MINIMUM_ENTRY_COST_FOR_LEDGER = Decimal("0.0000001")
 DEFAULT_STRATEGY_PROFILE = "h30_legacy"
 H530_STRATEGY_PROFILE = "h530_fixed_half_cash"
+H546_STRATEGY_PROFILE = "h546_adaptive_one_profit"
 PRIVATE_STRATEGY_PROFILE = "private_exact"
 FROZEN_STRATEGY_ID = "h30_move_uncertainty"
 FROZEN_STRATEGY_VERSION = "h54-execution-contract-prefix-v1"
@@ -70,6 +71,24 @@ H530_STRATEGY_CONFIG = {
     "policy": "fixed fraction of currently available cash",
     "entry_policy_is_online_observable": True,
     "taker_fee_rate": "0.07",
+    "cash_release_delay_seconds": "900",
+    "minimum_order_usd": "5",
+    "minimum_order_shares": "5",
+    "required_fills": 10,
+}
+H546_STRATEGY_ID = "h546_adaptive_one_profit"
+H546_STRATEGY_VERSION = "h546-old-clean-adaptive-one-profit-v1"
+H546_STRATEGY_CONFIG = {
+    "candidate": "H546_BOOST_AFTER_ONE_PROFIT",
+    "source_commit": "bbda5f2050685f63153621a54641ebdfab943487",
+    "base_gross_cash_fraction": "0.55",
+    "boost_gross_cash_fraction": "0.575",
+    "boost_after_profitable_released_exits": 1,
+    "reset_after_nonprofit": True,
+    "policy": "boost only after one strictly profitable released exit; next entry remains on the same evolving cash ledger",
+    "entry_policy_is_online_observable": True,
+    "taker_fee_rate": "0.07",
+    "settlement_seconds": "300",
     "cash_release_delay_seconds": "900",
     "minimum_order_usd": "5",
     "minimum_order_shares": "5",
@@ -102,6 +121,7 @@ def _strategy_profile(
     profiles = {
         DEFAULT_STRATEGY_PROFILE: (FROZEN_STRATEGY_ID, FROZEN_STRATEGY_VERSION, FROZEN_STRATEGY_CONFIG),
         H530_STRATEGY_PROFILE: (H530_STRATEGY_ID, H530_STRATEGY_VERSION, H530_STRATEGY_CONFIG),
+        H546_STRATEGY_PROFILE: (H546_STRATEGY_ID, H546_STRATEGY_VERSION, H546_STRATEGY_CONFIG),
     }
     try:
         return profiles[profile]
@@ -114,6 +134,9 @@ FROZEN_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
 ).hexdigest()
 H530_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
     json.dumps(H530_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+H546_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
+    json.dumps(H546_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
 ).hexdigest()
 
 
@@ -770,7 +793,7 @@ def main() -> int:
     parser.add_argument("--required-fills", type=int, default=10)
     parser.add_argument(
         "--strategy-profile",
-        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
+        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
         default=DEFAULT_STRATEGY_PROFILE,
     )
     parser.add_argument("--private-strategy-config", type=Path)
