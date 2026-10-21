@@ -248,6 +248,35 @@ def test_seed_windows_mode_queries_only_post_seed_causal_ranges():
     assert all(100 <= int(item["fromBlock"], 16) <= int(item["toBlock"], 16) <= 120 for item in calls)
 
 
+def test_history_query_budget_stops_bounded_scalar_scan():
+    tx_buy = "0x" + "08" * 32
+    calls = []
+
+    def rpc(method, params):
+        if method == "eth_getTransactionReceipt":
+            return {"transactionHash": tx_buy, "status": "0x1", "blockNumber": "0x64", "logs": []}
+        if method == "eth_blockNumber":
+            return "0x200"
+        if method == "eth_getLogs":
+            calls.append(params[0])
+            return []
+        raise AssertionError(method)
+
+    report = capture_account(
+        {"owner": OWNER, "btc_transaction_hashes": [tx_buy], "activity": [{
+            "type": "TRADE", "side": "BUY", "transactionHash": tx_buy,
+            "timestamp": 1000, "usdcSize": "5", "slug": "btc-updown-5m-123",
+            "conditionId": CONDITION,
+        }]},
+        rpc_call=rpc, max_history_blocks=100, chunk_blocks=10,
+        log_filter_mode="scalar_local_decode", max_history_queries=2,
+    )
+    assert report["history_query_count"] == 2
+    assert report["history_query_budget"] == 2
+    assert report["history_query_budget_exhausted"] is True
+    assert len(calls) == 2
+
+
 def test_adaptive_log_query_splits_provider_sensitive_or_filters():
     calls = []
     first = {

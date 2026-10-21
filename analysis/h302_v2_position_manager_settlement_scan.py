@@ -101,6 +101,8 @@ V2_COLLATERAL_TOKENS = frozenset(set(DEFAULT_COLLATERAL_TOKENS) | {V2_COLLATERAL
 MAX_HISTORY_BLOCKS_ALLOWED = 5_000_000
 DEFAULT_MAX_LOG_QUERY_LEAVES = 16
 MAX_LOG_QUERY_LEAVES_ALLOWED = 128
+DEFAULT_MAX_HISTORY_QUERIES = 2000
+MAX_HISTORY_QUERIES_ALLOWED = 10000
 LOG_FILTER_MODES = frozenset({"owner_bound", "scalar_local_decode"})
 HISTORY_MODES = frozenset({"latest_window", "seed_windows"})
 
@@ -376,6 +378,7 @@ def capture_account(
     max_history_blocks: int = MAX_HISTORY_BLOCKS,
     chunk_blocks: int = DEFAULT_CHUNK_BLOCKS,
     max_log_query_leaves: int = DEFAULT_MAX_LOG_QUERY_LEAVES,
+    max_history_queries: int = DEFAULT_MAX_HISTORY_QUERIES,
     log_filter_mode: str = "owner_bound",
     history_mode: str = "latest_window",
     seed_window_before_blocks: int = 0,
@@ -460,6 +463,8 @@ def capture_account(
         raise ValueError("history_bounds_invalid")
     if not 1 <= int(max_log_query_leaves) <= MAX_LOG_QUERY_LEAVES_ALLOWED:
         raise ValueError("max_log_query_leaves_invalid")
+    if not 1 <= int(max_history_queries) <= MAX_HISTORY_QUERIES_ALLOWED:
+        raise ValueError("max_history_queries_invalid")
     if history_mode == "seed_windows":
         causal_ranges = _seed_window_ranges(
             seed_blocks,
@@ -481,6 +486,7 @@ def capture_account(
     query_failures = 0
     query_recovery_splits = 0
     query_failure_categories: dict[str, int] = {}
+    query_budget_exhausted = False
     event_addresses = sorted(V2_MODULES)
     transfer_tokens = sorted(V2_COLLATERAL_TOKENS)
     for lower, upper in history_ranges:
@@ -506,6 +512,9 @@ def capture_account(
                 _log_filter(lower, upper, transfer_tokens, [TRANSFER_TOPIC, None, _owner_topic(owner)]),
             ]
         for log_filter in filters:
+            if query_count >= int(max_history_queries):
+                query_budget_exhausted = True
+                break
             query_count += 1
             try:
                 recovered_rows, splits = _adaptive_get_logs(
@@ -522,7 +531,7 @@ def capture_account(
             if len(log_rows) >= MAX_LOG_ROWS:
                 log_rows = log_rows[:MAX_LOG_ROWS]
                 break
-        if len(log_rows) >= MAX_LOG_ROWS:
+        if len(log_rows) >= MAX_LOG_ROWS or query_budget_exhausted:
             break
 
     tx_logs: dict[str, list[dict[str, Any]]] = {}
@@ -573,6 +582,8 @@ def capture_account(
         "history_log_rows": len(log_rows),
         "history_transaction_count": len(history_hashes),
         "history_query_count": query_count,
+        "history_query_budget": int(max_history_queries),
+        "history_query_budget_exhausted": query_budget_exhausted,
         "history_query_failures": query_failures,
         "history_query_recovery_splits": query_recovery_splits,
         "history_query_failure_categories": query_failure_categories,
@@ -598,6 +609,7 @@ def capture(
     max_history_blocks: int = MAX_HISTORY_BLOCKS,
     chunk_blocks: int = DEFAULT_CHUNK_BLOCKS,
     max_log_query_leaves: int = DEFAULT_MAX_LOG_QUERY_LEAVES,
+    max_history_queries: int = DEFAULT_MAX_HISTORY_QUERIES,
     log_filter_mode: str = "owner_bound",
     history_mode: str = "latest_window",
     seed_window_before_blocks: int = 0,
@@ -613,6 +625,7 @@ def capture(
             max_history_blocks=max_history_blocks,
             chunk_blocks=chunk_blocks,
             max_log_query_leaves=max_log_query_leaves,
+            max_history_queries=max_history_queries,
             log_filter_mode=log_filter_mode,
             history_mode=history_mode,
             seed_window_before_blocks=seed_window_before_blocks,
@@ -631,6 +644,7 @@ def capture(
         "verified_canary_fills": 0,
         "same_ledger_compounding_rows": 0,
         "history_log_filter_mode": log_filter_mode,
+        "history_query_budget": int(max_history_queries),
         "history_mode": history_mode,
         "new_data_collected": False,
         "model_refit": False,
@@ -651,6 +665,7 @@ def main() -> None:
     parser.add_argument("--max-history-blocks", type=int, default=MAX_HISTORY_BLOCKS)
     parser.add_argument("--chunk-blocks", type=int, default=DEFAULT_CHUNK_BLOCKS)
     parser.add_argument("--max-log-query-leaves", type=int, default=DEFAULT_MAX_LOG_QUERY_LEAVES)
+    parser.add_argument("--max-history-queries", type=int, default=DEFAULT_MAX_HISTORY_QUERIES)
     parser.add_argument("--log-filter-mode", choices=sorted(LOG_FILTER_MODES), default="owner_bound")
     parser.add_argument("--history-mode", choices=sorted(HISTORY_MODES), default="latest_window")
     parser.add_argument("--seed-window-before-blocks", type=int, default=0)
@@ -663,6 +678,10 @@ def main() -> None:
     if not 1 <= args.max_log_query_leaves <= MAX_LOG_QUERY_LEAVES_ALLOWED:
         raise SystemExit(
             f"max-log-query-leaves must be between 1 and {MAX_LOG_QUERY_LEAVES_ALLOWED}"
+        )
+    if not 1 <= args.max_history_queries <= MAX_HISTORY_QUERIES_ALLOWED:
+        raise SystemExit(
+            f"max-history-queries must be between 1 and {MAX_HISTORY_QUERIES_ALLOWED}"
         )
     document = json.loads(args.input.read_text(encoding="utf-8"))
     receipt_rpc_url = args.receipt_rpc_url.strip() or args.rpc_url
@@ -681,6 +700,7 @@ def main() -> None:
         max_history_blocks=args.max_history_blocks,
         chunk_blocks=args.chunk_blocks,
         max_log_query_leaves=args.max_log_query_leaves,
+        max_history_queries=args.max_history_queries,
         log_filter_mode=args.log_filter_mode,
         history_mode=args.history_mode,
         seed_window_before_blocks=args.seed_window_before_blocks,

@@ -28,6 +28,11 @@ on:
         required: false
         default: '16'
         type: string
+      max_history_queries:
+        description: Maximum eth_getLogs queries per account before bounded stop
+        required: false
+        default: '2000'
+        type: string
       log_filter_mode:
         description: Owner-bound filters or scalar contract/topic filters with local owner decode
         required: false
@@ -89,6 +94,7 @@ jobs:
           MAX_HISTORY_BLOCKS: ${{ inputs.max_history_blocks }}
           CHUNK_BLOCKS: ${{ inputs.chunk_blocks }}
           MAX_LOG_QUERY_LEAVES: ${{ inputs.max_log_query_leaves }}
+          MAX_HISTORY_QUERIES: ${{ inputs.max_history_queries }}
           LOG_FILTER_MODE: ${{ inputs.log_filter_mode }}
           HISTORY_MODE: ${{ inputs.history_mode }}
           SEED_WINDOW_BEFORE_BLOCKS: ${{ inputs.seed_window_before_blocks }}
@@ -164,6 +170,7 @@ jobs:
                 --max-history-blocks "$MAX_HISTORY_BLOCKS" \
                 --chunk-blocks "$CHUNK_BLOCKS" \
                 --max-log-query-leaves "$MAX_LOG_QUERY_LEAVES" \
+                --max-history-queries "$MAX_HISTORY_QUERIES" \
                 --log-filter-mode "$LOG_FILTER_MODE" \
                 --history-mode "$HISTORY_MODE" \
                 --seed-window-before-blocks "$SEED_WINDOW_BEFORE_BLOCKS" \
