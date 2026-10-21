@@ -3,7 +3,10 @@
 H279/H280 already preserve authenticated account activity and transaction-level
 ``OrderFilled`` joins.  This module fills the next evidence boundary by
 looking only at the transaction hashes in that activity set and decoding
-``PayoutRedemption`` plus collateral ``Transfer`` logs.  It never signs,
+``PayoutRedemption`` plus collateral ``Transfer`` logs.  It supports both
+direct legacy redeemers and the current delegated exchange path, where an
+adapter emits the event and pUSD is minted to the owner in the same receipt.
+It never signs,
 submits, cancels, redeems, merges, changes allowances, or reads an account
 balance.  The resulting rows are input to the existing H284 cash reconciler;
 they are not Canary fills by themselves.
@@ -44,6 +47,16 @@ DEFAULT_COLLATERAL_TOKENS = frozenset({
     "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",  # USDC.e
     "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",  # native USDC
 })
+# The current ConditionalTokens exchange path emits the legacy
+# ``PayoutRedemption`` event with the exchange adapter as ``redeemer`` and
+# mints the protocol's pUSD collateral to the proxy wallet in the same
+# receipt.  Keep this cash token separate from the event's ``collateral``
+# field: the latter is the USDC.e collateral consumed by ConditionalTokens,
+# while the former is the owner-directed cash leg used for reconciliation.
+DEFAULT_PAYOUT_CASH_TOKENS = frozenset({
+    "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",  # pUSD
+})
+ZERO_ADDRESS = "0x" + "0" * 40
 DEFAULT_CTF_CONTRACTS = frozenset({
     "0x4d97dcd97ec945f40cf65f87097ace5ea0476045",
 })
@@ -193,6 +206,7 @@ def decode_receipt_logs(
     owner: str,
     collateral_tokens: Iterable[str] = DEFAULT_COLLATERAL_TOKENS,
     ctf_contracts: Iterable[str] = DEFAULT_CTF_CONTRACTS,
+    payout_cash_tokens: Iterable[str] = DEFAULT_PAYOUT_CASH_TOKENS,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
     """Decode owner-directed collateral transfers and CTF payout events."""
     expected_owner = _lower_address(owner)
@@ -200,6 +214,7 @@ def decode_receipt_logs(
         raise ValueError("owner_address_required")
     allowed_tokens = {_lower_address(x) for x in collateral_tokens if _lower_address(x)}
     allowed_ctf = {_lower_address(x) for x in ctf_contracts if _lower_address(x)}
+    allowed_cash_tokens = {_lower_address(x) for x in payout_cash_tokens if _lower_address(x)}
     status = _text(receipt.get("status")).lower()
     confirmed = status in {"0x1", "1"}
     transfers: list[dict[str, Any]] = []
@@ -208,7 +223,11 @@ def decode_receipt_logs(
     if not tx_hash:
         raise ValueError("receipt_transaction_hash_required")
     block_number = _hex_number(receipt.get("blockNumber"))
-    for log in receipt.get("logs") or []:
+    logs = [log for log in (receipt.get("logs") or []) if isinstance(log, dict)]
+    # Decode transfers first.  A delegated PayoutRedemption is emitted before
+    # the pUSD mint in the same receipt, so a single forward pass would miss
+    # the owner binding even though the receipt is complete.
+    for log in logs:
         if not isinstance(log, dict):
             continue
         topics = log.get("topics") or []
@@ -216,7 +235,7 @@ def decode_receipt_logs(
             continue
         topic0 = _text(topics[0]).lower()
         contract = _lower_address(log.get("address"))
-        if topic0 == TRANSFER_TOPIC and contract in allowed_tokens and len(topics) >= 3:
+        if topic0 == TRANSFER_TOPIC and contract in (allowed_tokens | allowed_cash_tokens) and len(topics) >= 3:
             source = _topic_address(topics[1])
             target = _topic_address(topics[2])
             words = _data_words(log.get("data"))
@@ -236,11 +255,17 @@ def decode_receipt_logs(
                     "confirmed_nonreverted": confirmed,
                     "block_number": block_number,
                 })
-        elif topic0 == PAYOUT_REDEMPTION_TOPIC and contract in allowed_ctf and len(topics) >= 2:
+    for log in logs:
+        topics = log.get("topics") or []
+        if not topics:
+            continue
+        topic0 = _text(topics[0]).lower()
+        contract = _lower_address(log.get("address"))
+        if topic0 == PAYOUT_REDEMPTION_TOPIC and contract in allowed_ctf and len(topics) >= 2:
             redeemer = _topic_address(topics[1])
             collateral = _topic_address(topics[2]) if len(topics) >= 3 else ""
             words = _data_words(log.get("data"))
-            if redeemer != expected_owner or collateral not in allowed_tokens or len(words) < 3:
+            if collateral not in allowed_tokens or len(words) < 3:
                 continue
             try:
                 offset = _word(words[1])
@@ -255,12 +280,34 @@ def decode_receipt_logs(
                 continue
             if not confirmed:
                 continue
+            delegated = redeemer != expected_owner
+            cash_token = collateral
+            if delegated:
+                # Current exchange receipts delegate redemption to an adapter.
+                # Admit the payout only when the same confirmed receipt also
+                # contains an exact zero->owner cash mint for the payout amount.
+                matching_cash = [
+                    row for row in transfers
+                    if row["token"] in allowed_cash_tokens
+                    and row["from"] == ZERO_ADDRESS
+                    and row["to"] == expected_owner
+                    and row["amount_base_units"] == payout
+                ]
+                if not matching_cash:
+                    continue
+                cash_token = matching_cash[0]["token"]
             payouts.append({
                 "transaction_ref": tx_hash,
                 "amount_base_units": payout,
-                "collateral_token": collateral,
+                # Reconciliation must use the owner-directed cash token.  For
+                # direct legacy events it is the event collateral; for the
+                # delegated route it is the pUSD mint token.
+                "collateral_token": cash_token,
+                "event_collateral_token": collateral,
+                "delegated_redeemer": delegated,
                 "condition_id": "0x" + words[0].lower(),
-                "redeemer_address_sha256": _owner_digest(expected_owner),
+                "redeemer_address_sha256": _owner_digest(redeemer),
+                "owner_address_sha256": _owner_digest(expected_owner),
                 "confirmed_nonreverted": confirmed,
                 "block_number": block_number,
             })
@@ -347,7 +394,7 @@ def capture(accounts: Iterable[dict[str, Any]], *, receipt_fetcher: Callable[[st
         raise ValueError("one to four accounts are required")
     reports = [capture_account(row, receipt_fetcher=receipt_fetcher, max_transactions=max_transactions) for row in rows]
     return {
-        "format": "h300-owner-scoped-payout-transfer-capture-v1",
+        "format": "h300-owner-scoped-payout-transfer-capture-v2",
         "accounts": reports,
         "scope": "read-only transaction-scoped payout and collateral transfer decoding",
         "settlement_receipt_rows": sum(item["payout_redemption_rows"] for item in reports),

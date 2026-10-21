@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
 from h300_owner_scoped_payout_transfer_capture import (  # noqa: E402
+    DEFAULT_PAYOUT_CASH_TOKENS,
     PAYOUT_REDEMPTION_TOPIC,
     TRANSFER_TOPIC,
     capture,
@@ -16,6 +17,8 @@ EXCHANGE = "0x" + "22" * 20
 ADAPTER = "0x" + "33" * 20
 COLLATERAL = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"
 CTF = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
+PUSD = next(iter(DEFAULT_PAYOUT_CASH_TOKENS))
+ZERO = "0x" + "00" * 20
 
 
 def word(value: int) -> str:
@@ -34,6 +37,14 @@ def transfer_log(source: str, target: str, amount: int) -> dict:
     }
 
 
+def cash_transfer_log(source: str, target: str, amount: int) -> dict:
+    return {
+        "address": PUSD,
+        "topics": [TRANSFER_TOPIC, topic_address(source), topic_address(target)],
+        "data": "0x" + word(amount),
+    }
+
+
 def payout_log(amount: int) -> dict:
     # PayoutRedemption(redeemer, collateral, parentCollectionId,
     #                  conditionId, indexSets, payout)
@@ -41,6 +52,17 @@ def payout_log(amount: int) -> dict:
     return {
         "address": CTF,
         "topics": [PAYOUT_REDEMPTION_TOPIC, topic_address(OWNER), topic_address(COLLATERAL), "0x" + word(0)],
+        "data": "0x" + data,
+    }
+
+
+def delegated_payout_log(amount: int, condition: str = "0x" + "07" * 32) -> dict:
+    # Current exchange path: PayoutRedemption(adapter, collateral,
+    # parentCollectionId) with conditionId, indexSets and payout in data.
+    data = word(int(condition, 16)) + word(96) + word(amount) + word(2) + word(1) + word(2)
+    return {
+        "address": CTF,
+        "topics": [PAYOUT_REDEMPTION_TOPIC, topic_address(ADAPTER), topic_address(COLLATERAL), "0x" + word(0)],
         "data": "0x" + data,
     }
 
@@ -104,6 +126,47 @@ def test_reverted_receipt_cannot_supply_cash_evidence():
     assert report["collateral_transfer_rows"] == 0
     assert report["payout_redemption_rows"] == 0
     assert report["cash_reconciliation_by_collateral_token"] == {}
+
+
+def test_delegated_payout_binds_adapter_event_to_owner_cash_mint():
+    tx = "0x" + "05" * 32
+    amount = 5_263_156
+    receipt = {
+        "transactionHash": tx,
+        "status": "0x1",
+        "blockNumber": "0x64",
+        "logs": [
+            delegated_payout_log(amount),
+            cash_transfer_log(ZERO, OWNER, amount),
+        ],
+    }
+    report = capture_account(
+        {"owner": OWNER, "activity": [{"type": "REDEEM", "transactionHash": tx,
+                                         "timestamp": 2, "usdcSize": "5.263156",
+                                         "slug": "btc-updown-5m-123"}]},
+        receipt_fetcher=lambda _tx: receipt,
+    )
+    assert report["payout_redemption_rows"] == 1
+    assert report["collateral_transfer_rows"] == 1
+    p_usd = report["cash_reconciliation_by_collateral_token"][PUSD]
+    assert p_usd["payout_redeem_transaction_matches"] == 1
+    assert p_usd["historical_cash_reuse_evidence"] is True
+
+
+def test_delegated_payout_without_owner_cash_mint_is_not_admitted():
+    tx = "0x" + "06" * 32
+    receipt = {
+        "transactionHash": tx,
+        "status": "0x1",
+        "logs": [delegated_payout_log(5_263_156)],
+    }
+    report = capture_account(
+        {"owner": OWNER, "activity": [{"type": "REDEEM", "transactionHash": tx,
+                                         "timestamp": 2, "usdcSize": "5.263156",
+                                         "slug": "btc-updown-5m-123"}]},
+        receipt_fetcher=lambda _tx: receipt,
+    )
+    assert report["payout_redemption_rows"] == 0
 
 
 def test_capture_keeps_ten_fill_compounding_gate_closed():
