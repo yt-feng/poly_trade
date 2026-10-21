@@ -69,6 +69,15 @@ def settlement_fields():
     return {
         "settlement_receipt_id": "settlement-1",
         "cash_release_receipt_id": "cash-release-1",
+        "settlement_status": "CONFIRMED",
+        "settlement_transaction_hash": "0xtx",
+        "settlement_timestamp": "105",
+        "settlement_payout": "5.50",
+        "settlement_reverted": False,
+        "cash_release_status": "CONFIRMED",
+        "cash_release_transaction_hash": "0xrelease",
+        "cash_release_timestamp": "110",
+        "cash_release_amount": "5.50",
     }
 
 
@@ -120,13 +129,39 @@ class TakerCompoundBundleAdapterTest(unittest.TestCase):
             self.assemble(trade={"trade_status": "TRADE_STATUS_MATCHED"})
         with self.assertRaisesRegex(ValueError, "trade_execution_role_must_be_taker"):
             self.assemble(trade={"execution_role": "MAKER"})
+        with self.assertRaisesRegex(ValueError, "order_status_must_be_matched"):
+            self.assemble(order={"order_status": "LIVE"})
+
+    def test_settlement_and_release_metadata_are_bound_to_the_row(self):
+        bad = settlement_fields()
+        bad["settlement_status"] = "MINED"
+        with self.assertRaisesRegex(ValueError, "settlement_status_must_be_confirmed"):
+            self.assemble(settlement=bad)
+        bad = settlement_fields()
+        bad["settlement_transaction_hash"] = "0xother"
+        with self.assertRaisesRegex(ValueError, "settlement_transaction_mismatch"):
+            self.assemble(settlement=bad)
+        bad = settlement_fields()
+        bad["settlement_reverted"] = True
+        with self.assertRaisesRegex(ValueError, "settlement_must_not_be_reverted"):
+            self.assemble(settlement=bad)
+        bad = settlement_fields()
+        bad["cash_release_amount"] = "5.49"
+        with self.assertRaisesRegex(ValueError, "cash_release_amount_mismatch"):
+            self.assemble(settlement=bad)
+        bad = settlement_fields()
+        bad["cash_release_timestamp"] = "111"
+        with self.assertRaisesRegex(ValueError, "cash_release_timestamp_mismatch"):
+            self.assemble(settlement=bad)
 
     def test_settlement_and_cash_release_receipts_must_be_distinct(self):
+        bad = settlement_fields()
+        bad.update({
+            "settlement_receipt_id": "same",
+            "cash_release_receipt_id": "same",
+        })
         with self.assertRaisesRegex(ValueError, "cash_release_receipt_not_independent"):
-            self.assemble(settlement={
-                "settlement_receipt_id": "same",
-                "cash_release_receipt_id": "same",
-            })
+            self.assemble(settlement=bad)
 
     def test_ten_assembled_rows_pass_the_continuous_cash_reconciler(self):
         rows = []
@@ -157,6 +192,15 @@ class TakerCompoundBundleAdapterTest(unittest.TestCase):
             settlement = {
                 "settlement_receipt_id": f"settlement-{sequence}",
                 "cash_release_receipt_id": f"cash-release-{sequence}",
+                "settlement_status": "CONFIRMED",
+                "settlement_transaction_hash": f"0xtx{sequence}",
+                "settlement_timestamp": str(sequence * 100 + 5),
+                "settlement_payout": "5.50",
+                "settlement_reverted": False,
+                "cash_release_status": "CONFIRMED",
+                "cash_release_transaction_hash": f"0xrelease{sequence}",
+                "cash_release_timestamp": str(sequence * 100 + 10),
+                "cash_release_amount": "5.50",
             }
             balance = {
                 "balance_checkpoint_id": f"balance-{sequence}",

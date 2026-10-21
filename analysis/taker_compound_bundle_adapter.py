@@ -77,6 +77,10 @@ def assemble_taker_compound_row(
         raise ValueError("evidence_field_groups_must_be_objects")
     if order_event.get("kind") not in {None, "entry_order_accepted"}:
         raise ValueError("order_event_must_be_accepted")
+    if _text(order_event.get("order_status")).upper() not in {
+        "MATCHED", "ORDER_STATUS_MATCHED"
+    }:
+        raise ValueError("order_status_must_be_matched")
     if trade_event.get("kind") not in {None, "entry_fill"}:
         raise ValueError("trade_event_must_be_confirmed_fill")
 
@@ -137,12 +141,43 @@ def assemble_taker_compound_row(
         "balance_after", "balance_checkpoint_id", "cash_reconciled",
         "independent_checkpoint", "settlement_receipt_id",
         "cash_release_receipt_id",
+        "settlement_status", "settlement_transaction_hash",
+        "settlement_timestamp", "settlement_payout", "settlement_reverted",
+        "cash_release_status", "cash_release_transaction_hash",
+        "cash_release_timestamp", "cash_release_amount",
     ):
         _required(row, field)
     if _text(row["orderfilled_event_id"]) != event_id:
         raise ValueError("ledger_orderfilled_event_mismatch")
     if _text(row["settlement_receipt_id"]) == _text(row["cash_release_receipt_id"]):
         raise ValueError("cash_release_receipt_not_independent")
+    if _text(row["settlement_status"]).upper() != "CONFIRMED":
+        raise ValueError("settlement_status_must_be_confirmed")
+    if type(row["settlement_reverted"]) is not bool:
+        raise ValueError("settlement_reversion_status_required")
+    if row["settlement_reverted"]:
+        raise ValueError("settlement_must_not_be_reverted")
+    if _text(row["settlement_transaction_hash"]) != transaction_ref:
+        raise ValueError("settlement_transaction_mismatch")
+    if _text(row["cash_release_status"]).upper() != "CONFIRMED":
+        raise ValueError("cash_release_status_must_be_confirmed")
+    if _text(row["cash_release_transaction_hash"]) == transaction_ref:
+        raise ValueError("cash_release_transaction_must_be_independent")
+    try:
+        settlement_timestamp = int(str(row["settlement_timestamp"]))
+        cash_release_timestamp = int(str(row["cash_release_timestamp"]))
+        entry_timestamp = int(str(row["entry_ts"]))
+        available_timestamp = int(str(row["cash_available_ts"]))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("receipt_timestamps_must_be_integer") from exc
+    if settlement_timestamp < entry_timestamp:
+        raise ValueError("settlement_timestamp_before_entry")
+    if cash_release_timestamp != available_timestamp:
+        raise ValueError("cash_release_timestamp_mismatch")
+    if cash_release_timestamp <= entry_timestamp:
+        raise ValueError("cash_release_timestamp_must_follow_entry")
+    _same_decimal(row["settlement_payout"], row["payout"], "settlement_payout")
+    _same_decimal(row["cash_release_amount"], row["payout"], "cash_release_amount")
     _same_decimal(orderfilled_event.get("cash_amount"), row["entry_cost"], "entry_cost")
 
     row.update({
