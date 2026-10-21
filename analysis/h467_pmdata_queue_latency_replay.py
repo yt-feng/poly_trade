@@ -58,6 +58,63 @@ def _winning_outcome(value: Any) -> str | None:
     return None
 
 
+def _invert_winning_outcome(value: Any) -> Any:
+    """Map the source market outcome onto the complementary token book."""
+    outcome = _winning_outcome(value)
+    if outcome == "yes":
+        return "no"
+    if outcome == "no":
+        return "yes"
+    return value
+
+
+def _invert_l2_book(l2: Any) -> Any:
+    """Build the complementary binary-token book from PMData's market book.
+
+    PMData stores one market-level book (there is no ``outcome`` column in
+    the L2 archive).  The no-token book is the price complement of the yes
+    book: bids become complemented asks and asks become complemented bids.
+    ``polymarket_to_hbt`` can then run the two tokens as independent assets.
+    """
+    import polars as pl
+
+    return l2.with_columns(
+        pl.col("ask_prices").list.eval(1.0 - pl.element()).alias("_no_bid_prices"),
+        pl.col("bid_prices").list.eval(1.0 - pl.element()).alias("_no_ask_prices"),
+        pl.col("ask_sizes").alias("_no_bid_sizes"),
+        pl.col("bid_sizes").alias("_no_ask_sizes"),
+        (1.0 - pl.col("best_ask")).alias("_no_best_bid"),
+        (1.0 - pl.col("best_bid")).alias("_no_best_ask"),
+        pl.when(pl.col("pc_side") == "BUY")
+        .then(pl.lit("SELL"))
+        .when(pl.col("pc_side") == "SELL")
+        .then(pl.lit("BUY"))
+        .otherwise(pl.col("pc_side"))
+        .alias("_no_pc_side"),
+        pl.when(pl.col("winning_outcome").cast(pl.Utf8).str.to_lowercase() == "yes")
+        .then(pl.lit("no"))
+        .when(pl.col("winning_outcome").cast(pl.Utf8).str.to_lowercase() == "no")
+        .then(pl.lit("yes"))
+        .otherwise(pl.col("winning_outcome"))
+        .alias("_no_winning_outcome"),
+        (1.0 - pl.col("pc_price")).alias("_no_pc_price"),
+    ).with_columns(
+        pl.col("_no_bid_prices").alias("bid_prices"),
+        pl.col("_no_ask_prices").alias("ask_prices"),
+        pl.col("_no_bid_sizes").alias("bid_sizes"),
+        pl.col("_no_ask_sizes").alias("ask_sizes"),
+        pl.col("_no_best_bid").alias("best_bid"),
+        pl.col("_no_best_ask").alias("best_ask"),
+        pl.col("_no_pc_side").alias("pc_side"),
+        pl.col("_no_winning_outcome").alias("winning_outcome"),
+        pl.col("_no_pc_price").alias("pc_price"),
+    ).drop(
+        "_no_bid_prices", "_no_ask_prices", "_no_bid_sizes", "_no_ask_sizes",
+        "_no_best_bid", "_no_best_ask", "_no_pc_side", "_no_winning_outcome",
+        "_no_pc_price",
+    )
+
+
 def _run_market(l2: pl.DataFrame, trades: pl.DataFrame, trigger: float) -> dict[str, Any]:
     """Run the frozen two-token trigger through pm-hftbacktest."""
     # The import is intentionally lazy so contract and ledger tests do not
@@ -99,11 +156,15 @@ def _run_market(l2: pl.DataFrame, trades: pl.DataFrame, trigger: float) -> dict[
                     break
 
     assets = []
+    token_books = {"yes": l2, "no": _invert_l2_book(l2)}
     for outcome in ("yes", "no"):
-        part = l2.filter(pl.col("outcome").cast(pl.Utf8).str.to_lowercase() == outcome)
+        part = token_books[outcome]
         if part.is_empty():
             return {"status": "invalid_market", "reason": f"missing_{outcome}_book"}
-        trade_part = trades.filter(pl.col("outcome").cast(pl.Utf8).str.to_lowercase() == outcome)
+        if trades.is_empty() or "outcome" not in trades.columns:
+            trade_part = pl.DataFrame()
+        else:
+            trade_part = trades.filter(pl.col("outcome").cast(pl.Utf8).str.to_lowercase() == outcome)
         data = polymarket_to_hbt(part, trade_df=trade_part if not trade_part.is_empty() else None)
         if len(data) == 0:
             return {"status": "invalid_market", "reason": f"empty_{outcome}_events"}

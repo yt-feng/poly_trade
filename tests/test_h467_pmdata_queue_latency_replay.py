@@ -20,3 +20,9 @@ def test_winning_outcome_normalization():
     assert h467._winning_outcome("yes") == "yes"
     assert h467._winning_outcome("NO") == "no"
     assert h467._winning_outcome("unknown") is None
+
+
+def test_pmdata_market_book_has_complementary_token_mapping():
+    assert h467._invert_winning_outcome("yes") == "no"
+    assert h467._invert_winning_outcome("NO") == "yes"
+    assert h467._invert_winning_outcome(None) is None
