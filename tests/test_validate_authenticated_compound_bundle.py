@@ -3,6 +3,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
@@ -31,7 +32,8 @@ def event(i: int) -> dict[str, object]:
 
 def v2_event(i: int) -> dict[str, object]:
     sequence = i + 1
-    balance_before = 10 + i * 0.5
+    fee = Decimal("0.175")
+    balance_before = Decimal("10") + Decimal(i) * Decimal("0.325")
     return {
         "owner": "owner-1",
         "ledger_id": "ledger-1",
@@ -41,6 +43,10 @@ def v2_event(i: int) -> dict[str, object]:
         "status": "confirmed",
         "trade_id": f"trade-{i}",
         "transaction_ref": f"tx-{i}",
+        "market_id": "market-1",
+        "execution_role": "TAKER",
+        "shares": "10",
+        "price": "0.5",
         "settlement_receipt_id": f"settlement-{i}",
         "cash_release_receipt_id": f"cash-release-{i}",
         "balance_checkpoint_id": f"balance-{i}",
@@ -49,15 +55,23 @@ def v2_event(i: int) -> dict[str, object]:
         "entry_ts": str(i * 100),
         "cash_available_ts": str(i * 100 + 10),
         "entry_cost": "5",
-        "fee": "0",
+        "fee": format(fee, "f"),
+        "fees_enabled": True,
+        "fee_taker_only": True,
+        "fee_rate": "0.07",
+        "fee_exponent": "1",
+        "fee_rebate_rate": "0",
+        "fee_schedule_market_id": "market-1",
+        "fee_schedule_source": "market-snapshot",
+        "fee_schedule_observed_ts": str(i * 100 - 1),
         "payout": "5.50",
         "released_cash_since_previous_entry": "5.50" if sequence > 1 else "0",
-        "balance_before": str(balance_before),
-        "balance_after": str(balance_before - 5),
+        "balance_before": format(balance_before, "f"),
+        "balance_after": format(balance_before - Decimal("5") - fee, "f"),
     }
 
 
-def v2_bundle(*, closing_balance: str = "15.00") -> dict[str, object]:
+def v2_bundle(*, closing_balance: str = "13.25") -> dict[str, object]:
     return {
         "schema": "authenticated-compound-bundle-v2",
         "owner": "owner-1",
@@ -98,13 +112,27 @@ class TestAuthenticatedCompoundBundle(unittest.TestCase):
         result = validate_bundle_document(v2_bundle())
         self.assertIs(result["gate_passed"], True)
         self.assertEqual(result["fills"], 10)
-        self.assertEqual(result["ending_cash"], "15.00")
+        self.assertEqual(result["ending_cash"], "13.250")
         self.assertNotIn("ledger", result)
 
     def test_v2_bundle_fails_closed_on_closing_balance_mismatch(self):
         result = validate_bundle_document(v2_bundle(closing_balance="10.00"))
         self.assertIs(result["gate_passed"], False)
         self.assertEqual(result["failure_reason"], "closing_balance_arithmetic_mismatch")
+
+    def test_v2_bundle_rejects_fee_schedule_observed_after_entry(self):
+        document = v2_bundle()
+        document["events"][0]["fee_schedule_observed_ts"] = "101"
+        result = validate_bundle_document(document)
+        self.assertIs(result["gate_passed"], False)
+        self.assertEqual(result["failure_reason"], "fee_schedule_observed_after_entry")
+
+    def test_v2_bundle_rejects_fee_amount_not_matching_schedule(self):
+        document = v2_bundle()
+        document["events"][0]["fee"] = "0.17"
+        result = validate_bundle_document(document)
+        self.assertIs(result["gate_passed"], False)
+        self.assertEqual(result["failure_reason"], "fee_amount_schedule_mismatch")
 
     def test_v2_bundle_rejects_non_ten_cli_requirement(self):
         result = validate_bundle_document(v2_bundle(), required_fills=9)

@@ -93,6 +93,7 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
             starting_checkpoint_id=opening,
             closing_balance_checkpoint_id=closing,
             closing_balance=document.get("closing_balance"),
+            require_fee_schedule=True,
         )
     except (TypeError, ValueError) as exc:
         return {"gate_passed": False, "failure_reason": str(exc) or "bundle_validation_error"}

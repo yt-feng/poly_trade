@@ -43,6 +43,7 @@ def reconcile_authenticated_chain(
     starting_checkpoint_id: Any = None,
     closing_balance_checkpoint_id: Any = None,
     closing_balance: Any = None,
+    require_fee_schedule: bool = False,
 ) -> dict[str, Any]:
     """Validate identities and evaluate one no-reset authenticated cash chain.
 
@@ -54,7 +55,11 @@ def reconcile_authenticated_chain(
     The explicit opening and closing checkpoint anchors are required even for
     this compatibility helper. Without them, a caller could supply ten
     internally consistent rows while leaving the account slice undefined.
-    These anchors do not authenticate their origin; they make the required
+    When ``require_fee_schedule`` is true, each row must also carry a
+    pre-entry market fee snapshot and the fee is recomputed from its executed
+    price, size, enabled flag, rate and exponent.  This prevents a bundle from
+    making the balance arithmetic self-consistent by asserting an arbitrary
+    fee amount.  These anchors do not authenticate their origin; they make the required
     ledger interval explicit so a v2 caller can bind it to captured evidence.
     """
     expected_owner = _text(owner)
@@ -65,6 +70,14 @@ def reconcile_authenticated_chain(
             "gate_passed": False,
             "fills": 0,
             "failure_reason": "required_fills_fixed_at_ten",
+            "owner_scoped": False,
+            "identity_complete": False,
+        }
+    if type(require_fee_schedule) is not bool:
+        return {
+            "gate_passed": False,
+            "fills": 0,
+            "failure_reason": "require_fee_schedule_must_be_bool",
             "owner_scoped": False,
             "identity_complete": False,
         }
@@ -228,6 +241,46 @@ def reconcile_authenticated_chain(
         except (ValueError, TypeError, InvalidOperation) as exc:
             reason = str(exc) if isinstance(exc, ValueError) and str(exc) else "invalid_ledger_amount_or_timestamp"
             return {"gate_passed": False, "fills": 0, "failure_reason": reason, "owner_scoped": True, "identity_complete": False}
+        if require_fee_schedule:
+            try:
+                market_id = _text(row.get("market_id"))
+                execution_role = _text(row.get("execution_role")).upper()
+                fees_enabled = row.get("fees_enabled")
+                fee_taker_only = row.get("fee_taker_only")
+                fee_rate = _decimal(row.get("fee_rate"), "fee_rate")
+                fee_exponent = _decimal(row.get("fee_exponent"), "fee_exponent")
+                fee_rebate_rate = _decimal(row.get("fee_rebate_rate"), "fee_rebate_rate")
+                fee_schedule_market_id = _text(row.get("fee_schedule_market_id"))
+                fee_schedule_source = _text(row.get("fee_schedule_source"))
+                fee_schedule_observed_ts = int(str(row.get("fee_schedule_observed_ts")))
+                shares = _decimal(row.get("shares"), "shares")
+                price = _decimal(row.get("price"), "price")
+                fee_amount = _decimal(row.get("fee"), "fee")
+                entry_cost_amount = _decimal(row.get("entry_cost"), "entry_cost")
+            except (ValueError, TypeError, InvalidOperation) as exc:
+                reason = str(exc) if isinstance(exc, ValueError) and str(exc) else "invalid_fee_schedule_binding"
+                return {"gate_passed": False, "fills": 0, "failure_reason": reason, "owner_scoped": True, "identity_complete": False}
+            if not market_id or fee_schedule_market_id != market_id:
+                return {"gate_passed": False, "fills": 0, "failure_reason": "fee_schedule_market_mismatch", "owner_scoped": True, "identity_complete": False}
+            if type(fees_enabled) is not bool or type(fee_taker_only) is not bool:
+                return {"gate_passed": False, "fills": 0, "failure_reason": "fee_schedule_flags_required", "owner_scoped": True, "identity_complete": False}
+            if not fee_schedule_source:
+                return {"gate_passed": False, "fills": 0, "failure_reason": "fee_schedule_source_required", "owner_scoped": True, "identity_complete": False}
+            if fee_schedule_observed_ts > entry_ts:
+                return {"gate_passed": False, "fills": 0, "failure_reason": "fee_schedule_observed_after_entry", "owner_scoped": True, "identity_complete": False}
+            if fee_rate < 0 or fee_exponent <= 0 or fee_rebate_rate < 0 or fee_rebate_rate > 1:
+                return {"gate_passed": False, "fills": 0, "failure_reason": "invalid_fee_schedule_values", "owner_scoped": True, "identity_complete": False}
+            if shares <= 0 or price <= 0 or price >= 1:
+                return {"gate_passed": False, "fills": 0, "failure_reason": "invalid_fee_schedule_trade_terms", "owner_scoped": True, "identity_complete": False}
+            if abs(entry_cost_amount - shares * price) > Decimal("0.000001"):
+                return {"gate_passed": False, "fills": 0, "failure_reason": "entry_cost_price_arithmetic_mismatch", "owner_scoped": True, "identity_complete": False}
+            if execution_role not in {"TAKER", "MAKER"}:
+                return {"gate_passed": False, "fills": 0, "failure_reason": "execution_role_required_for_fee_schedule", "owner_scoped": True, "identity_complete": False}
+            expected_fee = Decimal("0")
+            if fees_enabled and (execution_role == "TAKER" or not fee_taker_only):
+                expected_fee = shares * fee_rate * (price ** fee_exponent) * (Decimal("1") - price)
+            if abs(fee_amount - expected_fee) > Decimal("0.000001"):
+                return {"gate_passed": False, "fills": 0, "failure_reason": "fee_amount_schedule_mismatch", "owner_scoped": True, "identity_complete": False}
         if previous_entry is not None and entry_ts <= previous_entry:
             return {"gate_passed": False, "fills": 0, "failure_reason": "entry_timestamps_must_increase", "owner_scoped": True, "identity_complete": False}
         if available_ts <= entry_ts:
