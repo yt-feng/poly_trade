@@ -105,7 +105,7 @@ jobs:
           research_vault.write_new(delivery/'part-0000.vault',research_vault.seal(research_vault.canonical(payload),recipient,rid),0o600)
           research_vault.write_new(delivery/'status.json',research_vault.canonical({'version':1,'status':'complete','stage':'sealed_delivery','strategy_evaluated':False,'live_orders_enabled':False,'plaintext_published':False,'sealed_parts':1})+b'\n',0o644)
           PY
-          RESEARCH_RECIPIENT_ID="$QUALITY_FIRST_RECIPIENT_ID" PYTHONPATH=tools python tools/publish_quality_first_journal.py --source sealed-delivery --repository yt-feng/poly_trade --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --recipient-id "$RESEARCH_RECIPIENT_ID"
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py --source sealed-delivery --repository yt-feng/poly_trade --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --recipient-id "$QUALITY_FIRST_RECIPIENT_ID"
       - name: Redacted summary and cleanup
         if: always()
         run: |
