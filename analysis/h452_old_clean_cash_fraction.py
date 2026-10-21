@@ -51,6 +51,12 @@ EXIT_CUTOFF_SECONDS = 30.0
 REQUIRED_FILLS = 10
 
 
+def _decision_label(hypothesis_id: str) -> str:
+    """Keep derived H453 runs from inheriting H452's result label."""
+    prefix = str(hypothesis_id).split("_", 1)[0].strip().lower()
+    return prefix if prefix else "h452"
+
+
 def _fee(shares: float, fill_price: float) -> float:
     return shares * TAKER_FEE_RATE * fill_price * (1.0 - fill_price)
 
@@ -325,7 +331,7 @@ def evaluate(
         "window_count": len(windows),
         "cell_summaries": cells,
         "all_cells_passed": all_pass,
-        "decision": "h452_cash_fraction_passes_paper_gate" if all_pass else "h452_cash_fraction_rejects_or_weakens_paper_gate",
+        "decision": f"{_decision_label(hypothesis_id)}_cash_fraction_passes_paper_gate" if all_pass else f"{_decision_label(hypothesis_id)}_cash_fraction_rejects_or_weakens_paper_gate",
         "protocol": {
             "initial_cash_usd": INITIAL_CASH,
             "required_fills": REQUIRED_FILLS,
