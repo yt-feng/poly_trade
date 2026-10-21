@@ -56,3 +56,21 @@ def test_h544_workflow_uses_committed_recipient_without_variable_permission():
     text = workflow.read_text(encoding="utf-8")
     assert "gh', 'variable', 'get'" not in text
     assert "research_vault/recipient.json" in text
+
+
+def test_parameterized_adaptive_workflow_exposes_registered_policy_inputs():
+    from pathlib import Path
+
+    workflow = Path(__file__).parents[1] / ".github" / "workflows" / "h544-intermediate-cash-boost.yml"
+    text = workflow.read_text(encoding="utf-8")
+    for input_name in (
+        "hypothesis_id",
+        "result_format",
+        "base_fraction",
+        "boost_fraction",
+        "boost_after_profitable_exits",
+    ):
+        assert f"      {input_name}:" in text
+    assert "--hypothesis-id \"$HYPOTHESIS_ID\"" in text
+    assert "--boost-after-profits \"$BOOST_AFTER_PROFITS\"" in text
+    assert "'hypothesis_id': os.environ['HYPOTHESIS_ID']" in text

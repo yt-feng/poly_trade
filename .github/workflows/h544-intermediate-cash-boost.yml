@@ -1,4 +1,4 @@
-name: H544 old-clean intermediate cash boost
+name: Old-clean adaptive cash boost (parameterized)
 
 on:
   workflow_dispatch:
@@ -7,6 +7,31 @@ on:
         description: Pinned old-clean source
         required: true
         default: bbda5f2050685f63153621a54641ebdfab943487
+        type: string
+      hypothesis_id:
+        description: Pre-registered hypothesis identifier
+        required: true
+        default: H544_INTERMEDIATE_CASH_BOOST_AFTER_TWO_PROFITS
+        type: string
+      result_format:
+        description: Sealed result format identifier
+        required: true
+        default: old-clean-h544-intermediate-cash-boost-v1
+        type: string
+      base_fraction:
+        description: Base cash fraction
+        required: true
+        default: '0.55'
+        type: string
+      boost_fraction:
+        description: Post-profit cash fraction
+        required: true
+        default: '0.575'
+        type: string
+      boost_after_profitable_exits:
+        description: Profitable released exits required before boosting
+        required: true
+        default: '2'
         type: string
 
 permissions:
@@ -31,30 +56,40 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy scikit-learn pytest
-      - name: Validate H544 contract
+      - name: Validate adaptive cash boost contract
         run: python -m pytest -q tests/test_h542_adaptive_cash_policy.py tests/test_h506_h452_execution_depth_stress.py tests/test_h508_cash_fraction_depth_tradeoff.py
-      - name: Run H544 on pinned old-clean source
+      - name: Run parameterized adaptive boost on pinned old-clean source
         env:
           PYTHONUNBUFFERED: '1'
+          HYPOTHESIS_ID: ${{ inputs.hypothesis_id }}
+          RESULT_FORMAT: ${{ inputs.result_format }}
+          BASE_FRACTION: ${{ inputs.base_fraction }}
+          BOOST_FRACTION: ${{ inputs.boost_fraction }}
+          BOOST_AFTER_PROFITS: ${{ inputs.boost_after_profitable_exits }}
         run: |
           set -euo pipefail
-          PRIVATE_DIR="$RUNNER_TEMP/old-data-h544"
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-adaptive-boost"
           mkdir -m 700 "$PRIVATE_DIR"
           python -u analysis/h542_adaptive_cash_boost.py \
             --source-root source_poly/data/monthly_runs \
             --source-commit "${{ inputs.source_commit }}" \
             --output "$PRIVATE_DIR/results" \
-            --hypothesis-id H544_INTERMEDIATE_CASH_BOOST_AFTER_TWO_PROFITS \
-            --result-format old-clean-h544-intermediate-cash-boost-v1 \
-            --base-fraction 0.55 \
-            --boost-fraction 0.575 \
-            --boost-after-profits 2 > "$PRIVATE_DIR/analysis-output.txt"
-      - name: Seal H544 results
+            --hypothesis-id "$HYPOTHESIS_ID" \
+            --result-format "$RESULT_FORMAT" \
+            --base-fraction "$BASE_FRACTION" \
+            --boost-fraction "$BOOST_FRACTION" \
+            --boost-after-profits "$BOOST_AFTER_PROFITS" > "$PRIVATE_DIR/analysis-output.txt"
+      - name: Seal parameterized adaptive boost results
         env:
           SOURCE_DATA_COMMIT: ${{ inputs.source_commit }}
+          HYPOTHESIS_ID: ${{ inputs.hypothesis_id }}
+          RESULT_FORMAT: ${{ inputs.result_format }}
+          BASE_FRACTION: ${{ inputs.base_fraction }}
+          BOOST_FRACTION: ${{ inputs.boost_fraction }}
+          BOOST_AFTER_PROFITS: ${{ inputs.boost_after_profitable_exits }}
         run: |
           set -euo pipefail
-          python - "$RUNNER_TEMP/old-data-h544" <<'PY'
+          python - "$RUNNER_TEMP/old-data-adaptive-boost" <<'PY'
           import json, os, sys
           from pathlib import Path
           sys.path.insert(0, 'tools')
@@ -65,12 +100,12 @@ jobs:
           research_vault.validate_recipient(recipient, recipient_id)
           results = private / 'results'
           payload = {
-              'format': 'old-clean-h544-intermediate-cash-boost-sealed-v1',
+              'format': os.environ['RESULT_FORMAT'],
               'preregistration': {
-                  'hypothesis_id': 'H544_INTERMEDIATE_CASH_BOOST_AFTER_TWO_PROFITS',
-                  'base_fraction': 0.55,
-                  'boost_fraction': 0.575,
-                  'boost_after_profitable_exits': 2,
+                  'hypothesis_id': os.environ['HYPOTHESIS_ID'],
+                  'base_fraction': float(os.environ['BASE_FRACTION']),
+                  'boost_fraction': float(os.environ['BOOST_FRACTION']),
+                  'boost_after_profitable_exits': int(os.environ['BOOST_AFTER_PROFITS']),
                   'source_commit': os.environ['SOURCE_DATA_COMMIT'],
               },
               'summary': json.loads((results / 'summary.json').read_text()),
@@ -81,7 +116,7 @@ jobs:
           research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
           research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version':1,'status':'complete','stage':'sealed_delivery','strategy_evaluated':True,'live_orders_enabled':False,'plaintext_published':False,'sealed_parts':1}) + b'\n', 0o644)
           PY
-      - name: Publish encrypted H544 journal
+      - name: Publish encrypted adaptive boost journal
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -96,8 +131,8 @@ jobs:
       - name: Write redacted summary
         if: always()
         run: |
-          echo '## H544 old-clean intermediate cash boost' >> "$GITHUB_STEP_SUMMARY"
-          echo '- H534 fixed 0.55, fee/release rules, depth/latency grid and one evolving ledger remain fixed; only the pre-registered 0.575 post-profit boost is tested.' >> "$GITHUB_STEP_SUMMARY"
+          echo '## Parameterized old-clean adaptive cash boost' >> "$GITHUB_STEP_SUMMARY"
+          echo '- The pinned source, fee/release rules, depth/latency grid and one evolving ledger remain fixed; only the supplied pre-registered post-profit boost is tested.' >> "$GITHUB_STEP_SUMMARY"
           echo '- Detailed metrics remain in the encrypted research vault.' >> "$GITHUB_STEP_SUMMARY"
       - name: Remove runner-local plaintext
         if: always()
@@ -105,6 +140,6 @@ jobs:
           python - <<'PY'
           import os, shutil
           from pathlib import Path
-          for path in (Path(os.environ['RUNNER_TEMP']) / 'old-data-h544', Path('sealed-delivery')):
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'old-data-adaptive-boost', Path('sealed-delivery')):
               if path.exists(): shutil.rmtree(path)
           PY
