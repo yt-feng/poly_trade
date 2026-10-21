@@ -8,6 +8,7 @@ from h353_authenticated_trade_receipt_join import capture  # noqa: E402
 from h300_owner_scoped_payout_transfer_capture import PAYOUT_REDEMPTION_TOPIC, TRANSFER_TOPIC  # noqa: E402
 
 
+WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "h353-authenticated-trade-receipt-join.yml"
 OWNER = "0x" + "11" * 20
 TX = "0x" + "01" * 32
 COLLATERAL = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"
@@ -27,6 +28,11 @@ def activity(*, slug="btc-updown-5m-123", tx=TX, kind="TRADE"):
         "slug": slug,
         "conditionId": "0x" + "07" * 32,
     }
+
+
+def test_h353_defaults_to_the_independent_read_only_receipt_endpoint():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "default: https://polygon.drpc.org" in text
 
 
 def _word(value: int) -> str:
