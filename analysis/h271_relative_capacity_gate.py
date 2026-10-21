@@ -84,6 +84,30 @@ def _group_passes(rows: list[dict[str, object]]) -> bool:
     )
 
 
+def _holdout_block_passes(rows: list[dict[str, object]]) -> bool:
+    """Require every contiguous holdout block and every execution cell to pass.
+
+    The pooled ``holdout59`` prefix is a useful diagnostic, but it can hide a
+    chronological gap.  A promotion-facing holdout result must therefore
+    contain exactly one complete cell group for each of the five blocks and
+    every row in every group must fund the same ten-row paper chain.
+    """
+    expected_per_block = len(SLIPPAGES) * len(DEPTH_FLOORS) * len(CAPACITY_RATIOS)
+    expected_splits = {f"holdout_block_{index}" for index in range(1, len(HOLDOUT_BLOCK_SIZES) + 1)}
+    if not rows or {str(row.get("split")) for row in rows} != expected_splits:
+        return False
+    for split in expected_splits:
+        group = [row for row in rows if row.get("split") == split]
+        if len(group) != expected_per_block:
+            return False
+        if not all(
+            int(row["first_ten_fills"]) == REQUIRED_FILLS and bool(row["first_ten_passed"])
+            for row in group
+        ):
+            return False
+    return True
+
+
 def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str, object]:
     observed = subprocess.check_output(["git", "-C", str(source_root.parent.parent), "rev-parse", "HEAD"], text=True).strip()
     if observed != source_commit:
@@ -114,6 +138,15 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
             })
     choice = sorted(eligible, key=lambda row: (-row["worst_first_ten_cash_usd"], row["candidate"]))[0] if eligible else None
     chosen_holdout = [row for row in rows if row["split"] == "holdout59" and choice and row["candidate"] == choice["candidate"]]
+    chosen_holdout_blocks = [
+        row for row in rows
+        if str(row["split"]).startswith("holdout_block_") and choice and row["candidate"] == choice["candidate"]
+    ]
+    pooled_holdout_passed = _group_passes(chosen_holdout)
+    holdout_block_gate_passed = _holdout_block_passes(chosen_holdout_blocks)
+    holdout_block_prefix_growth_passed = bool(chosen_holdout_blocks) and all(
+        float(row["first_ten_ending_cash_usd"]) >= INITIAL_CASH for row in chosen_holdout_blocks
+    )
     summary = {
         "format": "old-clean-h271-relative-capacity-gate-v1",
         "source_root": str(source_root),
@@ -123,11 +156,21 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
         "feature_rows": len(features),
         "candidates": list(CANDIDATES),
         "new_hypothesis": "capacity_usd / fee_aware_required_cash >= 1, 2, or 3, with strict single-position turnover",
-        "selection_rule": "Require all 12 selection cells to pass the exact ten-fill same-ledger paper prefix; rank by worst tenth-fill cash; evaluate holdout once.",
+        "selection_rule": "Require all 12 selection cells to pass the exact ten-fill same-ledger paper prefix; rank by worst tenth-fill cash; evaluate pooled holdout and every contiguous holdout block once.",
         "selection_choice": choice,
         "selection_eligible_count": len(eligible),
-        "holdout_passed": _group_passes(chosen_holdout),
+        "holdout_pooled_passed": pooled_holdout_passed,
+        "holdout_block_gate_passed": holdout_block_gate_passed,
+        "holdout_passed": pooled_holdout_passed and holdout_block_gate_passed,
         "holdout_prefix_growth_passed": bool(chosen_holdout) and all(float(row["first_ten_ending_cash_usd"]) >= INITIAL_CASH for row in chosen_holdout),
+        "holdout_block_prefix_growth_passed": holdout_block_prefix_growth_passed,
+        "decision": (
+            "h271_pooled_holdout_passes_but_contiguous_blocks_reject"
+            if pooled_holdout_passed and not holdout_block_gate_passed
+            else "h271_holdout_and_contiguous_blocks_pass_paper_only"
+            if pooled_holdout_passed and holdout_block_gate_passed
+            else "h271_selection_or_pooled_holdout_reject"
+        ),
         "protocol": {
             "initial_cash_usd": INITIAL_CASH,
             "required_fills": REQUIRED_FILLS,
@@ -156,7 +199,7 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
     output.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(output / "metrics.csv", index=False)
     (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({key: summary[key] for key in ("selection_choice", "selection_eligible_count", "holdout_passed", "holdout_prefix_growth_passed")}, ensure_ascii=False, sort_keys=True))
+    print(json.dumps({key: summary[key] for key in ("selection_choice", "selection_eligible_count", "holdout_pooled_passed", "holdout_block_gate_passed", "holdout_passed", "holdout_prefix_growth_passed", "holdout_block_prefix_growth_passed", "decision")}, ensure_ascii=False, sort_keys=True))
     return summary
 
 
