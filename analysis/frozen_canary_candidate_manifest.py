@@ -10,46 +10,43 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-try:
-    from .h432_old_clean_extratrees_compound import (
-        EDGE_THRESHOLD,
-        FEATURES,
-        INITIAL_CASH,
-        MAX_OVERROUND,
-        MAX_SPREAD,
-        MIN_DEPTH,
-        MINIMUM_ORDER_SHARES,
-        MINIMUM_ORDER_USD,
-        MODEL_PARAMS,
-        PRICE_MAX,
-        PRICE_MIN,
-        REQUIRED_FILLS,
-        SLIPPAGES,
-        TAKER_FEE_RATE,
-        CASH_RELEASE_SECONDS,
-        ENTRY_SECONDS_AFTER_START,
-        SOURCE_COMMIT,
-    )
-except ImportError:  # pragma: no cover - direct script execution
-    from h432_old_clean_extratrees_compound import (
-        EDGE_THRESHOLD,
-        FEATURES,
-        INITIAL_CASH,
-        MAX_OVERROUND,
-        MAX_SPREAD,
-        MIN_DEPTH,
-        MINIMUM_ORDER_SHARES,
-        MINIMUM_ORDER_USD,
-        MODEL_PARAMS,
-        PRICE_MAX,
-        PRICE_MIN,
-        REQUIRED_FILLS,
-        SLIPPAGES,
-        TAKER_FEE_RATE,
-        CASH_RELEASE_SECONDS,
-        ENTRY_SECONDS_AFTER_START,
-        SOURCE_COMMIT,
-    )
+# Keep this contract dependency-free.  Importing the replay module here would
+# pull numpy/pandas/sklearn into a workflow that only audits a frozen manifest.
+# These values are copied from H432/H434/H447 and are checked into this file so
+# a future dependency or replay refactor cannot silently alter admission.
+SOURCE_COMMIT = "bbda5f2050685f63153621a54641ebdfab943487"
+FEATURES = [
+    "btc_move_1m", "btc_move_2m", "btc_move_4m", "mid_up_prob_open",
+    "mid_up_prob_2m", "mid_up_prob_change_2m", "buy_up_price_2m",
+    "buy_down_price_2m", "buy_up_size_2m", "buy_down_size_2m",
+    "sell_up_size_2m", "sell_down_size_2m", "size_imbalance_updown_2m",
+    "sell_size_imbalance_updown_2m", "bid_depth_imbalance_updown_2m",
+    "book_pressure_up_2m", "book_pressure_down_2m",
+    "spread_up_median_first2m", "spread_down_median_first2m",
+    "overround_median_first2m", "quote_count_first2m",
+    "trade_count_sum_first2m", "trade_volume_sum_first2m",
+    "realized_vol_first2m", "path_efficiency_first2m",
+    "max_drawdown_first2m", "max_rebound_first2m",
+]
+MODEL_PARAMS = {
+    "n_estimators": 120, "max_depth": 7, "min_samples_leaf": 25,
+    "max_features": 0.7, "class_weight": "balanced_subsample",
+    "random_state": 4121, "n_jobs": -1,
+}
+SLIPPAGES = (0.005, 0.010)
+INITIAL_CASH = 10.0
+MINIMUM_ORDER_USD = 5.0
+MINIMUM_ORDER_SHARES = 5.0
+TAKER_FEE_RATE = 0.07
+CASH_RELEASE_SECONDS = 900.0
+ENTRY_SECONDS_AFTER_START = 124.0
+EDGE_THRESHOLD = 0.02
+PRICE_MIN = 0.05
+PRICE_MAX = 0.80
+MIN_DEPTH = 100.0
+MAX_SPREAD = 0.06
+MAX_OVERROUND = 0.03
+REQUIRED_FILLS = 10
 
 
 MANIFEST_FORMAT = "frozen-canary-candidate-manifest-v1"
