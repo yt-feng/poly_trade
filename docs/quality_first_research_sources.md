@@ -34,6 +34,8 @@ Ten prospective paper fills can exercise a frozen pipeline, but cannot alone est
 
 **Canary counting rule.** A Canary is exactly ten chronological, owner-scoped fills on one evolving cash ledger. Row *n + 1* may use only cash released and reconciled after row *n*; a reset, concatenated windows, independent starting balances or paper-only fill makes the chain non-admissible. The first ten rows must carry the entry, fee/lock, settlement, release and post-release cash checkpoints, so the compounding path can be audited row by row.
 
+**Small-capital floor.** Under the current crypto taker contract, a $5 minimum entry from a $10 ledger incurs a positive fee, so the immediately available balance is below the next $5 minimum. If that first position settles at zero, the next entry cannot be funded. A ten-row taker chain therefore has to survive its first loss under a separately verified cash rule; otherwise the capital-compatible route is passive liquidity, which still requires real queue, fill, settlement and cash-release evidence.
+
 ## 4. Research sources and limits of transfer
 
 | Original source and date | What to use | What it does not establish |
