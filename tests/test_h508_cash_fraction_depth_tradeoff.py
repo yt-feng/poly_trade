@@ -1,7 +1,7 @@
 import pandas as pd
 from types import SimpleNamespace
 
-from analysis.h508_cash_fraction_depth_tradeoff import _replay_fraction_depth
+from analysis.h508_cash_fraction_depth_tradeoff import _is_holdout_window, _replay_fraction_depth
 
 
 def row(**overrides):
@@ -62,3 +62,8 @@ def test_fraction_depth_rejects_invalid_fraction():
         assert "gross_cash_fraction" in str(exc)
     else:
         raise AssertionError("zero cash fraction must be rejected")
+
+
+def test_holdout_starts_after_all_eight_selection_windows():
+    assert _is_holdout_window(8) is False
+    assert _is_holdout_window(9) is True

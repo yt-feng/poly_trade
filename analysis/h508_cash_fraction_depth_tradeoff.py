@@ -58,6 +58,11 @@ SELECTION_WINDOWS = 8
 REQUIRED_FILLS = 10
 
 
+def _is_holdout_window(window_index: int) -> bool:
+    """Keep the first eight windows in selection and exclude them from holdout."""
+    return int(window_index) > SELECTION_WINDOWS
+
+
 def _validate_fraction(value: float) -> None:
     if not 0.0 < float(value) <= 1.0:
         raise ValueError("gross_cash_fraction must be in (0, 1]")
@@ -276,7 +281,7 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
                     and row["depth_haircut"] == float(haircut)
                     and chosen is not None
                     and row["gross_cash_fraction"] == float(chosen["gross_cash_fraction"])
-                    and int(row["window_index"]) >= SELECTION_WINDOWS
+                    and _is_holdout_window(row["window_index"])
                 ]
                 cells.append(
                     {
