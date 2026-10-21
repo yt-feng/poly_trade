@@ -30,6 +30,8 @@ def test_audit_counts_identity_fields_without_emitting_values(tmp_path):
     assert result["identity_fields"]["orderHash"]["unique_values"] == 2
     assert "maker-1" not in json.dumps(result)
     assert "tx-1" not in json.dumps(result)
+    assert result["identity_concentration"]["maker"]["unique_values"] == 1
+    assert result["identity_concentration"]["maker"]["top1_share"] == 1.0
 
 
 def test_audit_keeps_missing_field_and_execution_gap_separate(tmp_path):

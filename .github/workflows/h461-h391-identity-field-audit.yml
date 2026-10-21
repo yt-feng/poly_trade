@@ -45,6 +45,11 @@ jobs:
             --source-commit "$SOURCE_COMMIT" \
             --dataset-revision "$DATASET_REVISION" \
             --output "$private_dir/report.json"
+          python - "$private_dir/report.json" <<'PY'
+          import json, sys
+          report = json.loads(open(sys.argv[1], encoding='utf-8').read())
+          print(json.dumps({'identity_concentration': report.get('identity_concentration', {})}, sort_keys=True))
+          PY
       - name: Seal aggregate audit
         env:
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
@@ -87,6 +92,8 @@ jobs:
           print(f"- Aggregate rows: total={rows.get('total', 0)}, complete identity rows={rows.get('complete_identity_rows', 0)}.")
           fields = report.get('identity_fields', {})
           print("- Public identity field coverage: " + ", ".join(f"{k}={v.get('present_rows', 0)}" for k, v in sorted(fields.items())) + ".")
+          concentration = report.get('identity_concentration', {})
+          print("- Aggregate maker/taker concentration: " + ", ".join(f"{k}=top1:{v.get('top1_share', 0):.6f},top5:{v.get('top5_share', 0):.6f},hhi:{v.get('hhi', 0):.6f}" for k, v in sorted(concentration.items())) + ".")
           missing = report.get('missing_for_causal_execution', [])
           print("- Still missing for causal maker execution: " + ", ".join(missing) + ".")
           PY

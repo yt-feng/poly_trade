@@ -52,6 +52,7 @@ def audit(fills_dir: Path, *, source_commit: str, dataset_revision: str) -> dict
     total = 0
     complete = 0
     missing_counts: Counter[str] = Counter()
+    identity_counts: dict[str, Counter[str]] = {field: Counter() for field in ("maker", "taker")}
     file_rows: list[dict[str, Any]] = []
     unique_ids: dict[str, set[str]] = {field: set() for field in ("id", "maker", "taker", "orderHash", "transactionHash")}
     duplicate_counts: Counter[str] = Counter()
@@ -80,16 +81,31 @@ def audit(fills_dir: Path, *, source_commit: str, dataset_revision: str) -> dict
                         if key in values:
                             duplicate_counts[field] += 1
                         values.add(key)
+                for field in identity_counts:
+                    value = row.get(field)
+                    if value not in (None, ""):
+                        identity_counts[field][str(value)] += 1
         file_rows.append({"file": path.name, "rows": rows, "complete_identity_rows": complete_rows})
     identity_fields = {
         field: {"present_rows": int(total - missing_counts[field]), "unique_values": len(values)}
         for field, values in unique_ids.items()
     }
+    identity_concentration: dict[str, dict[str, float | int]] = {}
+    for field, counts in identity_counts.items():
+        total_field_rows = sum(counts.values())
+        shares = sorted(counts.values(), reverse=True)
+        identity_concentration[field] = {
+            "unique_values": len(counts),
+            "top1_share": (shares[0] / total_field_rows if shares else 0.0),
+            "top5_share": (sum(shares[:5]) / total_field_rows if shares else 0.0),
+            "hhi": (sum((value / total_field_rows) ** 2 for value in shares) if shares else 0.0),
+        }
     result: dict[str, Any] = {
         "format": "h461-h391-execution-identity-field-audit-v1",
         "source": {"source_commit": source_commit, "dataset_revision": dataset_revision, "file_count": len(files)},
         "rows": {"total": total, "complete_identity_rows": complete, "complete_identity_fraction": (complete / total if total else 0.0)},
         "identity_fields": identity_fields,
+        "identity_concentration": identity_concentration,
         "duplicate_raw_identity_rows": dict(sorted(duplicate_counts.items())),
         "missing_required_field_rows": dict(sorted(missing_counts.items())),
         "missing_for_causal_execution": list(MISSING_EXECUTION_FIELDS),
