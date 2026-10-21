@@ -98,7 +98,18 @@ def prepare_quotes(raw: pd.DataFrame) -> pd.DataFrame:
     q["ts_utc"] = pd.to_datetime(q["ts_iso"], utc=True, errors="coerce")
     for c in REQUIRED_NUMERIC:
         q[c] = pd.to_numeric(q[c], errors="coerce")
-    q["close_ts_utc"] = q["slug"].map(parse_close_ts_from_slug)
+    # Vectorize epoch extraction.  The previous row-wise ``pd.to_datetime``
+    # call made an 83-run replay repeatedly convert millions of identical slug
+    # suffixes and could hold a multi-gigabyte frame during the conversion.
+    # Invalid slugs still become NaT, but one vectorized conversion handles the
+    # whole frame.
+    slug_epoch = pd.to_numeric(
+        q["slug"].astype("string").str.extract(r"(\d{10})$", expand=False),
+        errors="coerce",
+    )
+    q["close_ts_utc"] = pd.to_datetime(
+        slug_epoch, unit="s", utc=True, errors="coerce"
+    )
     if q["mid_up_cents"].isna().any():
         q["mid_up_cents"] = q["mid_up_cents"].fillna((q["buy_up_cents"] + q["sell_up_cents"]) / 2.0)
     if q["mid_down_cents"].isna().any():

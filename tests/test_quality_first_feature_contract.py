@@ -64,3 +64,13 @@ def test_legacy_mode_remains_reproducible_for_existing_replays():
     out = build_features(prepare_quotes(_quotes(missing_minute=4)), strict_quality=False)
     assert len(out) == 1
     assert out.iloc[0]["path_efficiency_first2m"] == 1.0
+
+
+def test_prepare_quotes_vectorizes_close_timestamp_and_keeps_invalid_slug_as_nat():
+    frame = _quotes().copy()
+    frame.loc[0, "slug"] = "not-a-btc-window"
+    out = prepare_quotes(frame)
+    valid = out.loc[out["slug"].eq("btc-updown-5m-1767225600"), "close_ts_utc"]
+    invalid = out.loc[out["slug"].eq("not-a-btc-window"), "close_ts_utc"]
+    assert valid.iloc[0] == pd.Timestamp("2026-01-01T00:00:00Z")
+    assert invalid.isna().all()
