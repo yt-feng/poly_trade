@@ -9,8 +9,10 @@ cash.
 The CLOB uses share quantities.  ``size_matched`` is retained as a matched
 share total; it is never treated as the current position balance.  A confirmed
 entry event is emitted only for an authenticated account trade with a
-``TRADE_STATUS_CONFIRMED`` status, transaction hash, and both match/update
-timestamps.
+``TRADE_STATUS_CONFIRMED`` status, transaction hash, and an official event
+timestamp.  The documented ``matchedAt``/``updatedAt`` fields are optional;
+when absent, the required event timestamp is copied into the missing receipt
+time fields and the emitted event records that fallback explicitly.
 """
 from __future__ import annotations
 
@@ -337,8 +339,20 @@ def adapt_trade(
         )
     if not trade["transaction_hash"]:
         issues.append(_issue("MISSING_TRANSACTION_HASH", "confirmed fill requires a transaction hash"))
+    timestamp_fallback_used = False
     if not trade["match_time"] or not trade["last_update"]:
-        issues.append(_issue("MISSING_TRADE_TIMESTAMPS", "confirmed fill requires match and update timestamps"))
+        # The current official user-stream schema marks matchedAt and updatedAt
+        # optional while timestamp remains required.  Preserve the strict
+        # confirmation/hash/account gates, but do not reject a valid confirmed
+        # event solely because an optional field was omitted.
+        if trade["timestamp"]:
+            if not trade["match_time"]:
+                trade["match_time"] = trade["timestamp"]
+            if not trade["last_update"]:
+                trade["last_update"] = trade["timestamp"]
+            timestamp_fallback_used = True
+        else:
+            issues.append(_issue("MISSING_TRADE_TIMESTAMPS", "confirmed fill requires an event timestamp when matchedAt/updatedAt are absent"))
     expected_order = _text(order_id or _pick(expected, "order_id"))
     if expected_order:
         related = {trade["taker_order_id"]} | _maker_order_ids(trade["maker_orders"])
@@ -388,6 +402,7 @@ def adapt_trade(
             "match_time": trade["match_time"],
             "last_update": trade["last_update"],
             "timestamp": trade["timestamp"],
+            "timestamp_fallback_used": timestamp_fallback_used,
             "evidence_source": "authenticated_clob_trade",
         }
     )

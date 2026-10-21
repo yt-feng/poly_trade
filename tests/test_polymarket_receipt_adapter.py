@@ -124,6 +124,26 @@ class PolymarketReceiptAdapter(unittest.TestCase):
         self.assertEqual(result["events"], [])
         self.assertIn("MISSING_TRADE_PRICE", {issue["code"] for issue in result["issues"]})
 
+    def test_official_optional_match_update_fields_use_required_event_timestamp(self):
+        payload = self.trade()
+        payload.pop("match_time")
+        payload.pop("last_update")
+        payload["timestamp"] = "1782753357257"
+        result = adapt_trade(payload, expected=self.expected)
+        self.assertEqual(result["issues"], [])
+        fill = result["events"][0]
+        self.assertEqual(fill["match_time"], "1782753357257")
+        self.assertEqual(fill["last_update"], "1782753357257")
+        self.assertTrue(fill["timestamp_fallback_used"])
+
+    def test_confirmed_fill_without_optional_times_or_event_timestamp_is_rejected(self):
+        payload = self.trade()
+        payload.pop("match_time")
+        payload.pop("last_update")
+        result = adapt_trade(payload, expected=self.expected)
+        self.assertEqual(result["events"], [])
+        self.assertIn("MISSING_TRADE_TIMESTAMPS", {issue["code"] for issue in result["issues"]})
+
     def test_confirmed_fill_with_out_of_range_price_is_rejected(self):
         payload = self.trade()
         payload["price"] = "1"
