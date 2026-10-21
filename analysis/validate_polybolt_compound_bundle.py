@@ -125,6 +125,7 @@ STRATEGY_DECISION_TRACE_KEYS = {
     "cash_fraction",
     "profitable_released_exits_before",
 }
+STRATEGY_SIZE_TOLERANCE = Decimal("0.000001")
 
 
 def _strategy_profile(
@@ -200,6 +201,23 @@ def _decimal(value: Any, field: str) -> Decimal:
     if not parsed.is_finite():
         raise ValueError(f"{field}_must_be_finite_decimal")
     return parsed
+
+
+def _expected_entry_terms(
+    balance_before: Decimal,
+    price: Decimal,
+    fraction: Decimal,
+) -> tuple[Decimal, Decimal, Decimal]:
+    """Mirror the frozen cash-fraction sizing rule using Decimal arithmetic."""
+    gross_target = max(FROZEN_MINIMUM_ENTRY_NOTIONAL_USD, fraction * balance_before)
+    shares = max(FROZEN_MINIMUM_ORDER_SHARES, gross_target / price)
+    per_share = price + FROZEN_TAKER_FEE_RATE * price * (Decimal("1") - price)
+    reserved = shares * per_share
+    if reserved > balance_before:
+        shares = min(shares, balance_before / per_share)
+    cost = shares * price
+    fee = shares * FROZEN_TAKER_FEE_RATE * price * (Decimal("1") - price)
+    return shares, cost, fee
 
 
 def _text(value: Any, field: str) -> str:
@@ -757,6 +775,23 @@ def _validate_strategy_decision_trace(
             return "strategy_decision_trace_state_mismatch"
         if _decimal(trace["cash_fraction"], "strategy_trace_cash_fraction") != expected_fraction:
             return "strategy_decision_trace_fraction_mismatch"
+        try:
+            balance_before = _decimal(row.get("balance_before"), "balance_before")
+            price = _decimal(row.get("price"), "price")
+            actual_shares = _decimal(row.get("shares"), "shares")
+            actual_cost = _decimal(row.get("entry_cost"), "entry_cost")
+            actual_fee = _decimal(row.get("fee"), "fee")
+            expected_shares, expected_cost, expected_fee = _expected_entry_terms(
+                balance_before, price, expected_fraction
+            )
+        except ValueError as exc:
+            return str(exc)
+        if (
+            abs(actual_shares - expected_shares) > STRATEGY_SIZE_TOLERANCE
+            or abs(actual_cost - expected_cost) > STRATEGY_SIZE_TOLERANCE
+            or abs(actual_fee - expected_fee) > STRATEGY_SIZE_TOLERANCE
+        ):
+            return "strategy_entry_size_mismatch"
         if strategy_profile != H530_STRATEGY_PROFILE:
             payout = _decimal(row.get("payout"), "payout")
             entry_cost = _decimal(row.get("entry_cost"), "entry_cost")

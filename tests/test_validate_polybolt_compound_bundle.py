@@ -14,6 +14,10 @@ from validate_polybolt_compound_bundle import (
     H530_STRATEGY_ID,
     H530_STRATEGY_PROFILE,
     H530_STRATEGY_VERSION,
+    H549_STRATEGY_CONFIG_SHA256,
+    H549_STRATEGY_ID,
+    H549_STRATEGY_PROFILE,
+    H549_STRATEGY_VERSION,
     PRIVATE_STRATEGY_PROFILE,
     FROZEN_STRATEGY_CONFIG_SHA256,
     FROZEN_STRATEGY_ID,
@@ -51,6 +55,40 @@ def attach_strategy_trace(
             else:
                 prior_profitable = 0
     document["strategy_decisions"] = decisions
+    return document
+
+
+def configure_adaptive_fixture(document: dict[str, object], fractions: list[str]) -> dict[str, object]:
+    """Build a profitable synthetic chain whose size follows each fraction."""
+    cash = Decimal("10")
+    previous_payout = Decimal("0")
+    for event, receipt, settlement, fraction in zip(
+        document["events"], document["cash_release_receipts"], document["settlement_receipts"], fractions, strict=True
+    ):
+        fraction_decimal = Decimal(fraction)
+        price = Decimal("0.5")
+        target = max(Decimal("5"), fraction_decimal * cash)
+        shares = max(Decimal("5"), target / price)
+        cost = shares * price
+        fee = shares * Decimal("0.07") * price * (Decimal("1") - price)
+        payout = cost + fee + Decimal("0.50")
+        before = cash
+        after = before - cost - fee
+        event.update({
+            "shares": format(shares, "f"),
+            "price": format(price, "f"),
+            "entry_cost": format(cost, "f"),
+            "fee": format(fee, "f"),
+            "payout": format(payout, "f"),
+            "released_cash_since_previous_entry": format(previous_payout, "f"),
+            "balance_before": format(before, "f"),
+            "balance_after": format(after, "f"),
+        })
+        receipt["amount"] = format(payout, "f")
+        settlement["payout"] = format(payout, "f")
+        previous_payout = payout
+        cash = after + payout
+    document["closing_balance"] = format(cash, "f")
     return document
 
 
@@ -208,6 +246,7 @@ def test_fixed_half_cash_profile_is_explicitly_bound():
         "version": H530_STRATEGY_VERSION,
         "config_sha256": H530_STRATEGY_CONFIG_SHA256,
     }
+    configure_adaptive_fixture(doc, ["0.5"] * 10)
     attach_strategy_trace(doc, ["0.5"] * 10, track_profits=False)
     legacy = validate_bundle_document(doc)
     assert legacy["offline_consistency_passed"] is False
@@ -235,12 +274,38 @@ def test_strategy_trace_hash_and_state_are_bound_per_fill():
         "version": H530_STRATEGY_VERSION,
         "config_sha256": H530_STRATEGY_CONFIG_SHA256,
     }
+    configure_adaptive_fixture(doc, ["0.5"] * 10)
     attach_strategy_trace(doc, ["0.5"] * 10, track_profits=False)
     assert validate_bundle_document(doc, strategy_profile=H530_STRATEGY_PROFILE)["offline_consistency_passed"] is True
     doc["strategy_decisions"][0]["cash_fraction"] = "0.55"
     result = validate_bundle_document(doc, strategy_profile=H530_STRATEGY_PROFILE)
     assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "strategy_decision_trace_hash_mismatch"
+
+
+def test_adaptive_profile_binds_actual_entry_size_to_fraction():
+    doc = bundle()
+    doc["strategy"] = {
+        "id": H549_STRATEGY_ID,
+        "version": H549_STRATEGY_VERSION,
+        "config_sha256": H549_STRATEGY_CONFIG_SHA256,
+    }
+    configure_adaptive_fixture(doc, ["0.55"] + ["0.5875"] * 9)
+    attach_strategy_trace(doc, ["0.55"] + ["0.5875"] * 9)
+    assert validate_bundle_document(doc, strategy_profile=H549_STRATEGY_PROFILE)["offline_consistency_passed"] is True
+    doc["events"][0]["shares"] = "10"
+    doc["events"][0]["entry_cost"] = "5"
+    doc["events"][0]["fee"] = "0.175"
+    cash = Decimal("10")
+    for index, (event, receipt) in enumerate(zip(doc["events"], doc["cash_release_receipts"], strict=True)):
+        event["balance_before"] = format(cash, "f")
+        cash = cash - Decimal(str(event["entry_cost"])) - Decimal(str(event["fee"]))
+        event["balance_after"] = format(cash, "f")
+        cash += Decimal(str(receipt["amount"]))
+    doc["closing_balance"] = format(cash, "f")
+    result = validate_bundle_document(doc, strategy_profile=H549_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "strategy_entry_size_mismatch"
 
 
 def test_private_exact_profile_is_supplied_without_public_config():

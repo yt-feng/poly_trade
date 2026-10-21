@@ -16,7 +16,12 @@ from validate_polybolt_compound_bundle import H530_STRATEGY_CONFIG_SHA256, H530_
 from validate_polybolt_compound_bundle import H546_STRATEGY_CONFIG_SHA256, H546_STRATEGY_ID, H546_STRATEGY_PROFILE, H546_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H549_STRATEGY_CONFIG_SHA256, H549_STRATEGY_ID, H549_STRATEGY_PROFILE, H549_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import PRIVATE_STRATEGY_PROFILE
-from test_validate_polybolt_compound_bundle import attach_strategy_trace, assert_unverified_receipts, bundle
+from test_validate_polybolt_compound_bundle import (
+    attach_strategy_trace,
+    assert_unverified_receipts,
+    bundle,
+    configure_adaptive_fixture,
+)
 import research_vault
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
@@ -48,6 +53,7 @@ def test_tool_accepts_the_fixed_half_cash_profile_only_when_explicit(tmp_path):
         "version": H530_STRATEGY_VERSION,
         "config_sha256": H530_STRATEGY_CONFIG_SHA256,
     }
+    configure_adaptive_fixture(document, ["0.5"] * 10)
     attach_strategy_trace(document, ["0.5"] * 10, track_profits=False)
     source.write_text(json.dumps(document))
     subprocess.run([
@@ -68,6 +74,7 @@ def test_tool_accepts_the_frozen_h546_adaptive_profile(tmp_path):
         "version": H546_STRATEGY_VERSION,
         "config_sha256": H546_STRATEGY_CONFIG_SHA256,
     }
+    configure_adaptive_fixture(document, ["0.55"] + ["0.575"] * 9)
     attach_strategy_trace(document, ["0.55"] + ["0.575"] * 9)
     source.write_text(json.dumps(document))
     subprocess.run([
@@ -88,6 +95,7 @@ def test_tool_accepts_the_frozen_h549_adaptive_profile(tmp_path):
         "version": H549_STRATEGY_VERSION,
         "config_sha256": H549_STRATEGY_CONFIG_SHA256,
     }
+    configure_adaptive_fixture(document, ["0.55"] + ["0.5875"] * 9)
     attach_strategy_trace(document, ["0.55"] + ["0.5875"] * 9)
     source.write_text(json.dumps(document))
     subprocess.run([
