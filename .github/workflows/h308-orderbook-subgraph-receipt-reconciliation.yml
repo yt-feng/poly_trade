@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       endpoint:
-        description: Official Goldsky-hosted Polymarket orderbook subgraph endpoint
+        description: Legacy Goldsky endpoint retained only for explicit compatibility mode; default receipt mode does not call it
         required: false
         default: https://api.goldsky.com/api/public/project_cl6mb8i9h0003e201j6li0diw/subgraphs/orderbook-subgraph/0.0.1/gn
         type: string
@@ -87,7 +87,7 @@ jobs:
           set +e
           python -u analysis/h308_orderbook_subgraph_receipt_reconciliation.py \
             --input "$private_dir/h308-input.json" --output "$private_dir/h308.json" \
-            --endpoint "$SUBGRAPH_ENDPOINT" --rpc-url "$RPC_URL"
+            --endpoint "$SUBGRAPH_ENDPOINT" --rpc-url "$RPC_URL" --source-mode receipt
           h308_rc=$?
           set -e
           export H308_RC="$h308_rc"
@@ -124,7 +124,7 @@ jobs:
       - name: Print only redacted status and remove plaintext
         if: always()
         run: |
-          echo 'H308 queries only transaction hashes from the existing authenticated capture; full rows remain encrypted.'
+          echo 'H308 decodes only transaction receipts for hashes from the existing authenticated capture; full rows remain encrypted.'
           python - <<'PY'
           from pathlib import Path
           import os, shutil

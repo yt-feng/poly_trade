@@ -1,5 +1,6 @@
 from analysis.h308_orderbook_subgraph_receipt_reconciliation import (
     EVENT_QUERY,
+    V1_ORDER_FILLED_TOPIC,
     capture_account,
     _event_to_activity,
     _known_btc_hashes,
@@ -41,6 +42,31 @@ def event(tx=TX, maker=OWNER):
         "makerAmountFilled": "5000000",
         "takerAmountFilled": "10000000",
         "fee": "0",
+    }
+
+
+def word(value):
+    return f"{value:064x}"
+
+
+def receipt(tx=TX, maker=OWNER):
+    return {
+        "status": "0x1",
+        "transactionHash": tx,
+        "blockNumber": "0x10",
+        "logs": [{
+            "address": "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e",
+            "topics": [
+                V1_ORDER_FILLED_TOPIC,
+                "0x" + "dd" * 32,
+                "0x" + "0" * 24 + maker[2:],
+                "0x" + "0" * 24 + OTHER[2:],
+            ],
+            "data": "0x" + "".join(word(value) for value in (0, 123, 5_000_000, 10_000_000, 0)),
+            "transactionHash": tx,
+            "blockNumber": "0x10",
+            "logIndex": "0x1",
+        }],
     }
 
 
@@ -88,6 +114,7 @@ def test_capture_filters_other_makers_and_does_not_admit_missing_receipts():
         fetcher=fetcher,
         rpc_call=lambda method, params: None,
         endpoint="https://example.test",
+        source_mode="subgraph",
     )
     assert result["known_btc_transaction_hashes"] == 2
     assert result["subgraph_raw_event_rows"] == 2
@@ -95,5 +122,46 @@ def test_capture_filters_other_makers_and_does_not_admit_missing_receipts():
     assert result["normalized_btc_trade_rows"] == 1
     assert result["receipt_fetch_failures"] == 1
     assert result["cash_release_receipt_rows"] == 0
+    assert result["verified_canary_fills"] == 0
+    assert result["same_ledger_compounding_rows"] == 0
+
+
+def test_receipt_mode_decodes_owner_v1_orderfilled_and_uses_block_timestamp():
+    calls = []
+
+    def rpc(method, params):
+        calls.append((method, params))
+        if method == "eth_getTransactionReceipt":
+            return receipt()
+        if method == "eth_getBlockByNumber":
+            return {"timestamp": "0x100"}
+        raise AssertionError(method)
+
+    result = capture_account(
+        {"owner": OWNER, "account_trades": [source_row()]},
+        fetcher=lambda *args: {"data": {"orderFilledEvents": []}},
+        rpc_call=rpc,
+        endpoint="https://deprecated.example",
+    )
+    assert result["source_mode"] == "receipt"
+    assert result["receipt_fill_raw_event_rows"] == 1
+    assert result["receipt_fill_owner_event_rows"] == 1
+    assert result["normalized_btc_trade_rows"] == 1
+    assert result["private_normalized_btc_trades"][0]["side"] == "BUY"
+    assert result["private_normalized_btc_trades"][0]["usdc_size"] == "5"
+    assert result["subgraph_queries"] == 0
+    assert result["cash_release_receipt_rows"] == 0
+    assert any(method == "eth_getBlockByNumber" for method, _ in calls)
+
+
+def test_receipt_mode_rejects_other_maker_and_does_not_count_as_canary():
+    result = capture_account(
+        {"owner": OWNER, "account_trades": [source_row()]},
+        fetcher=lambda *args: {"data": {"orderFilledEvents": []}},
+        rpc_call=lambda method, params: receipt(maker=OTHER) if method == "eth_getTransactionReceipt" else {"timestamp": "0x100"},
+    )
+    assert result["receipt_fill_raw_event_rows"] == 1
+    assert result["receipt_fill_owner_event_rows"] == 0
+    assert result["normalized_btc_trade_rows"] == 0
     assert result["verified_canary_fills"] == 0
     assert result["same_ledger_compounding_rows"] == 0
