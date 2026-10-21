@@ -10,6 +10,7 @@ def state(**overrides):
         "same_ledger_compounding_rows": 0,
         "owner_scoped_bundle_available": False,
         "owner_scoped_full_settlement_cash_bundle_available": False,
+        "v2_path_bundle_validated": False,
         "balance_continuity_proven": False,
         "cash_release_receipt_rows": 0,
         "settlement_receipt_rows": 0,
@@ -31,6 +32,7 @@ class H330Tests(unittest.TestCase):
             same_ledger_compounding_rows=10,
             owner_scoped_bundle_available=True,
             owner_scoped_full_settlement_cash_bundle_available=True,
+            v2_path_bundle_validated=True,
             balance_continuity_proven=True,
             cash_release_receipt_rows=10,
             settlement_receipt_rows=10,
@@ -47,6 +49,7 @@ class H330Tests(unittest.TestCase):
             same_ledger_compounding_rows=10,
             owner_scoped_bundle_available=True,
             owner_scoped_full_settlement_cash_bundle_available=True,
+            v2_path_bundle_validated=True,
             balance_continuity_proven=True,
             cash_release_receipt_rows=10,
             settlement_receipt_rows=10,
@@ -63,11 +66,29 @@ class H330Tests(unittest.TestCase):
             same_ledger_compounding_rows=10,
             owner_scoped_bundle_available=True,
             owner_scoped_full_settlement_cash_bundle_available=True,
+            v2_path_bundle_validated=True,
             balance_continuity_proven=True,
             cash_release_receipt_rows=10,
             settlement_receipt_rows=10,
             same_ledger_identity_verified=True,
             cash_chain_contiguous=False,
+            ledger_reset_count=0,
+        ))
+        self.assertFalse(result["canary_admission_passed"])
+
+    def test_complete_receipts_without_v2_path_do_not_admit(self):
+        result = audit(state(
+            actual_fills=10,
+            verified_canary_fills=10,
+            same_ledger_compounding_rows=10,
+            owner_scoped_bundle_available=True,
+            owner_scoped_full_settlement_cash_bundle_available=True,
+            v2_path_bundle_validated=False,
+            balance_continuity_proven=True,
+            cash_release_receipt_rows=10,
+            settlement_receipt_rows=10,
+            same_ledger_identity_verified=True,
+            cash_chain_contiguous=True,
             ledger_reset_count=0,
         ))
         self.assertFalse(result["canary_admission_passed"])

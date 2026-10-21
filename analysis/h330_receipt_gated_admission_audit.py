@@ -30,6 +30,7 @@ def audit(state: dict[str, Any]) -> dict[str, Any]:
         "same_ledger_compounding_rows",
         "owner_scoped_bundle_available",
         "owner_scoped_full_settlement_cash_bundle_available",
+        "v2_path_bundle_validated",
         "balance_continuity_proven",
         "cash_release_receipt_rows",
         "settlement_receipt_rows",
@@ -71,6 +72,7 @@ def audit(state: dict[str, Any]) -> dict[str, Any]:
     admitted = bool(
         state["owner_scoped_bundle_available"]
         and state["owner_scoped_full_settlement_cash_bundle_available"]
+        and state["v2_path_bundle_validated"]
         and state["balance_continuity_proven"]
         and state["cash_release_receipt_rows"] >= 10
         and state["settlement_receipt_rows"] >= 10
@@ -88,6 +90,7 @@ def audit(state: dict[str, Any]) -> dict[str, Any]:
         "admission_contract": {
             "required_fills": 10,
             "owner_scoped": True,
+            "v2_path_bundle_validated": True,
             "same_evolving_cash_ledger": True,
             "exactly_ten_rows": True,
             "sequence_numbers": "1..10",
@@ -118,7 +121,7 @@ def audit(state: dict[str, Any]) -> dict[str, Any]:
         "new_data_collected": False,
         "model_refit": False,
         "decision": "keep_gate_closed_no_owner_scoped_cash_chain" if not admitted else "admission_contract_satisfied",
-        "root_cause": "Lifecycle and status rows exist, but no independently verified owner-scoped settlement-to-cash-to-balance chain is present. Empty or incomplete source responses are classified as source/identity gaps, not as evidence of no trades.",
+        "root_cause": "Lifecycle and status rows exist, but no independently verified owner-scoped V2 path plus settlement-to-cash-to-balance chain is present. Empty or incomplete source responses are classified as source/identity gaps, not as evidence of no trades.",
         "next_action": "Do not repeat equivalent bounded scans or promote paper results; wait for a genuinely independent owner-scoped receipt source before any Canary admission.",
     }
 
