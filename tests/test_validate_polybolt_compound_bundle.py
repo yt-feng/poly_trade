@@ -147,6 +147,8 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
         "settlement_receipt_id": f"settlement-{i}",
         "cash_release_receipt_id": f"cash-release-{i}",
         "execution_role": "TAKER",
+        "trader_side": "TAKER",
+        "trader_side_source": "SETTLED_TAKER_LEG",
         "fee_rate": "0.07",
         "balance_checkpoint_id": f"balance-{i}",
         "cash_reconciled": True,
@@ -460,6 +462,28 @@ def test_taker_execution_cannot_be_better_than_the_bound_ask():
     result = validate_bundle_document(doc)
     assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "executed_price_below_depth_ask"
+
+
+def test_settlement_grounded_taker_side_provenance_is_required():
+    doc = bundle()
+    del doc["events"][0]["trader_side_source"]
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "trader_side_source_required"
+
+    doc = bundle()
+    doc["events"][0]["trader_side_source"] = "PUBLIC_PRINT"
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "trader_side_source_must_be_settled_taker_leg"
+
+
+def test_non_taker_side_cannot_enter_the_compound_bundle():
+    doc = bundle()
+    doc["events"][0]["trader_side"] = "MAKER"
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "trader_side_must_be_taker"
 
 
 def test_settlement_receipt_is_required_and_bound_to_each_fill():

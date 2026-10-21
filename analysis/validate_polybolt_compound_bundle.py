@@ -35,6 +35,12 @@ OFFLINE_VERIFICATION = {
 MARKET_SLUG = re.compile(r"^btc-updown-5m-[0-9]+$")
 REQUIRED_FILLS = 10
 FROZEN_EXECUTION_ROLE = "TAKER"
+# A public print or retrospective sign rule is not enough to identify the
+# executed taker leg.  The authenticated bundle boundary therefore requires
+# the settled fill event's side provenance on every row.  This is an evidence
+# binding check only; it does not authenticate the supplied receipt.
+FROZEN_TRADER_SIDE = "TAKER"
+FROZEN_TRADER_SIDE_SOURCE = "SETTLED_TAKER_LEG"
 FROZEN_TAKER_FEE_RATE = Decimal("0.07")
 FEE_AMOUNT_TOLERANCE = Decimal("0.000001")
 # The CLOB book's ``min_order_size`` is a quantity of shares.  Keep that venue
@@ -627,6 +633,10 @@ def _validate_same_ledger(
                 return "negative_cash_amount"
             if _text(row.get("execution_role"), "execution_role") != FROZEN_EXECUTION_ROLE:
                 return "execution_role_must_be_taker"
+            if _text(row.get("trader_side"), "trader_side").upper() != FROZEN_TRADER_SIDE:
+                return "trader_side_must_be_taker"
+            if _text(row.get("trader_side_source"), "trader_side_source").upper() != FROZEN_TRADER_SIDE_SOURCE:
+                return "trader_side_source_must_be_settled_taker_leg"
             try:
                 fee_rate = _decimal(row.get("fee_rate"), "fee_rate")
             except ValueError as exc:
