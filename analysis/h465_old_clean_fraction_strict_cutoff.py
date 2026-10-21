@@ -82,7 +82,13 @@ def _size_from_cash(row: Any, cash: float) -> dict[str, float] | None:
     }
 
 
-def _first_break_even_exit(row: Any, quotes: pd.DataFrame | None) -> dict[str, Any] | None:
+def _first_break_even_exit(
+    row: Any,
+    quotes: pd.DataFrame | None,
+    *,
+    shares: float,
+    entry_outlay: float,
+) -> dict[str, Any] | None:
     """Find a full-size fee-aware exit strictly before market end minus 60s."""
     if quotes is None or quotes.empty:
         return None
@@ -95,8 +101,8 @@ def _first_break_even_exit(row: Any, quotes: pd.DataFrame | None) -> dict[str, A
     observed = quotes[(quotes["ts_iso"] >= entry) & (quotes["ts_iso"] < cutoff)]
     if observed.empty:
         return None
-    shares = float(row.shares)
-    entry_outlay = float(row.cost + row.fee)
+    shares = float(shares)
+    entry_outlay = float(entry_outlay)
     bid = pd.to_numeric(observed[bid_column], errors="coerce") / 100.0
     size = pd.to_numeric(observed[size_column], errors="coerce")
     exit_fill = bid - float(row.slippage)
@@ -141,7 +147,12 @@ def _replay(candidates: pd.DataFrame, run_names: list[str], quotes: dict[str, pd
         if terms is None:
             failure_reason = "insufficient_cash_for_minimum_order"
             break
-        exit_event = _first_break_even_exit(row, quotes.get(str(row.slug)))
+        exit_event = _first_break_even_exit(
+            row,
+            quotes.get(str(row.slug)),
+            shares=float(terms["shares"]),
+            entry_outlay=float(terms["reserved"]),
+        )
         if exit_event is None:
             failure_reason = "no_full_size_break_even_exit_before_60s_cutoff"
             break
