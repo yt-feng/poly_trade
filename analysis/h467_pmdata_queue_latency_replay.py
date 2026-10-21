@@ -175,34 +175,44 @@ def _run_market(l2: pl.DataFrame, trades: pl.DataFrame, trigger: float) -> dict[
             .binary_fee_model(0.0, TAKER_FEE_RATE)
         )
     hbt = ROIVectorMarketDepthBacktest(assets)
-    strategy(hbt, float(trigger))
+    try:
+        strategy(hbt, float(trigger))
 
-    filled: list[dict[str, Any]] = []
-    for asset_no in range(2):
-        state = hbt.state_values(asset_no)
-        if int(state.num_trades) <= 0 or float(state.position) <= 0.0:
-            continue
-        # The single submitted order is retained in the order dictionary even
-        # after it is filled.  Reading it is a diagnostic of execution only.
-        values = hbt.orders(asset_no).values()
-        while values.has_next():
-            order = values.get()
-            if order is None or float(order.exec_qty) <= 0.0:
+        filled: list[dict[str, Any]] = []
+        for asset_no in range(2):
+            state = hbt.state_values(asset_no)
+            if int(state.num_trades) <= 0 or float(state.position) <= 0.0:
                 continue
-            filled.append({
-                "asset_no": asset_no,
-                "outcome": ("yes", "no")[asset_no],
-                "exec_qty": float(order.exec_qty),
-                "exec_price": float(order.exec_price),
-                "order_status": int(order.status),
-                "cost": float(-state.balance),
-                "fee": float(state.fee),
-                "num_trades": int(state.num_trades),
-            })
-            break
-    if not filled:
-        return {"status": "no_fill", "submitted": True}
-    return {"status": "filled", "fill": filled[0]}
+            # The single submitted order is retained in the order dictionary
+            # even after it is filled.  OrderDict's pinned iterator uses
+            # ``next``; calling a non-existent has_next/get pair can crash the
+            # Rust-backed object instead of raising a Python exception.
+            values = hbt.orders(asset_no).values()
+            while True:
+                order = values.next()
+                if order is None:
+                    break
+                if float(order.exec_qty) <= 0.0:
+                    continue
+                filled.append({
+                    "asset_no": asset_no,
+                    "outcome": ("yes", "no")[asset_no],
+                    "exec_qty": float(order.exec_qty),
+                    "exec_price": float(order.exec_price),
+                    "order_status": int(order.status),
+                    "cost": float(-state.balance),
+                    "fee": float(state.fee),
+                    "num_trades": int(state.num_trades),
+                })
+                break
+        if not filled:
+            return {"status": "no_fill", "submitted": True}
+        return {"status": "filled", "fill": filled[0]}
+    finally:
+        # The Rust-backed object owns native allocations.  Explicit close is
+        # required when a market is replayed in a loop; relying on Python's
+        # destructor caused the prior Action run to segfault at market exit.
+        hbt.close()
 
 
 def replay(l2_path: Path, trades_path: Path, markets_path: Path, fills_path: Path | None, output: Path, trigger: float = TRIGGER) -> dict[str, Any]:
