@@ -25,6 +25,33 @@ def paper_artifact(*, block_failure: bool = True) -> dict:
     }
 
 
+def h508_paper_artifact(*, holdout_failure: bool = False) -> dict:
+    return {
+        "format": "old-clean-h508-cash-fraction-depth-tradeoff-v1",
+        "holdout_gate_passed": not holdout_failure,
+        "protocol": {
+            "initial_cash_usd": 10.0,
+            "required_fills": 10,
+            "minimum_order_usd": 5.0,
+            "minimum_order_shares": 5.0,
+            "same_ledger_within_window": True,
+            "no_cross_window_concatenation": True,
+            "old_clean_dataset_only": True,
+            "paper_only": True,
+        },
+        "cell_summaries": [{
+            "slippage": 0.005,
+            "latency_seconds": 2.0,
+            "depth_haircut": 0.1,
+            "selected_fraction": 0.5,
+            "selection_passed": True,
+            "holdout_all_ten": not holdout_failure,
+            "holdout_min_fills": 10 if not holdout_failure else 9,
+            "holdout_min_cash": 11.0,
+        }],
+    }
+
+
 def state(*, bundle: bool = False, fills: int = 0, binding: bool = False, receipts: bool = False) -> dict:
     return {
         "actual_fills": fills,
@@ -112,3 +139,19 @@ def test_report_fails_closed_when_binding_is_not_explicitly_non_synthetic():
     report = build_report(fixture, paper_artifact(block_failure=False))
     assert report["orderfilled_binding"]["ready"] is False
     assert report["settlement_evidence"]["ready"] is False
+
+
+def test_report_consumes_h508_old_clean_holdout_contract():
+    report = build_report(state(), h508_paper_artifact())
+    assert report["paper_frontier"]["candidate_schema"] == "old-clean-h508-cash-fraction-depth-tradeoff-v1"
+    assert report["paper_frontier"]["pooled_frontier_consistent"] is True
+    assert report["paper_frontier"]["block_stress_stable"] is True
+    assert report["paper_frontier"]["selection_cells_stable"] is True
+    assert report["canary_ready"] is False
+
+
+def test_h508_holdout_failure_blocks_the_compound_gate():
+    report = build_report(state(), h508_paper_artifact(holdout_failure=True))
+    assert report["paper_frontier"]["pooled_frontier_consistent"] is False
+    assert report["paper_frontier"]["block_stress_stable"] is False
+    assert "paper_block_stress_unstable" in report["hard_blockers"]

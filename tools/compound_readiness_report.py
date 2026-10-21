@@ -20,7 +20,74 @@ def _load(path: Path) -> dict[str, Any]:
     return value
 
 
+def _h508_paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
+    """Adapt the current old-clean H508 artifact to the compound gate.
+
+    H508 uses a predeclared cash-fraction ladder and reports one selected
+    fraction per latency/depth/slippage cell.  Its holdout rows are still
+    chronological same-ledger chains; they must be checked directly rather
+    than being forced through the older H30/H38 gate schema.
+    """
+    protocol = paper.get("protocol")
+    cells = paper.get("cell_summaries")
+    if not isinstance(protocol, dict) or not isinstance(cells, list):
+        raise ValueError("H508_PROTOCOL_AND_CELLS_REQUIRED")
+    protocol_ok = (
+        float(protocol.get("initial_cash_usd")) == 10.0
+        and protocol.get("required_fills") == 10
+        and float(protocol.get("minimum_order_usd")) == 5.0
+        and float(protocol.get("minimum_order_shares")) == 5.0
+        and protocol.get("same_ledger_within_window") is True
+        and protocol.get("no_cross_window_concatenation") is True
+        and protocol.get("old_clean_dataset_only") is True
+        and protocol.get("paper_only") is True
+    )
+    selection_failures: list[dict[str, Any]] = []
+    holdout_failures: list[dict[str, Any]] = []
+    for cell in cells:
+        if not isinstance(cell, dict):
+            raise ValueError("H508_CELL_REQUIRED")
+        identity = {
+            key: cell.get(key)
+            for key in ("slippage", "latency_seconds", "depth_haircut", "selected_fraction")
+        }
+        if cell.get("selection_passed") is not True:
+            selection_failures.append(identity)
+        if not (
+            cell.get("holdout_all_ten") is True
+            and cell.get("holdout_min_fills") == 10
+        ):
+            holdout_failures.append({
+                **identity,
+                "holdout_all_ten": cell.get("holdout_all_ten"),
+                "holdout_min_fills": cell.get("holdout_min_fills"),
+                "holdout_min_cash": cell.get("holdout_min_cash"),
+            })
+    selection_stable = not selection_failures
+    holdout_stable = not holdout_failures
+    candidate = {
+        "pooled_exact_ten": protocol_ok and holdout_stable,
+        "selection_cell_failures": selection_failures,
+        "holdout_block_stress_failures": holdout_failures,
+        "selection_stable": selection_stable,
+        "block_stable": holdout_stable,
+        "cell_count": len(cells),
+    }
+    return {
+        "protocol_consistent": protocol_ok,
+        "candidate_schema": "old-clean-h508-cash-fraction-depth-tradeoff-v1",
+        "candidates": {"h508_cash_fraction_depth_tradeoff": candidate},
+        "pooled_frontier_consistent": protocol_ok and selection_stable and holdout_stable and paper.get("holdout_gate_passed") is True,
+        "selection_cell_failures": selection_failures,
+        "selection_cells_stable": selection_stable,
+        "block_stress_failures": holdout_failures,
+        "block_stress_stable": holdout_stable,
+    }
+
+
 def _paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
+    if str(paper.get("format", "")).startswith("old-clean-h508-"):
+        return _h508_paper_frontier(paper)
     protocol = paper.get("protocol")
     if not isinstance(protocol, dict):
         raise ValueError("PAPER_PROTOCOL_REQUIRED")
@@ -63,6 +130,7 @@ def _paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
         }
     return {
         "protocol_consistent": protocol_ok,
+        "selection_cells_stable": True,
         "candidates": candidates,
         "pooled_frontier_consistent": protocol_ok and all(
             row["pooled_exact_ten"] for row in candidates.values()
@@ -192,6 +260,7 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
     canary_ready = (
         frontier["pooled_frontier_consistent"]
         and frontier["block_stress_stable"]
+        and frontier.get("selection_cells_stable", True)
         and settlement_evidence_ready
     )
     hard_blockers = []
@@ -205,6 +274,8 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
         hard_blockers.append("onchain_orderfilled_binding_missing_or_unverified")
     if not frontier["block_stress_stable"]:
         hard_blockers.append("paper_block_stress_unstable")
+    if not frontier.get("selection_cells_stable", True):
+        hard_blockers.append("paper_selection_cells_unstable")
     for key, ready in evidence_ready.items():
         if not ready:
             hard_blockers.append(f"{key}_receipts_missing_or_unverified")
