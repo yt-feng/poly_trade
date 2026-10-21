@@ -132,6 +132,16 @@ def _known_btc_hashes(account: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return dict(list(result.items())[:MAX_TRANSACTION_HASHES])
 
 
+def _known_btc_settlement_rows(account: dict[str, Any]) -> list[dict[str, Any]]:
+    """Preserve every existing BTC redemption row, including shared txs."""
+    rows: list[dict[str, Any]] = []
+    for raw in _source_trade_rows(account):
+        normalized = normalize_activity_row(raw)
+        if normalized and normalized["type"] == "REDEEM" and is_btc_five_minute(normalized):
+            rows.append(normalized)
+    return rows[:MAX_TRANSACTION_HASHES]
+
+
 def _graphql_request(
     endpoint: str,
     query: str,
@@ -329,6 +339,7 @@ def _receipt_join(
     rpc_call: Callable[[str, list[Any]], Any],
     receipt_cache: dict[str, dict[str, Any]] | None = None,
     settlement_hashes: Iterable[str] = (),
+    settlement_rows: Iterable[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     condition_ids = {row["condition_id"] for row in trades if row.get("condition_id")}
     transfers: list[dict[str, Any]] = []
@@ -337,6 +348,7 @@ def _receipt_join(
     trade_hashes = list(dict.fromkeys(row["transaction_ref"] for row in trades))
     settlement_candidates = list(dict.fromkeys(tx for tx in settlement_hashes if _tx(tx)))
     scanned_hashes = list(dict.fromkeys(trade_hashes + settlement_candidates))
+    activity_rows = list(trades) + [row for row in settlement_rows if isinstance(row, dict)]
     for tx in scanned_hashes:
         try:
             receipt = (receipt_cache or {}).get(tx)
@@ -357,7 +369,7 @@ def _receipt_join(
                 confirmed += int(bool(old_confirmed or new_confirmed))
         except Exception:
             failures += 1
-    reconciliation = _reconcile(trades, transfers, payouts, owner)
+    reconciliation = _reconcile(activity_rows, transfers, payouts, owner)
     cash = sum(
         value.get("cash_release_transaction_rows", 0)
         for value in reconciliation.values()
@@ -371,6 +383,7 @@ def _receipt_join(
         "v2_unbound_payout_rows": unbound,
         "cash_release_receipt_rows": cash,
         "settlement_candidate_hashes": len(settlement_candidates),
+        "settlement_activity_rows": sum(row.get("type") == "REDEEM" for row in activity_rows),
         "cash_reconciliation_by_collateral_token": reconciliation,
     }
 
@@ -389,6 +402,7 @@ def capture_account(
     if not owner:
         raise ValueError("account_owner_required")
     known = _known_btc_hashes(account)
+    settlement_rows = _known_btc_settlement_rows(account)
     if source_mode == "receipt":
         normalized, receipt_cache, receipt_stats = _receipt_orderfilled_events(owner, known, rpc_call)
         events: list[dict[str, Any]] = []
@@ -428,6 +442,7 @@ def capture_account(
         rpc_call,
         receipt_cache=receipt_cache,
         settlement_hashes=settlement_hashes,
+        settlement_rows=settlement_rows,
     )
     return {
         "owner_address_sha256": _digest(owner),

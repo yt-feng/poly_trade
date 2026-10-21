@@ -216,17 +216,20 @@ def test_receipt_mode_scans_existing_redeem_hash_for_partial_settlement():
         "type": "REDEEM",
         "transactionHash": TX_REDEEM,
         "timestamp": 1_797_000_010,
-        "usdcSize": "5.5",
+        "usdcSize": "2.0",
         "slug": SLUG,
         "conditionId": CONDITION,
     }
+    redeem_rows = [redeem, {**redeem, "usdcSize": "1.5"}, {**redeem, "usdcSize": "2.0"}]
     result = capture_account(
-        {"owner": OWNER, "account_trades": [source_row()], "public_data_activity": [redeem]},
+        {"owner": OWNER, "account_trades": [source_row()], "public_data_activity": redeem_rows},
         fetcher=lambda *args: {"data": {"orderFilledEvents": []}},
         rpc_call=rpc,
     )
     assert result["settlement_candidate_hashes"] == 1
+    assert result["settlement_activity_rows"] == 3
     assert result["legacy_settlement_receipt_rows"] == 1
+    assert result["cash_release_receipt_rows"] == 1
     assert result["receipt_fetch_failures"] == 0
     assert result["verified_canary_fills"] == 0
     assert result["same_ledger_compounding_rows"] == 0
