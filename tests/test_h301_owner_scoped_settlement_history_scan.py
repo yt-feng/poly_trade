@@ -129,9 +129,14 @@ def test_confirmed_payout_amount_replaces_activity_quote_for_shared_redeem_tx():
         {"transaction_ref": tx, "amount_base_units": 0,
          "collateral_token": COLLATERAL, "condition_id": CONDITION_2},
     ]
-    transfer_rows = [{"transaction_ref": tx, "token": COLLATERAL,
-                      "from": ADAPTER, "to": OWNER,
-                      "amount_base_units": 2_000_000}]
+    transfer_rows = [
+        {"transaction_ref": tx, "token": COLLATERAL,
+         "from": ADAPTER, "to": OWNER, "amount_base_units": 2_000_000},
+        # A second owner inflow in the same receipt is not bound to a BTC
+        # payout and must not inflate this ledger's cash release.
+        {"transaction_ref": tx, "token": COLLATERAL,
+         "from": ADAPTER, "to": OWNER, "amount_base_units": 3_000_000},
+    ]
     reconciliation = _reconcile(btc_rows, transfer_rows, payout_rows, OWNER)[COLLATERAL]
     assert reconciliation["payout_redeem_transaction_matches"] == 1
     assert reconciliation["exact_redeem_collateral_delta_join_transactions"] == 1

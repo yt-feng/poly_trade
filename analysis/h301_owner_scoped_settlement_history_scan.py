@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import time
+from collections import Counter
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -196,6 +197,57 @@ def _normalize_log_rows(value: Any) -> list[dict[str, Any]]:
     return [row for row in value if isinstance(row, dict)]
 
 
+def _scope_cash_transfers(
+    transfer_rows: list[dict[str, Any]],
+    payout_rows: list[dict[str, Any]],
+    owner: str,
+) -> list[dict[str, Any]]:
+    """Consume only owner inflows attributable to admitted payout rows.
+
+    A single redemption transaction can contain payout/mint legs for several
+    conditions.  The receipt decoder admits each BTC payout by an exact mint
+    amount, but the raw transfer list may also contain another owner inflow
+    from the same transaction.  Keeping that unmatched inflow in the BTC cash
+    token would over-credit the release and make an otherwise valid payout
+    fail exact reconciliation.
+    """
+    expected: Counter[tuple[str, str, int]] = Counter()
+    payout_transactions: set[tuple[str, str]] = set()
+    for payout in payout_rows:
+        tx = payout.get("transaction_ref")
+        token = _text(payout.get("collateral_token")).lower()
+        if not tx or not token:
+            continue
+        amount = int(payout.get("amount_base_units", 0))
+        expected[(tx, token, amount)] += 1
+        payout_transactions.add((tx, token))
+
+    scoped: list[dict[str, Any]] = []
+    owner_lower = owner.lower()
+    for row in transfer_rows:
+        tx = _text(row.get("transaction_ref"))
+        token = _text(row.get("token")).lower()
+        if (tx, token) not in payout_transactions:
+            scoped.append(row)
+            continue
+        target = _text(row.get("to")).lower()
+        source = _text(row.get("from")).lower()
+        if target == owner_lower:
+            amount = int(row.get("amount_base_units", 0))
+            key = (tx, token, amount)
+            if expected.get(key, 0):
+                expected[key] -= 1
+                scoped.append(row)
+            # An unmatched owner inflow is deliberately excluded from the
+            # BTC payout ledger; it remains visible in the raw receipt bundle.
+            continue
+        # Preserve owner outflows and unrelated directions for the same token;
+        # only unmatched owner-directed inflows are ambiguous here.
+        if source == owner_lower or target != owner_lower:
+            scoped.append(row)
+    return scoped
+
+
 def _reconcile(
     btc_rows: list[dict[str, Any]],
     transfer_rows: list[dict[str, Any]],
@@ -265,13 +317,14 @@ def _reconcile(
             "timestamp": block_timestamp,
             "usdc_size": _amount_usdc(int(payout["amount_base_units"])),
         })
-    tokens = sorted({row["token"] for row in transfer_rows} | {row["collateral_token"] for row in payout_rows})
+    scoped_transfer_rows = _scope_cash_transfers(transfer_rows, payout_rows, owner)
+    tokens = sorted({row["token"] for row in scoped_transfer_rows} | {row["collateral_token"] for row in payout_rows})
     result: dict[str, dict[str, Any]] = {}
     for token in tokens:
         try:
             result[token] = reconcile_observed_cash(
                 activity,
-                transfer_rows,
+                scoped_transfer_rows,
                 owner=owner,
                 collateral_token=token,
                 payout_receipts=[row for row in payout_rows if row["collateral_token"] == token],
