@@ -1,7 +1,11 @@
 import pandas as pd
 from types import SimpleNamespace
 
-from analysis.h508_cash_fraction_depth_tradeoff import _is_holdout_window, _replay_fraction_depth
+from analysis.h508_cash_fraction_depth_tradeoff import (
+    _fixed_fraction_diagnostic,
+    _is_holdout_window,
+    _replay_fraction_depth,
+)
 
 
 def row(**overrides):
@@ -67,3 +71,18 @@ def test_fraction_depth_rejects_invalid_fraction():
 def test_holdout_starts_after_all_eight_selection_windows():
     assert _is_holdout_window(8) is False
     assert _is_holdout_window(9) is True
+
+
+def test_fixed_fraction_diagnostic_is_online_observable_and_split_correctly():
+    rows = [
+        {"gross_cash_fraction": 0.5, "window_index": 8, "first_ten_passed": False,
+         "first_ten_ending_cash": 4.0, "first_ten_fills": 9},
+        {"gross_cash_fraction": 0.5, "window_index": 9, "first_ten_passed": True,
+         "first_ten_ending_cash": 11.0, "first_ten_fills": 10},
+    ]
+    result = _fixed_fraction_diagnostic(rows)
+    assert result["selection_window_count"] == 1
+    assert result["holdout_window_count"] == 1
+    assert result["selection_all_ten"] is False
+    assert result["holdout_all_ten"] is True
+    assert result["online_observable_policy"] is True

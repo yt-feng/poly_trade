@@ -56,11 +56,38 @@ LATENCIES_SECONDS = (2.0, 4.0, 8.0)
 DEPTH_HAIRCUTS = (0.10, 0.15, 0.20, 0.25)
 SELECTION_WINDOWS = 8
 REQUIRED_FILLS = 10
+FIXED_EXECUTABLE_FRACTION = 0.50
 
 
 def _is_holdout_window(window_index: int) -> bool:
     """Keep the first eight windows in selection and exclude them from holdout."""
     return int(window_index) > SELECTION_WINDOWS
+
+
+def _fixed_fraction_diagnostic(
+    rows: list[dict[str, Any]],
+    *,
+    fraction: float = FIXED_EXECUTABLE_FRACTION,
+    selection_windows: int = SELECTION_WINDOWS,
+) -> dict[str, Any]:
+    """Check one deployable cash fraction without using an unobservable stress cell."""
+    _validate_fraction(fraction)
+    scoped = [row for row in rows if float(row["gross_cash_fraction"]) == float(fraction)]
+    selection = [row for row in scoped if int(row["window_index"]) <= int(selection_windows)]
+    holdout = [row for row in scoped if int(row["window_index"]) > int(selection_windows)]
+    return {
+        "gross_cash_fraction": float(fraction),
+        "selection_window_count": len(selection),
+        "holdout_window_count": len(holdout),
+        "selection_all_ten": bool(selection) and all(bool(row["first_ten_passed"]) for row in selection),
+        "holdout_all_ten": bool(holdout) and all(bool(row["first_ten_passed"]) for row in holdout),
+        "selection_min_cash": min((float(row["first_ten_ending_cash"]) for row in selection), default=INITIAL_CASH),
+        "holdout_min_cash": min((float(row["first_ten_ending_cash"]) for row in holdout), default=INITIAL_CASH),
+        "selection_min_fills": min((int(row["first_ten_fills"]) for row in selection), default=0),
+        "holdout_min_fills": min((int(row["first_ten_fills"]) for row in holdout), default=0),
+        "online_observable_policy": True,
+        "policy_boundary": "fixed fraction of currently available cash; no future depth haircut or realized latency input",
+    }
 
 
 def _validate_fraction(value: float) -> None:
@@ -339,6 +366,7 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
         "root_cause": "tests whether reducing gross cash per entry can preserve a complete ten-fill compounding chain when latency and exit depth make full-cash positions too large",
         "window_rows": rows,
     }
+    result["fixed_fraction_policy"] = _fixed_fraction_diagnostic(rows)
     output.mkdir(parents=True, exist_ok=True)
     (output / "rolling_window_metrics.csv").write_text(pd.DataFrame(rows).to_csv(index=False), encoding="utf-8")
     (output / "summary.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
