@@ -236,7 +236,18 @@ def _strip_chain(value: Any) -> Any:
     return value
 
 
-def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str, Any]:
+def evaluate(
+    source_root: Path,
+    *,
+    source_commit: str,
+    output: Path,
+    gross_cash_fractions: tuple[float, ...] = GROSS_CASH_FRACTIONS,
+    hypothesis_id: str = "H452_H447_CASH_AWARE_FRACTIONAL_SIZING",
+    result_format: str = "old-clean-h452-h447-cash-fraction-v1",
+) -> dict[str, Any]:
+    if not gross_cash_fractions or any(float(value) <= 0.0 or float(value) > 1.0 for value in gross_cash_fractions):
+        raise ValueError("gross_cash_fractions must be in (0, 1]")
+    gross_cash_fractions = tuple(float(value) for value in gross_cash_fractions)
     observed = subprocess.check_output(
         ["git", "-C", str(source_root.resolve().parents[1]), "rev-parse", "HEAD"], text=True
     ).strip()
@@ -268,7 +279,7 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
     windows = rolling_windows(runs[4:], window_runs=WINDOW_RUNS, stride=WINDOW_STRIDE)
     rows: list[dict[str, Any]] = []
     cells: list[dict[str, Any]] = []
-    for fraction in GROSS_CASH_FRACTIONS:
+    for fraction in gross_cash_fractions:
         for slippage in SLIPPAGES:
             base = pd.concat(candidates_by_slippage[float(slippage)], ignore_index=True) if candidates_by_slippage[float(slippage)] else pd.DataFrame()
             cache: dict[tuple[str, str, float, float], dict[str, Any] | None] = {}
@@ -301,15 +312,15 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
             )
     all_pass = bool(cells) and all(cell["all_windows_passed"] for cell in cells)
     result: dict[str, Any] = {
-        "format": "old-clean-h452-h447-cash-fraction-v1",
-        "hypothesis_id": "H452_H447_CASH_AWARE_FRACTIONAL_SIZING",
+        "format": result_format,
+        "hypothesis_id": hypothesis_id,
         "source_commit": source_commit,
         "observed_source_commit": observed,
         "strict_quality": True,
         "complete_runs": len(runs),
         "feature_rows": int(len(features)),
         "candidate": "H447_H434_CAUSAL_BREAKEVEN_EXIT",
-        "gross_cash_fractions": list(GROSS_CASH_FRACTIONS),
+        "gross_cash_fractions": list(gross_cash_fractions),
         "exit_cutoff_seconds_before_market_end": EXIT_CUTOFF_SECONDS,
         "window_count": len(windows),
         "cell_summaries": cells,
@@ -354,8 +365,18 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--source-commit", default=SOURCE_COMMIT)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--gross-cash-fractions", type=float, nargs="+", default=list(GROSS_CASH_FRACTIONS))
+    parser.add_argument("--hypothesis-id", default="H452_H447_CASH_AWARE_FRACTIONAL_SIZING")
+    parser.add_argument("--result-format", default="old-clean-h452-h447-cash-fraction-v1")
     args = parser.parse_args()
-    evaluate(args.source_root, source_commit=args.source_commit, output=args.output)
+    evaluate(
+        args.source_root,
+        source_commit=args.source_commit,
+        output=args.output,
+        gross_cash_fractions=tuple(args.gross_cash_fractions),
+        hypothesis_id=args.hypothesis_id,
+        result_format=args.result_format,
+    )
 
 
 if __name__ == "__main__":
