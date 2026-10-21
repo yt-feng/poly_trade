@@ -21,6 +21,7 @@ from validate_polybolt_compound_bundle import (
     DEFAULT_STRATEGY_PROFILE,
     H546_STRATEGY_PROFILE,
     H549_STRATEGY_PROFILE,
+    H561_STRATEGY_PROFILE,
     H530_STRATEGY_PROFILE,
     PRIVATE_STRATEGY_PROFILE,
     OFFLINE_VERIFICATION,
@@ -110,7 +111,14 @@ def run(
     document = _read_json(bundle_path)
     if not isinstance(document, dict):
         raise ValueError("bundle_json_object_required")
-    private_config = _read_private_strategy_config(private_strategy_config_path)
+    # Built-in frozen profiles are self-contained.  A runner-local config is
+    # required only for the opaque private_exact profile; passing the optional
+    # path from the workflow must not make a built-in profile unavailable.
+    private_config = (
+        _read_private_strategy_config(private_strategy_config_path)
+        if strategy_profile == PRIVATE_STRATEGY_PROFILE
+        else None
+    )
     result = validate_bundle_document(
         document,
         strategy_profile=strategy_profile,
@@ -126,7 +134,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--strategy-profile",
-        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
+        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, H561_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
         default=DEFAULT_STRATEGY_PROFILE,
     )
     parser.add_argument("--private-strategy-config", type=Path)

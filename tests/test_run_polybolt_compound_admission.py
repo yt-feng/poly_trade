@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 import textwrap
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from validate_polybolt_compound_bundle import validate_bundle_document
 from validate_polybolt_compound_bundle import H530_STRATEGY_CONFIG_SHA256, H530_STRATEGY_ID, H530_STRATEGY_PROFILE, H530_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H546_STRATEGY_CONFIG_SHA256, H546_STRATEGY_ID, H546_STRATEGY_PROFILE, H546_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H549_STRATEGY_CONFIG_SHA256, H549_STRATEGY_ID, H549_STRATEGY_PROFILE, H549_STRATEGY_VERSION
+from validate_polybolt_compound_bundle import H561_STRATEGY_CONFIG_SHA256, H561_STRATEGY_ID, H561_STRATEGY_PROFILE, H561_STRATEGY_VERSION, _expected_entry_terms
 from validate_polybolt_compound_bundle import PRIVATE_STRATEGY_PROFILE
 from test_validate_polybolt_compound_bundle import (
     attach_strategy_trace,
@@ -105,6 +107,52 @@ def test_tool_accepts_the_frozen_h549_adaptive_profile(tmp_path):
     result = json.loads(output.read_text())
     assert result["offline_consistency_passed"] is True
     assert result["strategy_profile"] == H549_STRATEGY_PROFILE
+
+
+def test_tool_accepts_the_frozen_h561_depth_proxy_without_private_config(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    document = bundle()
+    document["strategy"] = {
+        "id": H561_STRATEGY_ID,
+        "version": H561_STRATEGY_VERSION,
+        "config_sha256": H561_STRATEGY_CONFIG_SHA256,
+    }
+    # Build a full-cash H561 chain and attach the depth trace so this test
+    # covers the cloud runner's built-in profile path without a private
+    # strategy secret.
+    cash = Decimal("10")
+    previous_payout = Decimal("0")
+    for event, receipt, settlement in zip(
+        document["events"], document["cash_release_receipts"], document["settlement_receipts"], strict=True
+    ):
+        shares, cost, _expected_fee = _expected_entry_terms(cash, Decimal("0.5"), Decimal("1"))
+        # Keep the synthetic balance checkpoint exactly nonnegative; the
+        # validator accepts this within its fee arithmetic tolerance.
+        fee = cash - cost
+        payout = cost + fee + Decimal("0.50")
+        event.update({
+            "shares": format(shares, "f"), "price": "0.5", "entry_cost": format(cost, "f"),
+            "fee": format(fee, "f"), "payout": format(payout, "f"),
+            "released_cash_since_previous_entry": format(previous_payout, "f"),
+            "balance_before": format(cash, "f"),
+            "balance_after": format(cash - cost - fee, "f"),
+        })
+        receipt["amount"] = format(payout, "f")
+        settlement["payout"] = format(payout, "f")
+        previous_payout = payout
+        cash = cash - cost - fee + payout
+    document["closing_balance"] = format(cash, "f")
+    from test_validate_polybolt_compound_bundle import attach_depth_proxy_trace
+    attach_depth_proxy_trace(document)
+    source.write_text(json.dumps(document))
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", H561_STRATEGY_PROFILE,
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is True
+    assert result["strategy_profile"] == H561_STRATEGY_PROFILE
 
 
 def test_tool_accepts_private_exact_profile_from_runner_local_config(tmp_path):
@@ -202,6 +250,7 @@ def test_workflow_never_uploads_private_bundle_or_enables_orders():
     assert "h530_fixed_half_cash" in text
     assert "h546_adaptive_one_profit" in text
     assert "h549_adaptive_one_profit" in text
+    assert "h561_online_depth_proxy" in text
     assert "private_exact" in text
     assert "--strategy-profile" in text
     assert "--private-strategy-config" in text
