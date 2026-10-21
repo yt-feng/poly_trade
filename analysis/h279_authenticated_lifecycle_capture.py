@@ -20,6 +20,11 @@ from typing import Any, Iterable
 
 
 MAX_ROWS = 400
+# The current Data API/SDK accepts a page size up to 1000.  Keep the capture
+# bounded at MAX_ROWS while requesting that bound in one page, so the read-only
+# lifecycle probe does not spend four round trips draining the same capped
+# activity slice.
+ACTIVITY_PAGE_SIZE = MAX_ROWS
 ADDRESS_LENGTH = 42
 
 
@@ -163,7 +168,9 @@ def _capture_one(label: str, private_key: str, sdk_commit: str) -> dict[str, Any
         stage = "account_trades"
         account_trades, trades_truncated = _bounded_items(client.list_account_trades())
         stage = "public_activity"
-        activity, activity_truncated = _bounded_items(client.list_activity(full_history=True))
+        activity, activity_truncated = _bounded_items(
+            client.list_activity(full_history=True, page_size=ACTIVITY_PAGE_SIZE)
+        )
         stage = "balance_checkpoint"
         # The current SDK exposes AssetType as a Literal[str] type alias, not
         # an enum.  Use the documented wire value directly.
