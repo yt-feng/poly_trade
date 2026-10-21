@@ -1,4 +1,5 @@
 import hashlib
+import json
 import sys
 
 from decimal import Decimal
@@ -13,6 +14,7 @@ from validate_polybolt_compound_bundle import (
     H530_STRATEGY_ID,
     H530_STRATEGY_PROFILE,
     H530_STRATEGY_VERSION,
+    PRIVATE_STRATEGY_PROFILE,
     FROZEN_STRATEGY_CONFIG_SHA256,
     FROZEN_STRATEGY_ID,
     FROZEN_STRATEGY_VERSION,
@@ -183,6 +185,34 @@ def test_fixed_half_cash_profile_is_explicitly_bound():
     assert legacy["failure_reason"] == "strategy_id_not_frozen"
     fixed = validate_bundle_document(doc, strategy_profile=H530_STRATEGY_PROFILE)
     assert fixed["offline_consistency_passed"] is True
+
+
+def test_private_exact_profile_is_supplied_without_public_config():
+    private = {
+        "id": "opaque-private-candidate",
+        "version": "opaque-private-v1",
+        "config": {"private_parameter": "opaque", "required_fills": 10},
+    }
+    digest = hashlib.sha256(json.dumps(private["config"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    doc = bundle()
+    doc["strategy"] = {
+        "id": private["id"],
+        "version": private["version"],
+        "config_sha256": digest,
+    }
+    result = validate_bundle_document(
+        doc,
+        strategy_profile=PRIVATE_STRATEGY_PROFILE,
+        private_strategy_config=private,
+    )
+    assert result["offline_consistency_passed"] is True
+
+
+def test_private_exact_profile_fails_closed_without_secret_config():
+    doc = bundle()
+    result = validate_bundle_document(doc, strategy_profile=PRIVATE_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "private_strategy_profile_unavailable"
 
 
 def test_minimum_share_contract_accepts_five_share_entry():

@@ -49,6 +49,7 @@ FROZEN_MINIMUM_ENTRY_NOTIONAL_USD = Decimal("5")
 MINIMUM_ENTRY_COST_FOR_LEDGER = Decimal("0.0000001")
 DEFAULT_STRATEGY_PROFILE = "h30_legacy"
 H530_STRATEGY_PROFILE = "h530_fixed_half_cash"
+PRIVATE_STRATEGY_PROFILE = "private_exact"
 FROZEN_STRATEGY_ID = "h30_move_uncertainty"
 FROZEN_STRATEGY_VERSION = "h54-execution-contract-prefix-v1"
 FROZEN_STRATEGY_CONFIG = {
@@ -76,7 +77,28 @@ H530_STRATEGY_CONFIG = {
 }
 
 
-def _strategy_profile(profile: str) -> tuple[str, str, dict[str, Any]]:
+def _strategy_profile(
+    profile: str,
+    *,
+    private_strategy_config: dict[str, Any] | None = None,
+) -> tuple[str, str, dict[str, Any]]:
+    if profile == PRIVATE_STRATEGY_PROFILE:
+        if not isinstance(private_strategy_config, dict):
+            raise ValueError("private_strategy_profile_unavailable")
+        if set(private_strategy_config) != {"id", "version", "config"}:
+            raise ValueError("private_strategy_profile_invalid")
+        profile_id = private_strategy_config.get("id")
+        profile_version = private_strategy_config.get("version")
+        profile_config = private_strategy_config.get("config")
+        if (
+            not isinstance(profile_id, str)
+            or not profile_id.strip()
+            or not isinstance(profile_version, str)
+            or not profile_version.strip()
+            or not isinstance(profile_config, dict)
+        ):
+            raise ValueError("private_strategy_profile_invalid")
+        return profile_id.strip(), profile_version.strip(), profile_config
     profiles = {
         DEFAULT_STRATEGY_PROFILE: (FROZEN_STRATEGY_ID, FROZEN_STRATEGY_VERSION, FROZEN_STRATEGY_CONFIG),
         H530_STRATEGY_PROFILE: (H530_STRATEGY_ID, H530_STRATEGY_VERSION, H530_STRATEGY_CONFIG),
@@ -136,9 +158,16 @@ def _hash(value: Any, field: str) -> str:
     return digest
 
 
-def _validate_strategy_binding(document: dict[str, Any], *, strategy_profile: str = DEFAULT_STRATEGY_PROFILE) -> str | None:
+def _validate_strategy_binding(
+    document: dict[str, Any],
+    *,
+    strategy_profile: str = DEFAULT_STRATEGY_PROFILE,
+    private_strategy_config: dict[str, Any] | None = None,
+) -> str | None:
     try:
-        expected_id, expected_version, expected_config = _strategy_profile(strategy_profile)
+        expected_id, expected_version, expected_config = _strategy_profile(
+            strategy_profile, private_strategy_config=private_strategy_config
+        )
     except ValueError as exc:
         return str(exc)
     strategy = document.get("strategy")
@@ -601,6 +630,7 @@ def validate_bundle_document(
     *,
     required_fills: int = 10,
     strategy_profile: str = DEFAULT_STRATEGY_PROFILE,
+    private_strategy_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Check supplied fields without authenticating receipts or exposing owners."""
     if not isinstance(document, dict) or document.get("schema") != SCHEMA:
@@ -609,7 +639,11 @@ def validate_bundle_document(
         return _fail("invalid_required_fills")
     if document.get("required_fills") != REQUIRED_FILLS or required_fills != REQUIRED_FILLS:
         return _fail("required_fills_fixed_at_ten", event_count=len(document.get("events", [])) if isinstance(document.get("events"), list) else 0)
-    strategy_error = _validate_strategy_binding(document, strategy_profile=strategy_profile)
+    strategy_error = _validate_strategy_binding(
+        document,
+        strategy_profile=strategy_profile,
+        private_strategy_config=private_strategy_config,
+    )
     if strategy_error:
         return _fail(strategy_error, event_count=len(document.get("events", [])) if isinstance(document.get("events"), list) else 0)
     owner = document.get("owner")
@@ -734,13 +768,31 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("bundle", type=Path)
     parser.add_argument("--required-fills", type=int, default=10)
-    parser.add_argument("--strategy-profile", choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE), default=DEFAULT_STRATEGY_PROFILE)
+    parser.add_argument(
+        "--strategy-profile",
+        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
+        default=DEFAULT_STRATEGY_PROFILE,
+    )
+    parser.add_argument("--private-strategy-config", type=Path)
     args = parser.parse_args()
     try:
         document = json.loads(args.bundle.read_text(encoding="utf-8"))
-        result = validate_bundle_document(document, required_fills=args.required_fills, strategy_profile=args.strategy_profile)
+        private_config = None
+        if args.private_strategy_config is not None:
+            private_config = json.loads(args.private_strategy_config.read_text(encoding="utf-8"))
+        result = validate_bundle_document(
+            document,
+            required_fills=args.required_fills,
+            strategy_profile=args.strategy_profile,
+            private_strategy_config=private_config,
+        )
     except (OSError, json.JSONDecodeError):
         result = _fail("bundle_read_error")
+    except ValueError as exc:
+        reason = str(exc)
+        result = _fail(
+            reason if reason in {"private_strategy_profile_unavailable", "private_strategy_profile_invalid"} else "bundle_read_error"
+        )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     # Exit success describes the offline check, never actual canary admission.
     return 0 if result.get("offline_consistency_passed") else 1

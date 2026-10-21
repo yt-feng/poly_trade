@@ -6,7 +6,7 @@ on:
       strategy_profile:
         description: 'Frozen execution strategy contract to validate'
         type: choice
-        options: [h530_fixed_half_cash, h30_legacy]
+        options: [h530_fixed_half_cash, h30_legacy, private_exact]
         default: h530_fixed_half_cash
         required: true
 
@@ -67,6 +67,28 @@ jobs:
                   os.fsync(handle.fileno())
           PY
 
+      - name: Materialize private strategy profile only in runner temp
+        env:
+          POLYBOLT_STRATEGY_PROFILE_JSON_B64: ${{ secrets.POLYBOLT_STRATEGY_PROFILE_JSON_B64 }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/polybolt-compound-admission"
+          python - "$PRIVATE_DIR/strategy-profile.json" <<'PY'
+          import base64, os, sys
+          from pathlib import Path
+          value = os.environ.get('POLYBOLT_STRATEGY_PROFILE_JSON_B64', '')
+          if value:
+              data = base64.b64decode(value, validate=True)
+              if not data or len(data) > 64 * 1024:
+                  raise SystemExit('private strategy profile size is invalid')
+              path = Path(sys.argv[1])
+              fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+              with os.fdopen(fd, 'wb') as handle:
+                  handle.write(data)
+                  handle.flush()
+                  os.fsync(handle.fileno())
+          PY
+
       - name: Run v2 offline consistency checks and retain only redacted result
         run: |
           set -euo pipefail
@@ -74,7 +96,8 @@ jobs:
           python tools/run_polybolt_compound_admission.py \
             --bundle "$PRIVATE_DIR/bundle.json" \
             --output "$PRIVATE_DIR/result.json" \
-            --strategy-profile "${{ inputs.strategy_profile || 'h530_fixed_half_cash' }}"
+            --strategy-profile "${{ inputs.strategy_profile || 'h530_fixed_half_cash' }}" \
+            --private-strategy-config "$PRIVATE_DIR/strategy-profile.json"
 
       - name: Seal redacted admission result
         env:

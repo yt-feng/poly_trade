@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 from validate_polybolt_compound_bundle import (
     DEFAULT_STRATEGY_PROFILE,
     H530_STRATEGY_PROFILE,
+    PRIVATE_STRATEGY_PROFILE,
     OFFLINE_VERIFICATION,
     validate_bundle_document,
 )
@@ -82,13 +83,34 @@ def _allowlist(result: dict[str, Any]) -> dict[str, Any]:
     return {key: result.get(key) for key in RESULT_KEYS}
 
 
-def run(bundle_path: Path, *, strategy_profile: str = DEFAULT_STRATEGY_PROFILE) -> dict[str, Any]:
+def _read_private_strategy_config(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
+        raise ValueError("private_strategy_profile_invalid")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("private_strategy_profile_invalid")
+    return value
+
+
+def run(
+    bundle_path: Path,
+    *,
+    strategy_profile: str = DEFAULT_STRATEGY_PROFILE,
+    private_strategy_config_path: Path | None = None,
+) -> dict[str, Any]:
     if not bundle_path.exists():
         return _failure("bundle_secret_unavailable")
     document = _read_json(bundle_path)
     if not isinstance(document, dict):
         raise ValueError("bundle_json_object_required")
-    result = validate_bundle_document(document, strategy_profile=strategy_profile)
+    private_config = _read_private_strategy_config(private_strategy_config_path)
+    result = validate_bundle_document(
+        document,
+        strategy_profile=strategy_profile,
+        private_strategy_config=private_config,
+    )
     result["strategy_profile"] = strategy_profile
     return _allowlist(result)
 
@@ -97,10 +119,19 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--strategy-profile", choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE), default=DEFAULT_STRATEGY_PROFILE)
+    parser.add_argument(
+        "--strategy-profile",
+        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
+        default=DEFAULT_STRATEGY_PROFILE,
+    )
+    parser.add_argument("--private-strategy-config", type=Path)
     args = parser.parse_args()
     try:
-        result = run(args.bundle, strategy_profile=args.strategy_profile)
+        result = run(
+            args.bundle,
+            strategy_profile=args.strategy_profile,
+            private_strategy_config_path=args.private_strategy_config,
+        )
     except Exception:
         # Keep malformed input fail-closed while still producing a generic
         # encrypted round record.  Never expose parser details or the bundle.

@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import subprocess
 import sys
@@ -12,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from validate_polybolt_compound_bundle import validate_bundle_document
 from validate_polybolt_compound_bundle import H530_STRATEGY_CONFIG_SHA256, H530_STRATEGY_ID, H530_STRATEGY_PROFILE, H530_STRATEGY_VERSION
+from validate_polybolt_compound_bundle import PRIVATE_STRATEGY_PROFILE
 from test_validate_polybolt_compound_bundle import assert_unverified_receipts, bundle
 import research_vault
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -54,6 +56,43 @@ def test_tool_accepts_the_fixed_half_cash_profile_only_when_explicit(tmp_path):
     assert result["strategy_profile"] == H530_STRATEGY_PROFILE
 
 
+def test_tool_accepts_private_exact_profile_from_runner_local_config(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    config_path = tmp_path / "strategy-profile.json"
+    private = {
+        "id": "opaque-private-candidate",
+        "version": "opaque-private-v1",
+        "config": {"private_parameter": "opaque", "required_fills": 10},
+    }
+    digest = hashlib.sha256(json.dumps(private["config"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    document = bundle()
+    document["strategy"] = {"id": private["id"], "version": private["version"], "config_sha256": digest}
+    source.write_text(json.dumps(document))
+    config_path.write_text(json.dumps(private))
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", PRIVATE_STRATEGY_PROFILE,
+        "--private-strategy-config", str(config_path),
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is True
+    assert result["strategy_profile"] == PRIVATE_STRATEGY_PROFILE
+
+
+def test_tool_private_exact_profile_without_config_fails_closed(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    source.write_text(json.dumps(bundle()))
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", PRIVATE_STRATEGY_PROFILE,
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "private_strategy_profile_unavailable"
+
+
 def test_tool_preserves_fail_closed_result(tmp_path):
     source = tmp_path / "bundle.json"
     output = tmp_path / "result.json"
@@ -93,7 +132,10 @@ def test_workflow_never_uploads_private_bundle_or_enables_orders():
     text = WORKFLOW.read_text()
     assert "strategy_profile" in text
     assert "h530_fixed_half_cash" in text
+    assert "private_exact" in text
     assert "--strategy-profile" in text
+    assert "--private-strategy-config" in text
+    assert "POLYBOLT_STRATEGY_PROFILE_JSON_B64" in text
     assert "STRATEGY_PROFILE" in text
     assert "POLYBOLT_COMPOUND_BUNDLE_B64" in text
     assert "redacted fail-closed result" in text
