@@ -6,7 +6,7 @@ on:
       rpc_url:
         description: Read-only Polygon JSON-RPC endpoint
         required: false
-        default: https://polygon-bor-rpc.publicnode.com
+        default: https://polygon.drpc.org
         type: string
       max_transactions:
         description: Maximum existing BTC five-minute transaction receipts per account
