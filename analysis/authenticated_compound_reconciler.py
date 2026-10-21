@@ -276,8 +276,14 @@ def reconcile_authenticated_chain(
                 return {"gate_passed": False, "fills": 0, "failure_reason": "entry_cost_price_arithmetic_mismatch", "owner_scoped": True, "identity_complete": False}
             if execution_role not in {"TAKER", "MAKER"}:
                 return {"gate_passed": False, "fills": 0, "failure_reason": "execution_role_required_for_fee_schedule", "owner_scoped": True, "identity_complete": False}
+            # Polymarket charges the market fee to takers; makers are never
+            # charged an execution fee.  ``rebateRate`` is a separate maker
+            # rebate attribution and must not be turned into a negative
+            # balance fee here.  Requiring the field above still binds the
+            # captured schedule, while keeping the immediate ledger amount
+            # faithful to the execution role.
             expected_fee = Decimal("0")
-            if fees_enabled and (execution_role == "TAKER" or not fee_taker_only):
+            if fees_enabled and execution_role == "TAKER":
                 expected_fee = shares * fee_rate * (price ** fee_exponent) * (Decimal("1") - price)
             if abs(fee_amount - expected_fee) > Decimal("0.000001"):
                 return {"gate_passed": False, "fills": 0, "failure_reason": "fee_amount_schedule_mismatch", "owner_scoped": True, "identity_complete": False}

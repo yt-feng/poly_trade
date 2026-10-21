@@ -84,6 +84,21 @@ def v2_bundle(*, closing_balance: str = "13.25") -> dict[str, object]:
     }
 
 
+def maker_v2_bundle() -> dict[str, object]:
+    events = [v2_event(i) for i in range(10)]
+    for i, row in enumerate(events):
+        row["execution_role"] = "MAKER"
+        row["fee_taker_only"] = False
+        row["fee_rebate_rate"] = "0.2"
+        row["fee"] = "0"
+        before = Decimal("10") + Decimal(i) * Decimal("0.5")
+        row["balance_before"] = format(before, "f")
+        row["balance_after"] = format(before - Decimal("5"), "f")
+    bundle = v2_bundle(closing_balance="15")
+    bundle["events"] = events
+    return bundle
+
+
 class TestAuthenticatedCompoundBundle(unittest.TestCase):
     def test_legacy_bundle_validator_fails_closed_and_requires_v2(self):
         result = validate_bundle_document(
@@ -130,6 +145,19 @@ class TestAuthenticatedCompoundBundle(unittest.TestCase):
     def test_v2_bundle_rejects_fee_amount_not_matching_schedule(self):
         document = v2_bundle()
         document["events"][0]["fee"] = "0.17"
+        result = validate_bundle_document(document)
+        self.assertIs(result["gate_passed"], False)
+        self.assertEqual(result["failure_reason"], "fee_amount_schedule_mismatch")
+
+    def test_v2_bundle_accepts_maker_with_zero_execution_fee_and_rebate_field(self):
+        result = validate_bundle_document(maker_v2_bundle())
+        self.assertIs(result["gate_passed"], True)
+        self.assertEqual(result["fills"], 10)
+        self.assertEqual(result["ending_cash"], "15.00")
+
+    def test_v2_bundle_rejects_nonzero_maker_execution_fee(self):
+        document = maker_v2_bundle()
+        document["events"][0]["fee"] = "0.01"
         result = validate_bundle_document(document)
         self.assertIs(result["gate_passed"], False)
         self.assertEqual(result["failure_reason"], "fee_amount_schedule_mismatch")
