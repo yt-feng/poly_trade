@@ -123,6 +123,7 @@ def _best(book: dict[str, dict[float, float]]) -> tuple[float, float, float, flo
 
 
 def _normalized_trade(row: dict[str, Any]) -> tuple[str, float, float, str] | None:
+    """Keep price and aggressor side in the selected outcome token's units."""
     outcome = _winning_outcome(row.get("outcome"))
     side = str(row.get("side") or "").upper()
     price = row.get("price")
@@ -133,9 +134,6 @@ def _normalized_trade(row: dict[str, Any]) -> tuple[str, float, float, str] | No
     qty = float(size)
     if not math.isfinite(px) or not math.isfinite(qty) or qty <= 0:
         return None
-    if outcome == "no":
-        px = 1.0 - px
-        side = "SELL" if side == "BUY" else "BUY"
     return outcome, _price_key(px), qty, side
 
 
