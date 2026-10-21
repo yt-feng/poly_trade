@@ -57,11 +57,13 @@ DEFAULT_STRATEGY_PROFILE = "h30_legacy"
 H530_STRATEGY_PROFILE = "h530_fixed_half_cash"
 H546_STRATEGY_PROFILE = "h546_adaptive_one_profit"
 H549_STRATEGY_PROFILE = "h549_adaptive_one_profit"
+H561_STRATEGY_PROFILE = "h561_online_depth_proxy"
 PRIVATE_STRATEGY_PROFILE = "private_exact"
 TRACE_PROFILES = {
     H530_STRATEGY_PROFILE,
     H546_STRATEGY_PROFILE,
     H549_STRATEGY_PROFILE,
+    H561_STRATEGY_PROFILE,
 }
 FROZEN_STRATEGY_ID = "h30_move_uncertainty"
 FROZEN_STRATEGY_VERSION = "h54-execution-contract-prefix-v1"
@@ -124,12 +126,36 @@ H549_STRATEGY_CONFIG = {
     "minimum_order_shares": "5",
     "required_fills": 10,
 }
+H561_STRATEGY_ID = "h561_online_depth_proxy"
+H561_STRATEGY_VERSION = "h561-old-clean-online-depth-proxy-v1"
+H561_STRATEGY_CONFIG = {
+    "candidate": "H561_ONLINE_ENTRY_DEPTH_PROXY_SIZING",
+    "source_commit": "bbda5f2050685f63153621a54641ebdfab943487",
+    "depth_capacity_thresholds": ["4", "6", "8"],
+    "gross_cash_fractions": ["0.5", "0.75", "0.9", "1.0"],
+    "depth_source": "side-specific sell depth visible in the first two minutes",
+    "entry_policy_is_online_observable": True,
+    "taker_fee_rate": "0.07",
+    "settlement_seconds": "300",
+    "cash_release_delay_seconds": "900",
+    "minimum_order_usd": "5",
+    "minimum_order_shares": "5",
+    "required_fills": 10,
+}
 
 STRATEGY_DECISION_TRACE_KEYS = {
     "decision_ref",
     "sequence_no",
     "cash_fraction",
     "profitable_released_exits_before",
+}
+H561_STRATEGY_DECISION_TRACE_KEYS = {
+    "decision_ref",
+    "sequence_no",
+    "cash_fraction",
+    "position_side",
+    "entry_sell_depth_shares",
+    "depth_capacity_ratio",
 }
 STRATEGY_SIZE_TOLERANCE = Decimal("0.000001")
 
@@ -161,6 +187,7 @@ def _strategy_profile(
         H530_STRATEGY_PROFILE: (H530_STRATEGY_ID, H530_STRATEGY_VERSION, H530_STRATEGY_CONFIG),
         H546_STRATEGY_PROFILE: (H546_STRATEGY_ID, H546_STRATEGY_VERSION, H546_STRATEGY_CONFIG),
         H549_STRATEGY_PROFILE: (H549_STRATEGY_ID, H549_STRATEGY_VERSION, H549_STRATEGY_CONFIG),
+        H561_STRATEGY_PROFILE: (H561_STRATEGY_ID, H561_STRATEGY_VERSION, H561_STRATEGY_CONFIG),
     }
     try:
         return profiles[profile]
@@ -179,6 +206,9 @@ H546_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
 ).hexdigest()
 H549_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
     json.dumps(H549_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+H561_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
+    json.dumps(H561_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
 ).hexdigest()
 
 
@@ -386,6 +416,22 @@ def _depth_snapshots(
             "available_shares": available_shares,
             "ask_price": ask_price,
         }
+        # H561 additionally binds the side-specific sell depth used by its
+        # online sizing rule.  Keep these fields optional here so legacy
+        # profiles retain their existing depth contract; H561 fails closed if
+        # either field is absent or malformed during trace validation.
+        if "position_side" in snapshot or "sell_available_shares_2m" in snapshot:
+            position_side = snapshot.get("position_side")
+            if position_side not in {"up", "down"}:
+                return {}, "depth_position_side_invalid"
+            try:
+                sell_depth = _decimal(snapshot.get("sell_available_shares_2m"), "sell_available_shares_2m")
+            except ValueError as exc:
+                return {}, str(exc)
+            if sell_depth < 0:
+                return {}, "sell_available_shares_2m_negative"
+            out[key]["position_side"] = position_side
+            out[key]["sell_available_shares_2m"] = sell_depth
     return out, None
 
 
@@ -717,6 +763,7 @@ def _validate_strategy_decision_trace(
     *,
     strategy_profile: str,
     strategy_config: dict[str, Any],
+    depth_by_ref: dict[tuple[str, str], dict[str, Any]],
 ) -> str | None:
     """Bind each account event to the frozen online sizing state.
 
@@ -731,9 +778,14 @@ def _validate_strategy_decision_trace(
     raw_trace = document.get("strategy_decisions")
     if not isinstance(raw_trace, list) or len(raw_trace) != len(events):
         return "strategy_decision_trace_required"
+    trace_keys = (
+        H561_STRATEGY_DECISION_TRACE_KEYS
+        if strategy_profile == H561_STRATEGY_PROFILE
+        else STRATEGY_DECISION_TRACE_KEYS
+    )
     by_ref: dict[str, dict[str, Any]] = {}
     for raw in raw_trace:
-        if not isinstance(raw, dict) or set(raw) != STRATEGY_DECISION_TRACE_KEYS:
+        if not isinstance(raw, dict) or set(raw) != trace_keys:
             return "strategy_decision_trace_invalid"
         try:
             ref = _text(raw.get("decision_ref"), "strategy_trace_decision_ref")
@@ -741,19 +793,41 @@ def _validate_strategy_decision_trace(
             if type(sequence) is not int or sequence < 1:
                 return "strategy_trace_sequence_invalid"
             fraction = _decimal(raw.get("cash_fraction"), "strategy_trace_cash_fraction")
-            profit_count = raw.get("profitable_released_exits_before")
-            if type(profit_count) is not int or profit_count < 0:
-                return "strategy_trace_profit_count_invalid"
+            if strategy_profile == H561_STRATEGY_PROFILE:
+                position_side = _text(raw.get("position_side"), "strategy_trace_position_side").lower()
+                if position_side not in {"up", "down"}:
+                    return "strategy_trace_position_side_invalid"
+                entry_sell_depth = _decimal(
+                    raw.get("entry_sell_depth_shares"), "strategy_trace_entry_sell_depth_shares"
+                )
+                capacity_ratio = _decimal(
+                    raw.get("depth_capacity_ratio"), "strategy_trace_depth_capacity_ratio"
+                )
+                if entry_sell_depth < 0 or capacity_ratio < 0:
+                    return "strategy_trace_depth_negative"
+                profit_count = None
+            else:
+                profit_count = raw.get("profitable_released_exits_before")
+                if type(profit_count) is not int or profit_count < 0:
+                    return "strategy_trace_profit_count_invalid"
         except ValueError as exc:
             return str(exc)
         if ref in by_ref:
             return "strategy_trace_decision_ref_reused"
-        by_ref[ref] = {
+        trace_row = {
             "decision_ref": ref,
             "sequence_no": sequence,
             "cash_fraction": str(raw["cash_fraction"]),
-            "profitable_released_exits_before": profit_count,
         }
+        if strategy_profile == H561_STRATEGY_PROFILE:
+            trace_row.update({
+                "position_side": position_side,
+                "entry_sell_depth_shares": str(raw["entry_sell_depth_shares"]),
+                "depth_capacity_ratio": str(raw["depth_capacity_ratio"]),
+            })
+        else:
+            trace_row["profitable_released_exits_before"] = profit_count
+        by_ref[ref] = trace_row
     if len(by_ref) != len(events):
         return "strategy_decision_trace_coverage_mismatch"
     ordered = sorted(events, key=lambda row: row.get("sequence_no", -1))
@@ -770,7 +844,46 @@ def _validate_strategy_decision_trace(
         ).hexdigest()
         if _text(row.get("strategy_decision_sha256"), "strategy_decision_sha256").lower() != expected_hash:
             return "strategy_decision_trace_hash_mismatch"
-        if strategy_profile == H530_STRATEGY_PROFILE:
+        if strategy_profile == H561_STRATEGY_PROFILE:
+            position_side = _text(row.get("position_side"), "event_position_side").lower()
+            if position_side not in {"up", "down"}:
+                return "event_position_side_invalid"
+            depth_ref = row.get("depth_ref")
+            if not isinstance(depth_ref, dict):
+                return "depth_ref_required_per_fill"
+            depth_key = (_text(row.get("market_id"), "event_market_id"), _text(depth_ref.get("snapshot_id"), "depth_snapshot_id_ref"))
+            depth = depth_by_ref.get(depth_key)
+            if depth is None or "sell_available_shares_2m" not in depth:
+                return "h561_side_specific_sell_depth_required"
+            if depth.get("position_side") != position_side:
+                return "h561_depth_position_side_mismatch"
+            if trace["position_side"] != position_side:
+                return "strategy_trace_position_side_mismatch"
+            sell_depth = _decimal(depth["sell_available_shares_2m"], "sell_available_shares_2m")
+            trace_sell_depth = _decimal(trace["entry_sell_depth_shares"], "strategy_trace_entry_sell_depth_shares")
+            if trace_sell_depth != sell_depth:
+                return "strategy_trace_sell_depth_mismatch"
+            try:
+                balance_before = _decimal(row.get("balance_before"), "balance_before")
+                price = _decimal(row.get("price"), "price")
+                actual_shares = _decimal(row.get("shares"), "shares")
+                actual_cost = _decimal(row.get("entry_cost"), "entry_cost")
+                actual_fee = _decimal(row.get("fee"), "fee")
+                full_shares, _, _ = _expected_entry_terms(balance_before, price, Decimal("1"))
+            except ValueError as exc:
+                return str(exc)
+            expected_ratio = sell_depth / full_shares if full_shares > 0 else Decimal("0")
+            trace_ratio = _decimal(trace["depth_capacity_ratio"], "strategy_trace_depth_capacity_ratio")
+            if abs(trace_ratio - expected_ratio) > STRATEGY_SIZE_TOLERANCE:
+                return "strategy_trace_depth_ratio_mismatch"
+            thresholds = tuple(_decimal(item, "depth_capacity_threshold") for item in strategy_config["depth_capacity_thresholds"])
+            expected_fraction = Decimal("1") if expected_ratio >= thresholds[2] else (
+                Decimal("0.9") if expected_ratio >= thresholds[1] else (
+                    Decimal("0.75") if expected_ratio >= thresholds[0] else Decimal("0.5")
+                )
+            )
+            expected_profit_count = None
+        elif strategy_profile == H530_STRATEGY_PROFILE:
             expected_fraction = _decimal(strategy_config["gross_cash_fraction"], "gross_cash_fraction")
             expected_profit_count = 0
         else:
@@ -781,7 +894,7 @@ def _validate_strategy_decision_trace(
                 else "base_gross_cash_fraction"
             )
             expected_fraction = _decimal(strategy_config[fraction_key], fraction_key)
-        if trace["profitable_released_exits_before"] != expected_profit_count:
+        if strategy_profile != H561_STRATEGY_PROFILE and trace["profitable_released_exits_before"] != expected_profit_count:
             return "strategy_decision_trace_state_mismatch"
         if _decimal(trace["cash_fraction"], "strategy_trace_cash_fraction") != expected_fraction:
             return "strategy_decision_trace_fraction_mismatch"
@@ -802,7 +915,7 @@ def _validate_strategy_decision_trace(
             or abs(actual_fee - expected_fee) > STRATEGY_SIZE_TOLERANCE
         ):
             return "strategy_entry_size_mismatch"
-        if strategy_profile != H530_STRATEGY_PROFILE:
+        if strategy_profile not in {H530_STRATEGY_PROFILE, H561_STRATEGY_PROFILE}:
             payout = _decimal(row.get("payout"), "payout")
             entry_cost = _decimal(row.get("entry_cost"), "entry_cost")
             fee = _decimal(row.get("fee"), "fee")
@@ -915,6 +1028,7 @@ def validate_bundle_document(
         events,
         strategy_profile=strategy_profile,
         strategy_config=strategy_config,
+        depth_by_ref=depth_by_ref,
     )
     if trace_failure:
         return {
@@ -980,7 +1094,7 @@ def main() -> int:
     parser.add_argument("--required-fills", type=int, default=10)
     parser.add_argument(
         "--strategy-profile",
-        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
+        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, H561_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
         default=DEFAULT_STRATEGY_PROFILE,
     )
     parser.add_argument("--private-strategy-config", type=Path)

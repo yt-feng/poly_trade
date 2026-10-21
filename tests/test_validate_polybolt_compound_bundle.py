@@ -18,10 +18,15 @@ from validate_polybolt_compound_bundle import (
     H549_STRATEGY_ID,
     H549_STRATEGY_PROFILE,
     H549_STRATEGY_VERSION,
+    H561_STRATEGY_CONFIG_SHA256,
+    H561_STRATEGY_ID,
+    H561_STRATEGY_PROFILE,
+    H561_STRATEGY_VERSION,
     PRIVATE_STRATEGY_PROFILE,
     FROZEN_STRATEGY_CONFIG_SHA256,
     FROZEN_STRATEGY_ID,
     FROZEN_STRATEGY_VERSION,
+    _expected_entry_terms,
     validate_bundle_document,
 )
 
@@ -54,6 +59,30 @@ def attach_strategy_trace(
                 prior_profitable += 1
             else:
                 prior_profitable = 0
+    document["strategy_decisions"] = decisions
+    return document
+
+
+def attach_depth_proxy_trace(document: dict[str, object], depth: str = "1000") -> dict[str, object]:
+    decisions = []
+    for event in document["events"]:
+        balance_before = Decimal(str(event["balance_before"]))
+        price = Decimal(str(event["price"]))
+        per_share = price + Decimal("0.07") * price * (Decimal("1") - price)
+        full_shares = max(Decimal("5"), balance_before / per_share)
+        ratio = Decimal(depth) / full_shares
+        decision = {
+            "decision_ref": event["strategy_decision_ref"],
+            "sequence_no": event["sequence_no"],
+            "cash_fraction": "1.0",
+            "position_side": "up",
+            "entry_sell_depth_shares": depth,
+            "depth_capacity_ratio": format(ratio, "f"),
+        }
+        event["strategy_decision_sha256"] = hashlib.sha256(
+            json.dumps(decision, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        decisions.append(decision)
     document["strategy_decisions"] = decisions
     return document
 
@@ -125,6 +154,8 @@ def depth_snapshot(seq: int, market_id: str = MARKET_ID, *, event_ms: int | None
         "received_ms": timestamp + 50,
         "available_shares": "100",
         "ask_price": "0.50",
+        "position_side": "up",
+        "sell_available_shares_2m": "1000",
     }
 
 
@@ -149,6 +180,7 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
         "execution_role": "TAKER",
         "trader_side": "TAKER",
         "trader_side_source": "SETTLED_TAKER_LEG",
+        "position_side": "up",
         "fee_rate": "0.07",
         "balance_checkpoint_id": f"balance-{i}",
         "cash_reconciled": True,
@@ -308,6 +340,46 @@ def test_adaptive_profile_binds_actual_entry_size_to_fraction():
     result = validate_bundle_document(doc, strategy_profile=H549_STRATEGY_PROFILE)
     assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "strategy_entry_size_mismatch"
+
+
+def test_h561_profile_binds_side_specific_entry_depth_to_fraction():
+    doc = bundle()
+    doc["strategy"] = {
+        "id": H561_STRATEGY_ID,
+        "version": H561_STRATEGY_VERSION,
+        "config_sha256": H561_STRATEGY_CONFIG_SHA256,
+    }
+    cash = Decimal("10")
+    previous_payout = Decimal("0")
+    for event, receipt, settlement in zip(
+        doc["events"], doc["cash_release_receipts"], doc["settlement_receipts"], strict=True
+    ):
+        shares, cost, expected_fee = _expected_entry_terms(cash, Decimal("0.5"), Decimal("1"))
+        # Keep the synthetic cash checkpoint exactly nonnegative; the tiny
+        # Decimal remainder from the sizing division is within the validator's
+        # fee tolerance and is not the behavior under test here.
+        fee = cash - cost
+        payout = cost + fee + Decimal("0.50")
+        event.update({
+            "shares": format(shares, "f"), "price": "0.5", "entry_cost": format(cost, "f"),
+            "fee": format(fee, "f"), "payout": format(payout, "f"),
+            "released_cash_since_previous_entry": format(previous_payout, "f"),
+            "balance_before": format(cash, "f"),
+            "balance_after": format(cash - cost - fee, "f"),
+        })
+        receipt["amount"] = format(payout, "f")
+        settlement["payout"] = format(payout, "f")
+        previous_payout = payout
+        cash = cash - cost - fee + payout
+    doc["closing_balance"] = format(cash, "f")
+    attach_depth_proxy_trace(doc)
+    result = validate_bundle_document(doc, strategy_profile=H561_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is True
+
+    doc["depth_snapshots"][0]["sell_available_shares_2m"] = "10"
+    result = validate_bundle_document(doc, strategy_profile=H561_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "strategy_trace_sell_depth_mismatch"
 
 
 def test_private_exact_profile_is_supplied_without_public_config():
