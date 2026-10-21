@@ -1,0 +1,114 @@
+name: H544 old-clean intermediate cash boost
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Pinned old-clean source
+        required: true
+        default: bbda5f2050685f63153621a54641ebdfab943487
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: ${{ inputs.source_commit }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy scikit-learn pytest
+      - name: Validate H544 contract
+        run: python -m pytest -q tests/test_h542_adaptive_cash_policy.py tests/test_h506_h452_execution_depth_stress.py tests/test_h508_cash_fraction_depth_tradeoff.py
+      - name: Run H544 on pinned old-clean source
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h544"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h542_adaptive_cash_boost.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "${{ inputs.source_commit }}" \
+            --output "$PRIVATE_DIR/results" \
+            --hypothesis-id H544_INTERMEDIATE_CASH_BOOST_AFTER_TWO_PROFITS \
+            --result-format old-clean-h544-intermediate-cash-boost-v1 \
+            --base-fraction 0.55 \
+            --boost-fraction 0.575 \
+            --boost-after-profits 2 > "$PRIVATE_DIR/analysis-output.txt"
+      - name: Seal H544 results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_DATA_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/old-data-h544" <<'PY'
+          import base64, json, os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          repository = os.environ['GITHUB_REPOSITORY']
+          def variable(name):
+              return subprocess.check_output(['gh', 'variable', 'get', name, '--repo', repository], text=True).strip()
+          recipient = research_vault.load_json_bytes(base64.b64decode(variable('QUALITY_FIRST_RECIPIENT_JSON_B64'), validate=True), 4096)
+          recipient_id = variable('QUALITY_FIRST_RECIPIENT_ID')
+          research_vault.validate_recipient(recipient, recipient_id)
+          results = private / 'results'
+          payload = {
+              'format': 'old-clean-h544-intermediate-cash-boost-sealed-v1',
+              'preregistration': {
+                  'hypothesis_id': 'H544_INTERMEDIATE_CASH_BOOST_AFTER_TWO_PROFITS',
+                  'base_fraction': 0.55,
+                  'boost_fraction': 0.575,
+                  'boost_after_profitable_exits': 2,
+                  'source_commit': os.environ['SOURCE_DATA_COMMIT'],
+              },
+              'summary': json.loads((results / 'summary.json').read_text()),
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
+          }
+          delivery = Path('sealed-delivery'); delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version':1,'status':'complete','stage':'sealed_delivery','strategy_evaluated':True,'live_orders_enabled':False,'plaintext_published':False,'sealed_parts':1}) + b'\n', 0o644)
+          PY
+      - name: Publish encrypted H544 journal
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RECIPIENT_ID="$(gh variable get QUALITY_FIRST_RECIPIENT_ID --repo "$GITHUB_REPOSITORY")"
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RECIPIENT_ID"
+      - name: Write redacted summary
+        if: always()
+        run: |
+          echo '## H544 old-clean intermediate cash boost' >> "$GITHUB_STEP_SUMMARY"
+          echo '- H534 fixed 0.55, fee/release rules, depth/latency grid and one evolving ledger remain fixed; only the pre-registered 0.575 post-profit boost is tested.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Detailed metrics remain in the encrypted research vault.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove runner-local plaintext
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'old-data-h544', Path('sealed-delivery')):
+              if path.exists(): shutil.rmtree(path)
+          PY

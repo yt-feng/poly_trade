@@ -81,6 +81,9 @@ def _replay_adaptive(
     latency_seconds: float,
     depth_haircut: float,
     exit_cache: dict[tuple[Any, ...], dict[str, Any] | None],
+    base_fraction: float = BASE_FRACTION,
+    boost_fraction: float = BOOST_FRACTION,
+    boost_after_profits: int = BOOST_AFTER_PROFITS,
 ) -> dict[str, Any]:
     """Replay H542 on one rolling window without resetting the cash ledger."""
     h508.depth._validate_stress(latency_seconds, depth_haircut)
@@ -116,8 +119,13 @@ def _replay_adaptive(
         if cash < MINIMUM_ORDER_USD - 1e-12:
             failure_reason = "insufficient_cash_for_minimum_order"
             break
-        fraction = _fraction_for_state(consecutive_profits)
-        if fraction == BOOST_FRACTION:
+        fraction = _fraction_for_state(
+            consecutive_profits,
+            base_fraction=base_fraction,
+            boost_fraction=boost_fraction,
+            boost_after_profits=boost_after_profits,
+        )
+        if fraction == float(boost_fraction):
             boost_entries += 1
         terms = _size_from_cash(row, cash, fraction)
         if terms is None:
@@ -204,7 +212,23 @@ def _build_candidates(source_root: Path, runs: list[str], features: pd.DataFrame
     return candidates_by_slippage
 
 
-def evaluate(source_root: Path, *, source_commit: str = SOURCE_COMMIT, output: Path) -> dict[str, Any]:
+def evaluate(
+    source_root: Path,
+    *,
+    source_commit: str = SOURCE_COMMIT,
+    output: Path,
+    hypothesis_id: str = HYPOTHESIS_ID,
+    result_format: str = RESULT_FORMAT,
+    base_fraction: float = BASE_FRACTION,
+    boost_fraction: float = BOOST_FRACTION,
+    boost_after_profits: int = BOOST_AFTER_PROFITS,
+) -> dict[str, Any]:
+    _fraction_for_state(
+        0,
+        base_fraction=base_fraction,
+        boost_fraction=boost_fraction,
+        boost_after_profits=boost_after_profits,
+    )
     observed = subprocess.check_output(
         ["git", "-C", str(source_root.resolve().parents[1]), "rev-parse", "HEAD"], text=True
     ).strip()
@@ -233,9 +257,11 @@ def evaluate(source_root: Path, *, source_commit: str = SOURCE_COMMIT, output: P
                     adaptive = _replay_adaptive(
                         base, window["runs"], quotes, latency_seconds=float(latency),
                         depth_haircut=float(haircut), exit_cache=adaptive_cache,
+                        base_fraction=base_fraction, boost_fraction=boost_fraction,
+                        boost_after_profits=boost_after_profits,
                     )
                     baseline = h508._replay_fraction_depth(
-                        base, window["runs"], quotes, gross_cash_fraction=BASE_FRACTION,
+                        base, window["runs"], quotes, gross_cash_fraction=base_fraction,
                         latency_seconds=float(latency), depth_haircut=float(haircut),
                         exit_cache=baseline_cache,
                     )
@@ -254,13 +280,13 @@ def evaluate(source_root: Path, *, source_commit: str = SOURCE_COMMIT, output: P
     ending_delta = frame["ending_cash_delta"]
     min_delta = frame["min_cash_delta"]
     result: dict[str, Any] = {
-        "format": RESULT_FORMAT, "hypothesis_id": HYPOTHESIS_ID,
+        "format": result_format, "hypothesis_id": hypothesis_id,
         "source_commit": source_commit, "observed_source_commit": observed,
         "strict_quality": True, "complete_runs": len(runs),
         "feature_rows": int(len(features)), "window_count": len(windows),
         "policy": {
-            "base_fraction": BASE_FRACTION, "boost_fraction": BOOST_FRACTION,
-            "boost_after_profitable_exits": BOOST_AFTER_PROFITS,
+            "base_fraction": float(base_fraction), "boost_fraction": float(boost_fraction),
+            "boost_after_profitable_exits": int(boost_after_profits),
             "online_observable": True, "no_future_exit_used_for_entry": True,
         },
         "protocol": {
@@ -295,11 +321,11 @@ def evaluate(source_root: Path, *, source_commit: str = SOURCE_COMMIT, output: P
             "cash_floor_non_degraded": bool(min_delta.min() >= -1e-9),
             "growth_non_degraded": bool(ending_delta.median() > 0.01),
         },
-        "decision": "h542_adaptive_boost_passes" if (
+        "decision": f"{hypothesis_id.split('_', 1)[0].lower()}_adaptive_boost_passes" if (
             bool(adaptive_series["first_ten_passed"].all())
             and bool(min_delta.min() >= -1e-9)
             and bool(ending_delta.median() > 0.01)
-        ) else "h542_adaptive_boost_rejected_keep_h534",
+        ) else f"{hypothesis_id.split('_', 1)[0].lower()}_adaptive_boost_rejected_keep_h534",
         "new_data_collected": False, "model_refit": True,
         "live_orders_enabled": False, "actual_fills": 0,
         "verified_canary_fills": 0, "same_ledger_compounding_rows": 0,
@@ -322,8 +348,22 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--source-commit", default=SOURCE_COMMIT)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--hypothesis-id", default=HYPOTHESIS_ID)
+    parser.add_argument("--result-format", default=RESULT_FORMAT)
+    parser.add_argument("--base-fraction", type=float, default=BASE_FRACTION)
+    parser.add_argument("--boost-fraction", type=float, default=BOOST_FRACTION)
+    parser.add_argument("--boost-after-profits", type=int, default=BOOST_AFTER_PROFITS)
     args = parser.parse_args()
-    evaluate(args.source_root, source_commit=args.source_commit, output=args.output)
+    evaluate(
+        args.source_root,
+        source_commit=args.source_commit,
+        output=args.output,
+        hypothesis_id=args.hypothesis_id,
+        result_format=args.result_format,
+        base_fraction=args.base_fraction,
+        boost_fraction=args.boost_fraction,
+        boost_after_profits=args.boost_after_profits,
+    )
 
 
 if __name__ == "__main__":

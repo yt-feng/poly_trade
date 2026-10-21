@@ -16,6 +16,11 @@ def test_h542_boosts_only_after_two_prior_profits():
     assert _fraction_for_state(BOOST_AFTER_PROFITS + 3) == BOOST_FRACTION
 
 
+def test_h544_intermediate_fraction_is_online_and_bounded():
+    assert _fraction_for_state(0, base_fraction=0.55, boost_fraction=0.575) == 0.55
+    assert _fraction_for_state(2, base_fraction=0.55, boost_fraction=0.575) == 0.575
+
+
 def test_h542_state_is_reset_by_caller_after_nonprofit():
     # The policy is intentionally a pure state transition; a non-profit exit
     # must be represented by the caller as zero consecutive profits.
