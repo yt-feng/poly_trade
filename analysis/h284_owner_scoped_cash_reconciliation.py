@@ -182,6 +182,14 @@ def reconcile_observed_cash(
             payout_by_tx.get(tx, 0) == inbound.get(tx, 0)
             for tx in payout_transactions
         ),
+        "payout_amount_inbound_greater_transactions": sum(
+            inbound.get(tx, 0) > payout_by_tx.get(tx, 0)
+            for tx in payout_transactions
+        ),
+        "payout_amount_inbound_lower_transactions": sum(
+            inbound.get(tx, 0) < payout_by_tx.get(tx, 0)
+            for tx in payout_transactions
+        ),
         "payout_amount_activity_match_transactions": sum(
             payout_by_tx.get(tx, 0) == expected.get(tx, 0)
             for tx in payout_transactions
