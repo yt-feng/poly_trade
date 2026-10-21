@@ -139,6 +139,25 @@ def test_concatenated_reset_ledgers_fail_closed():
     assert result["failure_reason"] == "ledger_id_mismatch"
 
 
+def test_two_five_fill_windows_with_sequence_reset_fail_closed():
+    """Ten Canary rows cannot be made by joining two separately reset windows."""
+    rows = [row(i) for i in range(10)]
+    for index in range(5, 10):
+        # Keep the owner, ledger, chain and receipt identities unique while
+        # resetting only the window-local sequence.  A valid chain must still
+        # be exactly 1..10 on one evolving ledger.
+        rows[index]["sequence_no"] = index - 4
+    result = reconcile_authenticated_chain(
+        rows,
+        owner="owner-1",
+        starting_checkpoint_id="opening",
+        closing_balance_checkpoint_id="closing",
+        closing_balance="15.00",
+    )
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "sequence_no_must_be_exactly_one_to_ten"
+
+
 def test_missing_opening_or_closing_anchor_fails_closed():
     result = reconcile_authenticated_chain([row(i) for i in range(10)], owner="owner-1")
     assert result["gate_passed"] is False
