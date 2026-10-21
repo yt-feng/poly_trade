@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from validate_polybolt_compound_bundle import validate_bundle_document
 from validate_polybolt_compound_bundle import H530_STRATEGY_CONFIG_SHA256, H530_STRATEGY_ID, H530_STRATEGY_PROFILE, H530_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H546_STRATEGY_CONFIG_SHA256, H546_STRATEGY_ID, H546_STRATEGY_PROFILE, H546_STRATEGY_VERSION
+from validate_polybolt_compound_bundle import H549_STRATEGY_CONFIG_SHA256, H549_STRATEGY_ID, H549_STRATEGY_PROFILE, H549_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import PRIVATE_STRATEGY_PROFILE
 from test_validate_polybolt_compound_bundle import assert_unverified_receipts, bundle
 import research_vault
@@ -74,6 +75,25 @@ def test_tool_accepts_the_frozen_h546_adaptive_profile(tmp_path):
     result = json.loads(output.read_text())
     assert result["offline_consistency_passed"] is True
     assert result["strategy_profile"] == H546_STRATEGY_PROFILE
+
+
+def test_tool_accepts_the_frozen_h549_adaptive_profile(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    document = bundle()
+    document["strategy"] = {
+        "id": H549_STRATEGY_ID,
+        "version": H549_STRATEGY_VERSION,
+        "config_sha256": H549_STRATEGY_CONFIG_SHA256,
+    }
+    source.write_text(json.dumps(document))
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", H549_STRATEGY_PROFILE,
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is True
+    assert result["strategy_profile"] == H549_STRATEGY_PROFILE
 
 
 def test_tool_accepts_private_exact_profile_from_runner_local_config(tmp_path):
@@ -168,6 +188,7 @@ def test_workflow_never_uploads_private_bundle_or_enables_orders():
     assert "strategy_profile" in text
     assert "h530_fixed_half_cash" in text
     assert "h546_adaptive_one_profit" in text
+    assert "h549_adaptive_one_profit" in text
     assert "private_exact" in text
     assert "--strategy-profile" in text
     assert "--private-strategy-config" in text
