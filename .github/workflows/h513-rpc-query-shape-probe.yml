@@ -1,0 +1,119 @@
+name: H513 RPC query-shape compatibility probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      rpc_urls:
+        description: Comma-separated read-only Polygon JSON-RPC endpoints
+        required: false
+        default: https://polygon.drpc.org,https://polygon-bor-rpc.publicnode.com
+        type: string
+      block_span:
+        description: Tiny recent block span for compatibility checks
+        required: false
+        default: '20'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install vault and latest official SDK
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements-vault.txt
+          sdk_commit="$(git ls-remote https://github.com/Polymarket/py-sdk.git refs/heads/main | cut -f1)"
+          test "${#sdk_commit}" -eq 40
+          python -m pip install "git+https://github.com/Polymarket/py-sdk.git@$sdk_commit"
+      - name: Capture existing owner activity and probe filter shapes
+        env:
+          POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
+          BTC5M_POLYMARKET_PRIVATE_KEY: ${{ secrets.BTC5M_POLYMARKET_PRIVATE_KEY }}
+          RPC_URLS: ${{ inputs.rpc_urls }}
+          BLOCK_SPAN: ${{ inputs.block_span }}
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          private_dir="$RUNNER_TEMP/h513"
+          mkdir -m 700 "$private_dir"
+          python - "$private_dir/keys.json" <<'PY'
+          import json, os, sys
+          rows=[]
+          for label, env_name in (("polymarket", "POLYMARKET_PRIVATE_KEY"), ("btc5m", "BTC5M_POLYMARKET_PRIVATE_KEY")):
+              value=os.environ.get(env_name, "").strip()
+              if value: rows.append({"label": label, "private_key": value})
+          json.dump(rows, open(sys.argv[1], "w"), separators=(",", ":"))
+          PY
+          sdk_commit="$(git ls-remote https://github.com/Polymarket/py-sdk.git refs/heads/main | cut -f1)"
+          python -u analysis/h279_authenticated_lifecycle_capture.py \
+            --keys-file "$private_dir/keys.json" --sdk-commit "$sdk_commit" \
+            --output "$private_dir/h279.json" > "$private_dir/h279.stdout" 2> "$private_dir/h279.stderr"
+          python - "$private_dir" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          private=Path(sys.argv[1]); report=json.loads((private/'h279.json').read_text())
+          address=re.compile(r'^0x[0-9a-fA-F]{40}$'); tx_hash=re.compile(r'^0x[0-9a-fA-F]{64}$')
+          slug_re=re.compile(r'(?:^|[-_])(btc|bitcoin)[-_](?:updown|up_down)[-_]5m(?:[-_]|$)', re.I)
+          accounts=[]
+          for row in report.get('accounts') or []:
+              counts={}
+              for trade in row.get('account_trades') or []:
+                  if not isinstance(trade, dict): continue
+                  for key in ('maker_address','owner_address','wallet_address'):
+                      value=str(trade.get(key) or '').strip().lower()
+                      if address.fullmatch(value): counts[value]=counts.get(value,0)+1; break
+              if not counts: continue
+              owner=max(counts.items(), key=lambda item:(item[1],item[0]))[0]
+              activity=[item for item in (row.get('public_data_activity') or []) if isinstance(item,dict)]
+              hashes=[]
+              for item in activity:
+                  slug=str(item.get('slug') or item.get('eventSlug') or item.get('event_slug') or '').lower()
+                  tx=str(item.get('transactionHash') or item.get('transaction_hash') or item.get('txHash') or '').lower()
+                  if slug_re.search(slug) and tx_hash.fullmatch(tx): hashes.append(tx)
+              accounts.append({'label':row.get('label',''),'owner':owner,'activity':activity,'btc_transaction_hashes':list(dict.fromkeys(hashes))})
+          json.dump({'accounts':accounts}, open(private/'probe-input.json','w'), separators=(',',':'))
+          PY
+          python -u analysis/h513_rpc_query_shape_probe.py \
+            --input "$private_dir/probe-input.json" --output "$private_dir/probe.json" \
+            --rpc-urls "$RPC_URLS" --block-span "$BLOCK_SPAN" > "$private_dir/probe.stdout"
+      - name: Seal and publish encrypted probe
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/h513" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0,'tools'); import research_vault
+          private=Path(sys.argv[1]); recipient=research_vault.load_json_bytes(base64.b64decode(os.environ['QUALITY_FIRST_RECIPIENT_JSON_B64'],validate=True),4096); rid=os.environ['QUALITY_FIRST_RECIPIENT_ID']; research_vault.validate_recipient(recipient,rid)
+          payload={'format':'h513-rpc-query-shape-probe-sealed-v1','h279':json.loads((private/'h279.json').read_text()),'probe':json.loads((private/'probe.json').read_text()),'probe_stdout':(private/'probe.stdout').read_text(),'workflow':{'run_id':os.environ['GITHUB_RUN_ID'],'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'ref':os.environ['GITHUB_REF']}}
+          delivery=Path('sealed-delivery'); delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery/'part-0000.vault',research_vault.seal(research_vault.canonical(payload),recipient,rid),0o600)
+          research_vault.write_new(delivery/'status.json',research_vault.canonical({'version':1,'status':'complete','stage':'sealed_delivery','strategy_evaluated':False,'live_orders_enabled':False,'plaintext_published':False,'sealed_parts':1})+b'\n',0o644)
+          PY
+          RESEARCH_RECIPIENT_ID="$QUALITY_FIRST_RECIPIENT_ID" PYTHONPATH=tools python tools/publish_quality_first_journal.py --source sealed-delivery --repository yt-feng/poly_trade --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --recipient-id "$RESEARCH_RECIPIENT_ID"
+      - name: Redacted summary and cleanup
+        if: always()
+        run: |
+          echo '## H513 RPC query-shape compatibility probe' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Reuses existing authenticated owner activity and compares scalar/OR filter forms over a tiny range; detailed categories remain encrypted.' >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY'
+          from pathlib import Path
+          import os, shutil
+          for path in (Path(os.environ['RUNNER_TEMP'])/'h513', Path('sealed-delivery')):
+              if path.exists(): shutil.rmtree(path)
+          PY
