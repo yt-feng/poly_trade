@@ -328,12 +328,16 @@ def _receipt_join(
     trades: list[dict[str, Any]],
     rpc_call: Callable[[str, list[Any]], Any],
     receipt_cache: dict[str, dict[str, Any]] | None = None,
+    settlement_hashes: Iterable[str] = (),
 ) -> dict[str, Any]:
     condition_ids = {row["condition_id"] for row in trades if row.get("condition_id")}
     transfers: list[dict[str, Any]] = []
     payouts: list[dict[str, Any]] = []
     confirmed = legacy = v2 = unbound = failures = 0
-    for tx in dict.fromkeys(row["transaction_ref"] for row in trades):
+    trade_hashes = list(dict.fromkeys(row["transaction_ref"] for row in trades))
+    settlement_candidates = list(dict.fromkeys(tx for tx in settlement_hashes if _tx(tx)))
+    scanned_hashes = list(dict.fromkeys(trade_hashes + settlement_candidates))
+    for tx in scanned_hashes:
         try:
             receipt = (receipt_cache or {}).get(tx)
             if receipt is None:
@@ -349,7 +353,8 @@ def _receipt_join(
             legacy += len(old_payouts)
             v2 += admitted
             unbound += not_bound
-            confirmed += int(bool(old_confirmed or new_confirmed))
+            if tx in trade_hashes:
+                confirmed += int(bool(old_confirmed or new_confirmed))
         except Exception:
             failures += 1
     reconciliation = _reconcile(trades, transfers, payouts, owner)
@@ -365,6 +370,7 @@ def _receipt_join(
         "v2_settlement_receipt_rows": v2,
         "v2_unbound_payout_rows": unbound,
         "cash_release_receipt_rows": cash,
+        "settlement_candidate_hashes": len(settlement_candidates),
         "cash_reconciliation_by_collateral_token": reconciliation,
     }
 
@@ -412,7 +418,17 @@ def capture_account(
             if row and key not in seen:
                 seen.add(key)
                 normalized.append(row)
-    joined = _receipt_join(owner, normalized, rpc_call, receipt_cache=receipt_cache)
+    settlement_hashes = [
+        tx for tx, source in known.items()
+        if source.get("type") == "REDEEM"
+    ]
+    joined = _receipt_join(
+        owner,
+        normalized,
+        rpc_call,
+        receipt_cache=receipt_cache,
+        settlement_hashes=settlement_hashes,
+    )
     return {
         "owner_address_sha256": _digest(owner),
         "known_btc_transaction_hashes": len(known),
