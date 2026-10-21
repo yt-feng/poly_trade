@@ -14,9 +14,11 @@ import argparse
 import hashlib
 import json
 import re
+import time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Iterable
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 try:
@@ -56,6 +58,9 @@ MAX_HISTORY_BLOCKS = 250_000
 MAX_LOG_ROWS = 600
 MAX_LOG_TRANSACTIONS = 200
 DEFAULT_CHUNK_BLOCKS = 5_000
+RPC_MAX_ATTEMPTS = 3
+RPC_RETRY_BACKOFF_SECONDS = 0.25
+TRANSIENT_HTTP_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 HEX = re.compile(r"^[0-9a-fA-F]+$")
 BYTES32 = re.compile(r"^0x[0-9a-fA-F]{64}$")
 
@@ -102,27 +107,51 @@ def _first(row: dict[str, Any], names: Iterable[str]) -> Any:
 
 def _rpc_call(rpc_url: str, method: str, params: list[Any]) -> Any:
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
-    request = Request(
-        rpc_url,
-        data=body,
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "User-Agent": "poly-trade-h301/1.0",
-        },
-    )
-    with urlopen(request, timeout=30) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    if payload.get("error") or "result" not in payload:
-        # Preserve only a bounded provider error code.  The full provider
-        # message can contain request details and is never written to the
-        # public/redacted report.
-        error = payload.get("error") if isinstance(payload, dict) else None
-        code = error.get("code") if isinstance(error, dict) else None
-        if isinstance(code, (int, str)) and str(code)[:32]:
-            raise RuntimeError(f"history_rpc_error:{str(code)[:32]}")
-        raise RuntimeError("history_rpc_error")
-    return payload["result"]
+    for attempt in range(RPC_MAX_ATTEMPTS):
+        request = Request(
+            rpc_url,
+            data=body,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "poly-trade-h301/1.0",
+            },
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            if exc.code in TRANSIENT_HTTP_CODES and attempt + 1 < RPC_MAX_ATTEMPTS:
+                time.sleep(RPC_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                continue
+            raise RuntimeError(f"history_rpc_error:http_{exc.code}") from None
+        except (URLError, TimeoutError, OSError):
+            if attempt + 1 < RPC_MAX_ATTEMPTS:
+                time.sleep(RPC_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                continue
+            raise RuntimeError("history_rpc_error:transport") from None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            if attempt + 1 < RPC_MAX_ATTEMPTS:
+                time.sleep(RPC_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                continue
+            raise RuntimeError("history_rpc_error:invalid_json") from None
+
+        if payload.get("error") or "result" not in payload:
+            # Preserve only a bounded provider error code.  The full provider
+            # message can contain request details and is never written to the
+            # public/redacted report.
+            error = payload.get("error") if isinstance(payload, dict) else None
+            code = error.get("code") if isinstance(error, dict) else None
+            code_text = str(code)[:32] if isinstance(code, (int, str)) else ""
+            transient = code in TRANSIENT_HTTP_CODES or code_text in {str(item) for item in TRANSIENT_HTTP_CODES}
+            if transient and attempt + 1 < RPC_MAX_ATTEMPTS:
+                time.sleep(RPC_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                continue
+            if code_text:
+                raise RuntimeError(f"history_rpc_error:{code_text}")
+            raise RuntimeError("history_rpc_error")
+        return payload["result"]
+    raise RuntimeError("history_rpc_error:retry_exhausted")
 
 
 def _activity_condition_ids(rows: Iterable[dict[str, Any]]) -> set[str]:

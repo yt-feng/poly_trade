@@ -1,4 +1,6 @@
+import io
 import sys
+from urllib.error import HTTPError
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
@@ -7,6 +9,7 @@ from h300_owner_scoped_payout_transfer_capture import (  # noqa: E402
     PAYOUT_REDEMPTION_TOPIC,
     TRANSFER_TOPIC,
 )
+import h301_owner_scoped_settlement_history_scan as scan  # noqa: E402
 from h301_owner_scoped_settlement_history_scan import capture_account  # noqa: E402
 
 
@@ -138,4 +141,47 @@ def test_unbound_payout_is_not_admitted_without_btc_condition_id():
     assert report["settlement_receipt_rows"] == 0
     assert report["cash_release_receipt_rows"] == 0
     assert report["verified_canary_fills"] == 0
+
+
+def test_rpc_retries_transient_http_failure_then_returns_result(monkeypatch):
+    attempts = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self):
+            return b'{"jsonrpc":"2.0","id":1,"result":{"ok":true}}'
+
+    def flaky(request, timeout):
+        attempts.append((request.full_url, timeout))
+        if len(attempts) == 1:
+            raise HTTPError(request.full_url, 503, "temporary", {}, io.BytesIO())
+        return Response()
+
+    monkeypatch.setattr(scan, "urlopen", flaky)
+    monkeypatch.setattr(scan.time, "sleep", lambda _seconds: None)
+    assert scan._rpc_call("https://rpc.example", "eth_blockNumber", []) == {"ok": True}
+    assert len(attempts) == 2
+
+
+def test_rpc_does_not_retry_non_transient_http_failure(monkeypatch):
+    attempts = []
+
+    def rejected(request, timeout):
+        attempts.append(request.full_url)
+        raise HTTPError(request.full_url, 403, "forbidden", {}, io.BytesIO())
+
+    monkeypatch.setattr(scan, "urlopen", rejected)
+    monkeypatch.setattr(scan.time, "sleep", lambda _seconds: None)
+    try:
+        scan._rpc_call("https://rpc.example", "eth_blockNumber", [])
+    except RuntimeError as exc:
+        assert str(exc) == "history_rpc_error:http_403"
+    else:
+        raise AssertionError("expected bounded provider error")
+    assert len(attempts) == 1
 
