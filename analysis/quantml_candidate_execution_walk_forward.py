@@ -178,6 +178,11 @@ def attach_execution_snapshots(
         if g.empty:
             continue
         ts = pd.to_datetime(g["ts_utc"], utc=True, errors="coerce")
+        # Keep the same left/right lookup semantics while avoiding repeated
+        # pandas ExtensionArray searchsorted calls for every market/delay.
+        # The old Series method is correct on small fixtures but becomes a
+        # dominant cost on the 3.5M-row monthly archive.
+        ts_values = ts.to_numpy(dtype="datetime64[ns]")
         first_ts = ts.iloc[0]
         rec: Dict[str, object] = {"market_id": market_id}
         for minute in minute_list:
@@ -187,7 +192,8 @@ def attach_execution_snapshots(
             # microseconds in pandas 3, while ``Timestamp.value`` remains
             # nanoseconds; comparing those arrays sends every lookup to the
             # last quote and silently removes all fills.
-            sig_pos = int(ts.searchsorted(signal_cut, side="right") - 1)
+            sig_cut_value = np.datetime64(signal_cut.value, "ns")
+            sig_pos = int(np.searchsorted(ts_values, sig_cut_value, side="right") - 1)
             signal_row = None if sig_pos < 0 else g.iloc[sig_pos]
             signal_ts = pd.NaT if signal_row is None else signal_row.get("ts_utc", pd.NaT)
             for side in ("buy_up", "buy_down"):
@@ -197,7 +203,8 @@ def attach_execution_snapshots(
                     if pd.notna(signal_ts):
                         # Delay starts at the decision cutoff, not its earlier quote.
                         fill_cut = signal_cut + pd.Timedelta(seconds=delay)
-                        fill_pos = int(ts.searchsorted(fill_cut, side="left"))
+                        fill_cut_value = np.datetime64(fill_cut.value, "ns")
+                        fill_pos = int(np.searchsorted(ts_values, fill_cut_value, side="left"))
                         if fill_pos < len(g):
                             fill_row = g.iloc[fill_pos]
                     fill = snapshot_values(fill_row, side)
