@@ -31,3 +31,13 @@ def test_h542_rejects_invalid_parameters():
         _fraction_for_state(0, boost_fraction=1.1)
     with pytest.raises(ValueError):
         _fraction_for_state(0, boost_after_profits=0)
+
+
+def test_h542_workflow_does_not_export_recipient_material_as_step_env():
+    from pathlib import Path
+
+    workflow = Path(__file__).parents[1] / ".github" / "workflows" / "h542-adaptive-cash-boost.yml"
+    text = workflow.read_text(encoding="utf-8")
+    assert "QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars." not in text
+    assert "QUALITY_FIRST_RECIPIENT_ID: ${{ vars." not in text
+    assert "gh', 'variable', 'get'" in text
