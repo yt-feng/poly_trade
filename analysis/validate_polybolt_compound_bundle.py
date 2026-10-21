@@ -47,6 +47,8 @@ FROZEN_MINIMUM_ORDER_SIZE = Decimal("5")
 FROZEN_MINIMUM_ORDER_SHARES = Decimal("5")
 FROZEN_MINIMUM_ENTRY_NOTIONAL_USD = Decimal("5")
 MINIMUM_ENTRY_COST_FOR_LEDGER = Decimal("0.0000001")
+DEFAULT_STRATEGY_PROFILE = "h30_legacy"
+H530_STRATEGY_PROFILE = "h530_fixed_half_cash"
 FROZEN_STRATEGY_ID = "h30_move_uncertainty"
 FROZEN_STRATEGY_VERSION = "h54-execution-contract-prefix-v1"
 FROZEN_STRATEGY_CONFIG = {
@@ -58,8 +60,38 @@ FROZEN_STRATEGY_CONFIG = {
     "fraction": "0.04",
     "required_fills": 10,
 }
+H530_STRATEGY_ID = "h530_fixed_half_cash"
+H530_STRATEGY_VERSION = "h530-old-clean-fixed-half-cash-v1"
+H530_STRATEGY_CONFIG = {
+    "candidate": "H434_H452_FIXED_SIGNAL_CASH_FRACTION",
+    "source_commit": "bbda5f2050685f63153621a54641ebdfab943487",
+    "gross_cash_fraction": "0.5",
+    "policy": "fixed fraction of currently available cash",
+    "entry_policy_is_online_observable": True,
+    "taker_fee_rate": "0.07",
+    "cash_release_delay_seconds": "900",
+    "minimum_order_usd": "5",
+    "minimum_order_shares": "5",
+    "required_fills": 10,
+}
+
+
+def _strategy_profile(profile: str) -> tuple[str, str, dict[str, Any]]:
+    profiles = {
+        DEFAULT_STRATEGY_PROFILE: (FROZEN_STRATEGY_ID, FROZEN_STRATEGY_VERSION, FROZEN_STRATEGY_CONFIG),
+        H530_STRATEGY_PROFILE: (H530_STRATEGY_ID, H530_STRATEGY_VERSION, H530_STRATEGY_CONFIG),
+    }
+    try:
+        return profiles[profile]
+    except KeyError as exc:
+        raise ValueError("unknown_strategy_profile") from exc
+
+
 FROZEN_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
     json.dumps(FROZEN_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+H530_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
+    json.dumps(H530_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
 ).hexdigest()
 
 
@@ -104,19 +136,26 @@ def _hash(value: Any, field: str) -> str:
     return digest
 
 
-def _validate_strategy_binding(document: dict[str, Any]) -> str | None:
+def _validate_strategy_binding(document: dict[str, Any], *, strategy_profile: str = DEFAULT_STRATEGY_PROFILE) -> str | None:
+    try:
+        expected_id, expected_version, expected_config = _strategy_profile(strategy_profile)
+    except ValueError as exc:
+        return str(exc)
     strategy = document.get("strategy")
     if not isinstance(strategy, dict):
         return "strategy_binding_required"
-    if strategy.get("id") != FROZEN_STRATEGY_ID:
+    if strategy.get("id") != expected_id:
         return "strategy_id_not_frozen"
-    if strategy.get("version") != FROZEN_STRATEGY_VERSION:
+    if strategy.get("version") != expected_version:
         return "strategy_version_not_frozen"
     try:
         digest = _text(strategy.get("config_sha256"), "strategy_config_sha256").lower()
     except ValueError as exc:
         return str(exc)
-    if digest != FROZEN_STRATEGY_CONFIG_SHA256:
+    expected_digest = hashlib.sha256(
+        json.dumps(expected_config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if digest != expected_digest:
         return "strategy_config_digest_mismatch"
     return None
 
@@ -557,7 +596,12 @@ def _validate_same_ledger(
     return None
 
 
-def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict[str, Any]:
+def validate_bundle_document(
+    document: Any,
+    *,
+    required_fills: int = 10,
+    strategy_profile: str = DEFAULT_STRATEGY_PROFILE,
+) -> dict[str, Any]:
     """Check supplied fields without authenticating receipts or exposing owners."""
     if not isinstance(document, dict) or document.get("schema") != SCHEMA:
         return _fail("invalid_bundle_schema")
@@ -565,7 +609,7 @@ def validate_bundle_document(document: Any, *, required_fills: int = 10) -> dict
         return _fail("invalid_required_fills")
     if document.get("required_fills") != REQUIRED_FILLS or required_fills != REQUIRED_FILLS:
         return _fail("required_fills_fixed_at_ten", event_count=len(document.get("events", [])) if isinstance(document.get("events"), list) else 0)
-    strategy_error = _validate_strategy_binding(document)
+    strategy_error = _validate_strategy_binding(document, strategy_profile=strategy_profile)
     if strategy_error:
         return _fail(strategy_error, event_count=len(document.get("events", [])) if isinstance(document.get("events"), list) else 0)
     owner = document.get("owner")
@@ -690,10 +734,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("bundle", type=Path)
     parser.add_argument("--required-fills", type=int, default=10)
+    parser.add_argument("--strategy-profile", choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE), default=DEFAULT_STRATEGY_PROFILE)
     args = parser.parse_args()
     try:
         document = json.loads(args.bundle.read_text(encoding="utf-8"))
-        result = validate_bundle_document(document, required_fills=args.required_fills)
+        result = validate_bundle_document(document, required_fills=args.required_fills, strategy_profile=args.strategy_profile)
     except (OSError, json.JSONDecodeError):
         result = _fail("bundle_read_error")
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))

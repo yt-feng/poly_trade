@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from validate_polybolt_compound_bundle import validate_bundle_document
+from validate_polybolt_compound_bundle import H530_STRATEGY_CONFIG_SHA256, H530_STRATEGY_ID, H530_STRATEGY_PROFILE, H530_STRATEGY_VERSION
 from test_validate_polybolt_compound_bundle import assert_unverified_receipts, bundle
 import research_vault
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -32,6 +33,25 @@ def test_tool_redacts_owner_and_ledger_identifiers(tmp_path):
     assert "ledger_id" not in result
     assert "chain_id" not in result
     assert "ending_cash" not in result
+
+
+def test_tool_accepts_the_fixed_half_cash_profile_only_when_explicit(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    document = bundle()
+    document["strategy"] = {
+        "id": H530_STRATEGY_ID,
+        "version": H530_STRATEGY_VERSION,
+        "config_sha256": H530_STRATEGY_CONFIG_SHA256,
+    }
+    source.write_text(json.dumps(document))
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", H530_STRATEGY_PROFILE,
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is True
+    assert result["strategy_profile"] == H530_STRATEGY_PROFILE
 
 
 def test_tool_preserves_fail_closed_result(tmp_path):
@@ -71,6 +91,9 @@ def test_tool_seals_generic_failure_for_invalid_json(tmp_path):
 
 def test_workflow_never_uploads_private_bundle_or_enables_orders():
     text = WORKFLOW.read_text()
+    assert "strategy_profile" in text
+    assert "h530_fixed_half_cash" in text
+    assert "--strategy-profile" in text
     assert "POLYBOLT_COMPOUND_BUNDLE_B64" in text
     assert "redacted fail-closed result" in text
     materialize = text.split("name: Materialize private bundle only in runner temp", 1)[1].split(

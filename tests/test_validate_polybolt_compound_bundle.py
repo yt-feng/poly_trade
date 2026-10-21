@@ -9,6 +9,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
 from validate_polybolt_compound_bundle import (
+    H530_STRATEGY_CONFIG_SHA256,
+    H530_STRATEGY_ID,
+    H530_STRATEGY_PROFILE,
+    H530_STRATEGY_VERSION,
     FROZEN_STRATEGY_CONFIG_SHA256,
     FROZEN_STRATEGY_ID,
     FROZEN_STRATEGY_VERSION,
@@ -165,6 +169,20 @@ def test_supplied_source_and_cash_chain_pass_offline_consistency_only():
     assert result["cash_amounts_reconciled"] is True
     assert result["market_window_count"] == 1
     assert "owner-1" not in str(result)
+
+
+def test_fixed_half_cash_profile_is_explicitly_bound():
+    doc = bundle()
+    doc["strategy"] = {
+        "id": H530_STRATEGY_ID,
+        "version": H530_STRATEGY_VERSION,
+        "config_sha256": H530_STRATEGY_CONFIG_SHA256,
+    }
+    legacy = validate_bundle_document(doc)
+    assert legacy["offline_consistency_passed"] is False
+    assert legacy["failure_reason"] == "strategy_id_not_frozen"
+    fixed = validate_bundle_document(doc, strategy_profile=H530_STRATEGY_PROFILE)
+    assert fixed["offline_consistency_passed"] is True
 
 
 def test_minimum_share_contract_accepts_five_share_entry():

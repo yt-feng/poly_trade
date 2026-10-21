@@ -2,6 +2,13 @@ name: polybolt-compound-admission
 
 on:
   workflow_dispatch:
+    inputs:
+      strategy_profile:
+        description: 'Frozen execution strategy contract to validate'
+        type: choice
+        options: [h530_fixed_half_cash, h30_legacy]
+        default: h530_fixed_half_cash
+        required: true
 
 permissions:
   contents: write
@@ -66,7 +73,8 @@ jobs:
           PRIVATE_DIR="$RUNNER_TEMP/polybolt-compound-admission"
           python tools/run_polybolt_compound_admission.py \
             --bundle "$PRIVATE_DIR/bundle.json" \
-            --output "$PRIVATE_DIR/result.json"
+            --output "$PRIVATE_DIR/result.json" \
+            --strategy-profile "${{ inputs.strategy_profile || 'h530_fixed_half_cash' }}"
 
       - name: Seal redacted admission result
         env:

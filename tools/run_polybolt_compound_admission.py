@@ -17,7 +17,12 @@ from typing import Any
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
-from validate_polybolt_compound_bundle import OFFLINE_VERIFICATION, validate_bundle_document
+from validate_polybolt_compound_bundle import (
+    DEFAULT_STRATEGY_PROFILE,
+    H530_STRATEGY_PROFILE,
+    OFFLINE_VERIFICATION,
+    validate_bundle_document,
+)
 
 
 MAX_BUNDLE_BYTES = 2 * 1024 * 1024
@@ -46,6 +51,7 @@ RESULT_KEYS = (
     "same_ledger_identity_verified",
     "cash_amounts_reconciled",
     "source_fill_references_verified",
+    "strategy_profile",
 )
 
 
@@ -76,22 +82,25 @@ def _allowlist(result: dict[str, Any]) -> dict[str, Any]:
     return {key: result.get(key) for key in RESULT_KEYS}
 
 
-def run(bundle_path: Path) -> dict[str, Any]:
+def run(bundle_path: Path, *, strategy_profile: str = DEFAULT_STRATEGY_PROFILE) -> dict[str, Any]:
     if not bundle_path.exists():
         return _failure("bundle_secret_unavailable")
     document = _read_json(bundle_path)
     if not isinstance(document, dict):
         raise ValueError("bundle_json_object_required")
-    return _allowlist(validate_bundle_document(document))
+    result = validate_bundle_document(document, strategy_profile=strategy_profile)
+    result["strategy_profile"] = strategy_profile
+    return _allowlist(result)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--strategy-profile", choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE), default=DEFAULT_STRATEGY_PROFILE)
     args = parser.parse_args()
     try:
-        result = run(args.bundle)
+        result = run(args.bundle, strategy_profile=args.strategy_profile)
     except Exception:
         # Keep malformed input fail-closed while still producing a generic
         # encrypted round record.  Never expose parser details or the bundle.
