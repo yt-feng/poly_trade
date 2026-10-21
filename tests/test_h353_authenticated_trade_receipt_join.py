@@ -85,6 +85,28 @@ def test_receipt_failure_is_counted_without_creating_cash_or_canary_evidence():
     assert result["same_ledger_compounding_rows"] == 0
 
 
+def test_shared_history_rpc_errors_are_classified_as_rpc_failures():
+    def receipt_fetcher(_tx):
+        raise RuntimeError("history_rpc_error:transport")
+
+    result = capture(
+        [{"label": "btc5m", "owner": OWNER, "activity": [activity()]}],
+        receipt_fetcher=receipt_fetcher,
+    )
+    assert result["receipt_failure_categories"] == {"rpc_error": 1}
+
+
+def test_missing_receipt_is_distinguished_from_provider_failure():
+    def receipt_fetcher(_tx):
+        return None
+
+    result = capture(
+        [{"label": "btc5m", "owner": OWNER, "activity": [activity()]}],
+        receipt_fetcher=receipt_fetcher,
+    )
+    assert result["receipt_failure_categories"] == {"null_receipt": 1}
+
+
 def test_transport_failure_is_categorized_without_exposing_error_text():
     def receipt_fetcher(_tx):
         raise URLError("provider detail must not be retained")

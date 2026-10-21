@@ -48,8 +48,15 @@ def _receipt_failure_code(exc: Exception) -> str:
     """Return a bounded category without retaining provider/error text."""
     if isinstance(exc, URLError) or type(exc).__name__ in {"TimeoutError", "ConnectionError"}:
         return "transport_error"
-    if isinstance(exc, RuntimeError) and str(exc) == "receipt_rpc_error":
-        return "rpc_error"
+    if isinstance(exc, RuntimeError):
+        # The shared Polygon helper uses ``history_rpc_error:*`` for bounded
+        # provider failures.  Treat both namespaces as RPC failures while
+        # retaining no provider text or request details.
+        message = str(exc)
+        if message == "receipt_rpc_error" or message.startswith("receipt_rpc_error:") or message.startswith("history_rpc_error"):
+            return "rpc_error"
+    if isinstance(exc, ValueError) and str(exc) == "receipt_missing":
+        return "null_receipt"
     if isinstance(exc, (TypeError, ValueError, KeyError)):
         return "receipt_shape_or_decode_error"
     return "unknown_receipt_error"
