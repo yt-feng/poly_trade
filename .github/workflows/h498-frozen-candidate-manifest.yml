@@ -1,0 +1,78 @@
+name: H498 frozen Canary candidate manifest
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'analysis/frozen_canary_candidate_manifest.py'
+      - 'analysis/h498_frozen_candidate_manifest_audit.py'
+      - 'tests/test_h498_frozen_canary_candidate_manifest.py'
+      - '.github/workflows/h498-frozen-candidate-manifest.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run H498 frozen manifest audit
+        run: |
+          set -euo pipefail
+          python -m pip install pytest cryptography
+          python -m pytest -q tests/test_h498_frozen_canary_candidate_manifest.py
+          mkdir -m 700 "$RUNNER_TEMP/h498"
+          python -u analysis/h498_frozen_candidate_manifest_audit.py --output "$RUNNER_TEMP/h498/report.json" > "$RUNNER_TEMP/h498/analysis-output.txt"
+      - name: Seal H498 manifest audit
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/h498" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'h498-frozen-canary-candidate-manifest-sealed-v1',
+              'hypothesis_id': 'H498_FROZEN_H447_H434_CANARY_CANDIDATE',
+              'report': json.loads((private / 'report.json').read_text()),
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'head_sha': os.environ['GITHUB_SHA']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': False, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+      - name: Publish encrypted H498 journal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py --source sealed-delivery --repository yt-feng/poly_trade --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --recipient-id "$RESEARCH_RECIPIENT_ID"
+      - name: Redacted completion
+        if: always()
+        run: |
+          echo '## H498 frozen Canary candidate manifest' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Frozen old-clean H447/H434 parameters and one-ledger consecutive ten-fill admission contract.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Paper evidence remains diagnostic; live gate remains closed until H497 owner-scoped V2 receipts reconcile.' >> "$GITHUB_STEP_SUMMARY"
