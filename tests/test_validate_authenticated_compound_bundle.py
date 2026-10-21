@@ -1,6 +1,8 @@
 import json
 import subprocess
 import sys
+import tempfile
+import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
@@ -68,45 +70,42 @@ def v2_bundle(*, closing_balance: str = "15.00") -> dict[str, object]:
     }
 
 
-def test_legacy_bundle_validator_fails_closed_and_requires_v2():
-    result = validate_bundle_document(
-        {"schema": "authenticated-compound-bundle-v1", "owner": "owner-1", "events": [event(i) for i in range(10)]}
-    )
-    assert result == {"gate_passed": False, "failure_reason": "legacy_schema_not_admissible_use_v2"}
+class TestAuthenticatedCompoundBundle(unittest.TestCase):
+    def test_legacy_bundle_validator_fails_closed_and_requires_v2(self):
+        result = validate_bundle_document(
+            {"schema": "authenticated-compound-bundle-v1", "owner": "owner-1", "events": [event(i) for i in range(10)]}
+        )
+        self.assertEqual(result, {"gate_passed": False, "failure_reason": "legacy_schema_not_admissible_use_v2"})
 
+    def test_bundle_schema_failure_is_explicit(self):
+        result = validate_bundle_document({"schema": "wrong", "owner": "owner-1", "events": []})
+        self.assertEqual(result, {"gate_passed": False, "failure_reason": "invalid_bundle_schema"})
 
-def test_bundle_schema_failure_is_explicit():
-    result = validate_bundle_document({"schema": "wrong", "owner": "owner-1", "events": []})
-    assert result == {"gate_passed": False, "failure_reason": "invalid_bundle_schema"}
+    def test_cli_returns_nonzero_without_promoting_invalid_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "bundle.json"
+            bundle.write_text(json.dumps({"schema": "authenticated-compound-bundle-v1", "owner": "owner-1", "events": [event(0)]}))
+            proc = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parents[1] / "analysis" / "validate_authenticated_compound_bundle.py"), str(bundle)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("gate_passed", proc.stdout)
 
+    def test_v2_bundle_reconciles_one_owner_scoped_compound_chain(self):
+        result = validate_bundle_document(v2_bundle())
+        self.assertIs(result["gate_passed"], True)
+        self.assertEqual(result["fills"], 10)
+        self.assertEqual(result["ending_cash"], "15.00")
+        self.assertNotIn("ledger", result)
 
-def test_cli_returns_nonzero_without_promoting_invalid_bundle(tmp_path: Path):
-    bundle = tmp_path / "bundle.json"
-    bundle.write_text(json.dumps({"schema": "authenticated-compound-bundle-v1", "owner": "owner-1", "events": [event(0)]}))
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve().parents[1] / "analysis" / "validate_authenticated_compound_bundle.py"), str(bundle)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 1
-    assert "gate_passed" in proc.stdout
+    def test_v2_bundle_fails_closed_on_closing_balance_mismatch(self):
+        result = validate_bundle_document(v2_bundle(closing_balance="10.00"))
+        self.assertIs(result["gate_passed"], False)
+        self.assertEqual(result["failure_reason"], "closing_balance_arithmetic_mismatch")
 
-
-def test_v2_bundle_reconciles_one_owner_scoped_compound_chain():
-    result = validate_bundle_document(v2_bundle())
-    assert result["gate_passed"] is True
-    assert result["fills"] == 10
-    assert result["ending_cash"] == "15.00"
-    assert "ledger" not in result
-
-
-def test_v2_bundle_fails_closed_on_closing_balance_mismatch():
-    result = validate_bundle_document(v2_bundle(closing_balance="10.00"))
-    assert result["gate_passed"] is False
-    assert result["failure_reason"] == "closing_balance_arithmetic_mismatch"
-
-
-def test_v2_bundle_rejects_non_ten_cli_requirement():
-    result = validate_bundle_document(v2_bundle(), required_fills=9)
-    assert result == {"gate_passed": False, "failure_reason": "required_fills_fixed_at_ten"}
+    def test_v2_bundle_rejects_non_ten_cli_requirement(self):
+        result = validate_bundle_document(v2_bundle(), required_fills=9)
+        self.assertEqual(result, {"gate_passed": False, "failure_reason": "required_fills_fixed_at_ten"})
