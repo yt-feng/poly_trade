@@ -80,6 +80,7 @@ jobs:
         env:
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+          STRATEGY_PROFILE: ${{ inputs.strategy_profile || 'h530_fixed_half_cash' }}
         run: |
           set -euo pipefail
           PRIVATE_DIR="$RUNNER_TEMP/polybolt-compound-admission"
@@ -117,7 +118,7 @@ jobs:
           payload = {
               'format': 'polybolt-compound-offline-consistency-sealed-v1',
               'result': {**result, **verification},
-              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF']},
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'strategy_profile': os.environ.get('STRATEGY_PROFILE', 'h530_fixed_half_cash')},
               **verification,
               'offline_consistent_compounding_rows': 10 if offline_passed else 0,
               'same_ledger_compounding_rows': 0,

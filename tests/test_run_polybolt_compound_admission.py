@@ -94,6 +94,7 @@ def test_workflow_never_uploads_private_bundle_or_enables_orders():
     assert "strategy_profile" in text
     assert "h530_fixed_half_cash" in text
     assert "--strategy-profile" in text
+    assert "STRATEGY_PROFILE" in text
     assert "POLYBOLT_COMPOUND_BUNDLE_B64" in text
     assert "redacted fail-closed result" in text
     materialize = text.split("name: Materialize private bundle only in runner temp", 1)[1].split(
