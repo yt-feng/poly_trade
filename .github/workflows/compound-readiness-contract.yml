@@ -25,5 +25,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_maker_compound_bundle_adapter.py' -v
       - name: Authenticated v2 compound bundle validator tests
         run: python -m unittest discover -s tests -p 'test_validate_authenticated_compound_bundle.py' -v
+      - name: Authenticated taker compound bundle adapter tests
+        run: python -m unittest discover -s tests -p 'test_taker_compound_bundle_adapter.py' -v
       - name: Compile readiness implementation
-        run: python -m py_compile tools/compound_readiness_report.py analysis/orderfilled_compound_binding.py analysis/authenticated_compound_reconciler.py analysis/validate_authenticated_compound_bundle.py analysis/maker_compound_receipt_contract.py analysis/maker_compound_bundle_adapter.py analysis/polymarket_receipt_adapter.py
+        run: python -m py_compile tools/compound_readiness_report.py analysis/orderfilled_compound_binding.py analysis/authenticated_compound_reconciler.py analysis/validate_authenticated_compound_bundle.py analysis/taker_compound_bundle_adapter.py analysis/maker_compound_receipt_contract.py analysis/maker_compound_bundle_adapter.py analysis/polymarket_receipt_adapter.py
