@@ -175,6 +175,37 @@ def test_wide_history_batches_event_and_transfer_filters():
     assert isinstance(calls[3]["address"], list)
 
 
+def test_scalar_local_decode_uses_provider_compatible_filters_and_owner_caps_rows():
+    tx_buy = "0x" + "06" * 32
+    calls = []
+
+    def rpc(method, params):
+        if method == "eth_getTransactionReceipt":
+            return {"transactionHash": tx_buy, "status": "0x1", "blockNumber": "0x64", "logs": []}
+        if method == "eth_blockNumber":
+            return "0x78"
+        if method == "eth_getLogs":
+            calls.append(params[0])
+            return []
+        raise AssertionError(method)
+
+    report = capture_account(
+        {"owner": OWNER, "btc_transaction_hashes": [tx_buy], "activity": [{
+            "type": "TRADE", "side": "BUY", "transactionHash": tx_buy,
+            "timestamp": 1000, "usdcSize": "5", "slug": "btc-updown-5m-123",
+            "conditionId": CONDITION,
+        }]},
+        rpc_call=rpc, max_history_blocks=20, chunk_blocks=10,
+        log_filter_mode="scalar_local_decode",
+    )
+    assert report["history_log_filter_mode"] == "scalar_local_decode"
+    assert report["history_query_count"] == 18
+    assert calls
+    assert all(isinstance(item["address"], str) for item in calls)
+    assert all(item["topics"] and isinstance(item["topics"][0], str) for item in calls)
+    assert all(None not in item["topics"] for item in calls)
+
+
 def test_adaptive_log_query_splits_provider_sensitive_or_filters():
     calls = []
     first = {

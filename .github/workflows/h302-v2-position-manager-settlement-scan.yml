@@ -28,6 +28,14 @@ on:
         required: false
         default: '16'
         type: string
+      log_filter_mode:
+        description: Owner-bound filters or scalar contract/topic filters with local owner decode
+        required: false
+        default: owner_bound
+        type: choice
+        options:
+          - owner_bound
+          - scalar_local_decode
 
 permissions:
   contents: write
@@ -63,6 +71,7 @@ jobs:
           MAX_HISTORY_BLOCKS: ${{ inputs.max_history_blocks }}
           CHUNK_BLOCKS: ${{ inputs.chunk_blocks }}
           MAX_LOG_QUERY_LEAVES: ${{ inputs.max_log_query_leaves }}
+          LOG_FILTER_MODE: ${{ inputs.log_filter_mode }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
         run: |
@@ -133,7 +142,8 @@ jobs:
                 --receipt-rpc-url "$RECEIPT_RPC_URL" \
                 --max-history-blocks "$MAX_HISTORY_BLOCKS" \
                 --chunk-blocks "$CHUNK_BLOCKS" \
-                --max-log-query-leaves "$MAX_LOG_QUERY_LEAVES"
+                --max-log-query-leaves "$MAX_LOG_QUERY_LEAVES" \
+                --log-filter-mode "$LOG_FILTER_MODE"
               h302_rc=$?
           else
               h302_rc=1

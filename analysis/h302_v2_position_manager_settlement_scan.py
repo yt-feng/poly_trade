@@ -101,6 +101,7 @@ V2_COLLATERAL_TOKENS = frozenset(set(DEFAULT_COLLATERAL_TOKENS) | {V2_COLLATERAL
 MAX_HISTORY_BLOCKS_ALLOWED = 5_000_000
 DEFAULT_MAX_LOG_QUERY_LEAVES = 16
 MAX_LOG_QUERY_LEAVES_ALLOWED = 128
+LOG_FILTER_MODES = frozenset({"owner_bound", "scalar_local_decode"})
 
 # keccak256("PositionRedeemed(address,uint256,address,uint256,uint256)")
 POSITION_REDEEMED_TOPIC = "0x4fd474b703f46b453536518b4cbc159dfbea6fd663233763d321a9bc8ccdf97f"
@@ -117,6 +118,28 @@ def _failure_category(exc: Exception) -> str:
     if isinstance(exc, TimeoutError):
         return "timeout"
     return type(exc).__name__.lower()[:32] or "unknown"
+
+
+def _owner_relevant_log(log: dict[str, Any], owner: str) -> bool:
+    """Keep owner-relevant rows after a provider-compatible broad filter.
+
+    Some providers reject the JSON-RPC ``null`` wildcard needed to bind an
+    indexed transfer recipient.  In ``scalar_local_decode`` mode we query a
+    single contract and topic0, then apply the owner binding locally before
+    the bounded history row cap.
+    """
+    expected_owner = _lower_address(owner)
+    if not expected_owner:
+        return False
+    topics = log.get("topics") or []
+    if not isinstance(topics, list) or not topics:
+        return False
+    topic0 = str(topics[0]).lower()
+    if topic0 == TRANSFER_TOPIC and len(topics) >= 3:
+        return _topic_address(topics[1]) == expected_owner or _topic_address(topics[2]) == expected_owner
+    if topic0 in {POSITION_REDEEMED_TOPIC, POSITIONS_MERGED_TOPIC} and len(topics) >= 4:
+        return _topic_address(topics[3]) == expected_owner
+    return False
 
 
 def _topic_word(value: Any) -> str:
@@ -323,10 +346,13 @@ def capture_account(
     max_history_blocks: int = MAX_HISTORY_BLOCKS,
     chunk_blocks: int = DEFAULT_CHUNK_BLOCKS,
     max_log_query_leaves: int = DEFAULT_MAX_LOG_QUERY_LEAVES,
+    log_filter_mode: str = "owner_bound",
 ) -> dict[str, Any]:
     owner = _lower_address(account.get("owner"))
     if not owner:
         raise ValueError("account_owner_required")
+    if log_filter_mode not in LOG_FILTER_MODES:
+        raise ValueError("log_filter_mode_invalid")
     raw_activity = account.get("activity") or []
     normalized = [item for raw in raw_activity if (item := normalize_activity_row(raw))]
     btc_rows = [item for item in normalized if is_btc_five_minute(item)]
@@ -408,19 +434,35 @@ def capture_account(
     event_addresses = sorted(V2_MODULES)
     transfer_tokens = sorted(V2_COLLATERAL_TOKENS)
     for lower, upper in _chunk_ranges(start, latest_block, chunk_blocks):
-        filters = [
-            # JSON-RPC permits OR lists in topic position 0 and address.
-            # Combining equivalent filters preserves decoding semantics while
-            # materially reducing provider calls for a wide historical audit.
-            _log_filter(lower, upper, event_addresses, [[POSITION_REDEEMED_TOPIC, POSITIONS_MERGED_TOPIC], None, None, _owner_topic(owner)]),
-            _log_filter(lower, upper, transfer_tokens, [TRANSFER_TOPIC, None, _owner_topic(owner)]),
-        ]
+        if log_filter_mode == "scalar_local_decode":
+            # H514 established that scalar address + topic0 is accepted by
+            # the configured providers, while the owner-bound null wildcard
+            # is rejected.  Decode the owner from returned topics locally.
+            filters = [
+                _log_filter(lower, upper, address, [topic])
+                for address in event_addresses
+                for topic in (POSITION_REDEEMED_TOPIC, POSITIONS_MERGED_TOPIC)
+            ]
+            filters.extend(
+                _log_filter(lower, upper, token, [TRANSFER_TOPIC])
+                for token in transfer_tokens
+            )
+        else:
+            filters = [
+                # JSON-RPC permits OR lists in topic position 0 and address.
+                # Combining equivalent filters preserves decoding semantics
+                # for providers that accept the owner-bound wildcard form.
+                _log_filter(lower, upper, event_addresses, [[POSITION_REDEEMED_TOPIC, POSITIONS_MERGED_TOPIC], None, None, _owner_topic(owner)]),
+                _log_filter(lower, upper, transfer_tokens, [TRANSFER_TOPIC, None, _owner_topic(owner)]),
+            ]
         for log_filter in filters:
             query_count += 1
             try:
                 recovered_rows, splits = _adaptive_get_logs(
                     rpc_call, log_filter, max_leaves=max_log_query_leaves
                 )
+                if log_filter_mode == "scalar_local_decode":
+                    recovered_rows = [row for row in recovered_rows if _owner_relevant_log(row, owner)]
                 log_rows.extend(recovered_rows)
                 query_recovery_splits += int(splits)
             except Exception as exc:
@@ -482,6 +524,7 @@ def capture_account(
         "history_query_failures": query_failures,
         "history_query_recovery_splits": query_recovery_splits,
         "history_query_failure_categories": query_failure_categories,
+        "history_log_filter_mode": log_filter_mode,
         "history_confirmed_receipts": history_receipts,
         "history_receipt_fetch_failures": receipt_failures,
         "unbound_payout_rows": unbound_payout_rows,
@@ -503,6 +546,7 @@ def capture(
     max_history_blocks: int = MAX_HISTORY_BLOCKS,
     chunk_blocks: int = DEFAULT_CHUNK_BLOCKS,
     max_log_query_leaves: int = DEFAULT_MAX_LOG_QUERY_LEAVES,
+    log_filter_mode: str = "owner_bound",
 ) -> dict[str, Any]:
     rows = list(accounts)
     if not 1 <= len(rows) <= MAX_ACCOUNTS:
@@ -514,6 +558,7 @@ def capture(
             max_history_blocks=max_history_blocks,
             chunk_blocks=chunk_blocks,
             max_log_query_leaves=max_log_query_leaves,
+            log_filter_mode=log_filter_mode,
         )
         for row in rows
     ]
@@ -527,6 +572,7 @@ def capture(
         "actual_fills": 0,
         "verified_canary_fills": 0,
         "same_ledger_compounding_rows": 0,
+        "history_log_filter_mode": log_filter_mode,
         "new_data_collected": False,
         "model_refit": False,
         "live_orders_enabled": False,
@@ -546,6 +592,7 @@ def main() -> None:
     parser.add_argument("--max-history-blocks", type=int, default=MAX_HISTORY_BLOCKS)
     parser.add_argument("--chunk-blocks", type=int, default=DEFAULT_CHUNK_BLOCKS)
     parser.add_argument("--max-log-query-leaves", type=int, default=DEFAULT_MAX_LOG_QUERY_LEAVES)
+    parser.add_argument("--log-filter-mode", choices=sorted(LOG_FILTER_MODES), default="owner_bound")
     args = parser.parse_args()
     if not 1 <= args.max_history_blocks <= MAX_HISTORY_BLOCKS_ALLOWED:
         raise SystemExit(f"max-history-blocks must be between 1 and {MAX_HISTORY_BLOCKS_ALLOWED}")
@@ -572,6 +619,7 @@ def main() -> None:
         max_history_blocks=args.max_history_blocks,
         chunk_blocks=args.chunk_blocks,
         max_log_query_leaves=args.max_log_query_leaves,
+        log_filter_mode=args.log_filter_mode,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
