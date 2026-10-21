@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from analysis.frozen_canary_candidate_manifest import audit, build_manifest, validate_manifest
+from analysis.frozen_canary_candidate_manifest import audit, build_manifest, source_parity, validate_manifest
 
 
 def test_h498_freezes_one_consecutive_compounding_contract():
@@ -11,6 +11,13 @@ def test_h498_freezes_one_consecutive_compounding_contract():
     assert result["manifest"]["execution_contract"]["no_concatenation"] is True
     assert result["manifest"]["canary_admission"]["gate_passed"] is False
     assert result["manifest"]["paper_evidence"]["verified_canary_fills"] == 0
+    assert result["source_parity"]["all_literals_match"] is True
+
+
+def test_h498_source_parity_is_dependency_free_and_complete():
+    parity = source_parity()
+    assert parity["all_literals_match"] is True
+    assert parity["mismatches"] == []
 
 
 def test_h498_fails_closed_on_parameter_or_promotion_drift():

@@ -7,7 +7,9 @@ but the manifest itself can never open the live gate.
 """
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 # Keep this contract dependency-free.  Importing the replay module here would
@@ -47,6 +49,67 @@ MIN_DEPTH = 100.0
 MAX_SPREAD = 0.06
 MAX_OVERROUND = 0.03
 REQUIRED_FILLS = 10
+
+
+def _literal_assignments(path: Path) -> dict[str, Any]:
+    """Read top-level literal assignments without importing replay dependencies."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    values: dict[str, Any] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = [target.id for target in node.targets if isinstance(target, ast.Name)]
+            value_node = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets = [node.target.id]
+            value_node = node.value
+        else:
+            continue
+        if not targets or value_node is None:
+            continue
+        try:
+            value = ast.literal_eval(value_node)
+        except (ValueError, TypeError, SyntaxError):
+            continue
+        for target in targets:
+            values[target] = value
+    return values
+
+
+def source_parity(source_dir: Path | None = None) -> dict[str, Any]:
+    """Check copied manifest values against frozen source literals."""
+    directory = Path(source_dir) if source_dir is not None else Path(__file__).resolve().parent
+    h432 = _literal_assignments(directory / "h432_old_clean_extratrees_compound.py")
+    h434 = _literal_assignments(directory / "h434_old_clean_extratrees_high_confidence.py")
+    h447 = _literal_assignments(directory / "h447_old_clean_breakeven_exit.py")
+    base = _literal_assignments(directory / "all_monthly_clob_systematic_research_v2.py")
+    expected_h432 = {
+        "SOURCE_COMMIT": SOURCE_COMMIT, "MODEL_PARAMS": MODEL_PARAMS, "SLIPPAGES": SLIPPAGES,
+        "INITIAL_CASH": INITIAL_CASH, "MINIMUM_ORDER_USD": MINIMUM_ORDER_USD,
+        "MINIMUM_ORDER_SHARES": MINIMUM_ORDER_SHARES, "TAKER_FEE_RATE": TAKER_FEE_RATE,
+        "CASH_RELEASE_SECONDS": CASH_RELEASE_SECONDS, "ENTRY_SECONDS_AFTER_START": ENTRY_SECONDS_AFTER_START,
+        "EDGE_THRESHOLD": EDGE_THRESHOLD, "PRICE_MIN": PRICE_MIN, "PRICE_MAX": PRICE_MAX,
+        "MIN_DEPTH": MIN_DEPTH, "MAX_SPREAD": MAX_SPREAD, "MAX_OVERROUND": MAX_OVERROUND,
+        "REQUIRED_FILLS": REQUIRED_FILLS,
+    }
+    mismatches: list[str] = []
+    for name, expected in expected_h432.items():
+        if h432.get(name) != expected:
+            mismatches.append(f"h432.{name}")
+    for name, expected in {"SOURCE_COMMIT": SOURCE_COMMIT, "MODEL_CONFIDENCE_FLOOR": 0.80}.items():
+        if h434.get(name) != expected:
+            mismatches.append(f"h434.{name}")
+    if h447.get("SOURCE_COMMIT") != SOURCE_COMMIT:
+        mismatches.append("h447.SOURCE_COMMIT")
+    if h447.get("ENTRY_SECONDS_AFTER_START") != ENTRY_SECONDS_AFTER_START:
+        mismatches.append("h447.ENTRY_SECONDS_AFTER_START")
+    if base.get("LOGIT_FEATURES") != FEATURES:
+        mismatches.append("base.LOGIT_FEATURES")
+    return {
+        "source_dir": str(directory),
+        "all_literals_match": not mismatches,
+        "mismatches": mismatches,
+        "checked_modules": ["h432_old_clean_extratrees_compound.py", "h434_old_clean_extratrees_high_confidence.py", "h447_old_clean_breakeven_exit.py", "all_monthly_clob_systematic_research_v2.py"],
+    }
 
 
 MANIFEST_FORMAT = "frozen-canary-candidate-manifest-v1"
@@ -194,6 +257,7 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
 def audit() -> dict[str, Any]:
     manifest = build_manifest()
     result = validate_manifest(manifest)
+    parity = source_parity()
     checks = {
         "manifest_matches_frozen_source": manifest["candidate"]["source_commit"] == EXPECTED_SOURCE_COMMIT,
         "same_ledger_is_explicit": manifest["execution_contract"]["same_ledger"] is True,
@@ -204,12 +268,14 @@ def audit() -> dict[str, Any]:
         "paper_never_counts_as_canary": result["gate_passed"] is False and result["verified_canary_fills"] == 0,
         "no_live_action": manifest["live_orders_enabled"] is False,
         "validator_accepts_unchanged_manifest": result["all_checks_passed"] is True,
+        "manifest_matches_replay_source_literals": parity["all_literals_match"] is True,
     }
     return {
         "format": "h498-frozen-canary-candidate-manifest-audit-v1",
         "hypothesis_id": HYPOTHESIS_ID,
         "manifest": manifest,
         "validation": result,
+        "source_parity": parity,
         "checks": checks,
         "all_checks_passed": all(checks.values()),
         "decision": "freeze_candidate_wait_for_owner_scoped_v2_receipts",
