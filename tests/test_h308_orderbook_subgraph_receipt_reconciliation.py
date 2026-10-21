@@ -230,6 +230,9 @@ def test_receipt_mode_scans_existing_redeem_hash_for_partial_settlement():
     assert result["settlement_activity_rows"] == 3
     assert result["legacy_settlement_receipt_rows"] == 1
     assert result["cash_release_receipt_rows"] == 1
+    reconciliation = next(iter(result["cash_reconciliation_by_collateral_token"].values()))
+    assert reconciliation["payout_redeem_transaction_matches"] == 1
+    assert reconciliation["exact_redeem_collateral_delta_join_transactions"] == 1
     assert result["receipt_fetch_failures"] == 0
     assert result["verified_canary_fills"] == 0
     assert result["same_ledger_compounding_rows"] == 0

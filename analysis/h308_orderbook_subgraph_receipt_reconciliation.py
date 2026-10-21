@@ -243,6 +243,19 @@ def _receipt_event_to_activity(event: dict[str, Any], source: dict[str, Any]) ->
     return normalize_activity_row(row)
 
 
+def _dedupe_log_rows(rows: Iterable[dict[str, Any]], fields: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Collapse identical legacy/V2 decodes without merging distinct amounts."""
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for row in rows:
+        key = tuple(row.get(field) for field in fields)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
+
+
 def _receipt_orderfilled_events(
     owner: str,
     known: dict[str, dict[str, Any]],
@@ -369,6 +382,14 @@ def _receipt_join(
                 confirmed += int(bool(old_confirmed or new_confirmed))
         except Exception:
             failures += 1
+    transfers = _dedupe_log_rows(
+        transfers,
+        ("transaction_ref", "token", "from", "to", "amount_base_units"),
+    )
+    payouts = _dedupe_log_rows(
+        payouts,
+        ("transaction_ref", "collateral_token", "condition_id", "amount_base_units"),
+    )
     reconciliation = _reconcile(activity_rows, transfers, payouts, owner)
     cash = sum(
         value.get("cash_release_transaction_rows", 0)
