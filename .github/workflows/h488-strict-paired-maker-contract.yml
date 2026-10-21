@@ -27,6 +27,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install contract dependencies
+        run: python -m pip install pytest
       - name: Run strict paired-maker contract
         run: |
           set -euo pipefail
