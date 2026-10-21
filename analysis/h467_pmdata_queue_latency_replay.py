@@ -183,28 +183,28 @@ def _run_market(l2: pl.DataFrame, trades: pl.DataFrame, trigger: float) -> dict[
             state = hbt.state_values(asset_no)
             if int(state.num_trades) <= 0 or float(state.position) <= 0.0:
                 continue
-            # The single submitted order is retained in the order dictionary
-            # even after it is filled.  OrderDict's pinned iterator uses
-            # ``next``; calling a non-existent has_next/get pair can crash the
-            # Rust-backed object instead of raising a Python exception.
-            values = hbt.orders(asset_no).values()
-            while True:
-                order = values.next()
-                if order is None:
-                    break
-                if float(order.exec_qty) <= 0.0:
-                    continue
-                filled.append({
-                    "asset_no": asset_no,
-                    "outcome": ("yes", "no")[asset_no],
-                    "exec_qty": float(order.exec_qty),
-                    "exec_price": float(order.exec_price),
-                    "order_status": int(order.status),
-                    "cost": float(-state.balance),
-                    "fee": float(state.fee),
-                    "num_trades": int(state.num_trades),
-                })
-                break
+            # Read aggregate state instead of walking the Rust-backed order
+            # dictionary from Python.  The latter is a Numba jitclass API
+            # intended for an ``@njit`` strategy and can invalidate native
+            # pointers when iterated from the Python boundary.
+            volume = float(state.trading_volume)
+            value = float(state.trading_value)
+            if volume <= 0.0 or value <= 0.0:
+                continue
+            exec_price = value / volume
+            if not math.isfinite(exec_price) or exec_price <= 0.0:
+                continue
+            filled.append({
+                "asset_no": asset_no,
+                "outcome": ("yes", "no")[asset_no],
+                "exec_qty": volume,
+                "exec_price": exec_price,
+                "order_status": "aggregate_state_filled",
+                "cost": value,
+                "fee": float(state.fee),
+                "num_trades": int(state.num_trades),
+            })
+            break
         if not filled:
             return {"status": "no_fill", "submitted": True}
         return {"status": "filled", "fill": filled[0]}
