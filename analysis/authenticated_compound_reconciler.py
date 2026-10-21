@@ -150,6 +150,7 @@ def reconcile_authenticated_chain(
         "cash_release_receipt_id": set(),
         "balance_checkpoint_id": set(),
     }
+    maker_order_ids: set[str] = set()
     for row in rows:
         if not isinstance(row, dict):
             return {
@@ -276,6 +277,37 @@ def reconcile_authenticated_chain(
                 return {"gate_passed": False, "fills": 0, "failure_reason": "entry_cost_price_arithmetic_mismatch", "owner_scoped": True, "identity_complete": False}
             if execution_role not in {"TAKER", "MAKER"}:
                 return {"gate_passed": False, "fills": 0, "failure_reason": "execution_role_required_for_fee_schedule", "owner_scoped": True, "identity_complete": False}
+            if execution_role == "MAKER":
+                maker_order_id = _text(row.get("order_id"))
+                maker_order_type = _text(row.get("order_type")).upper()
+                maker_post_only = row.get("post_only")
+                maker_order_status = _text(row.get("order_status")).upper()
+                maker_trade_status = _text(row.get("trade_status")).upper()
+                maker_trader_side = _text(row.get("trader_side")).upper()
+                if not maker_order_id:
+                    return {"gate_passed": False, "fills": 0, "failure_reason": "maker_order_id_required", "owner_scoped": True, "identity_complete": False}
+                if maker_order_id in maker_order_ids:
+                    return {"gate_passed": False, "fills": 0, "failure_reason": "duplicate_maker_order_id", "owner_scoped": True, "identity_complete": False}
+                maker_order_ids.add(maker_order_id)
+                if maker_order_type not in {"GTC", "GTD"}:
+                    return {"gate_passed": False, "fills": 0, "failure_reason": "maker_order_type_must_be_gtc_or_gtd", "owner_scoped": True, "identity_complete": False}
+                if type(maker_post_only) is not bool or maker_post_only is not True:
+                    return {"gate_passed": False, "fills": 0, "failure_reason": "maker_post_only_required", "owner_scoped": True, "identity_complete": False}
+                if maker_order_status != "MATCHED":
+                    return {"gate_passed": False, "fills": 0, "failure_reason": "maker_order_match_status_required", "owner_scoped": True, "identity_complete": False}
+                if maker_trade_status not in {"CONFIRMED", "TRADE_STATUS_CONFIRMED"}:
+                    return {"gate_passed": False, "fills": 0, "failure_reason": "maker_trade_confirmation_required", "owner_scoped": True, "identity_complete": False}
+                if maker_trader_side != "MAKER":
+                    return {"gate_passed": False, "fills": 0, "failure_reason": "maker_trader_side_required", "owner_scoped": True, "identity_complete": False}
+                try:
+                    maker_order_acceptance_ts = int(str(row.get("order_acceptance_ts")))
+                    maker_trade_matched_ts = int(str(row.get("trade_matched_ts")))
+                except (ValueError, TypeError):
+                    return {"gate_passed": False, "fills": 0, "failure_reason": "maker_order_timestamps_required", "owner_scoped": True, "identity_complete": False}
+                if maker_order_acceptance_ts > entry_ts:
+                    return {"gate_passed": False, "fills": 0, "failure_reason": "maker_order_acceptance_after_entry", "owner_scoped": True, "identity_complete": False}
+                if maker_trade_matched_ts > entry_ts:
+                    return {"gate_passed": False, "fills": 0, "failure_reason": "maker_trade_match_after_entry", "owner_scoped": True, "identity_complete": False}
             # Polymarket charges the market fee to takers; makers are never
             # charged an execution fee.  ``rebateRate`` is a separate maker
             # rebate attribution and must not be turned into a negative

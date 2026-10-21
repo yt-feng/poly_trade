@@ -88,6 +88,14 @@ def maker_v2_bundle() -> dict[str, object]:
     events = [v2_event(i) for i in range(10)]
     for i, row in enumerate(events):
         row["execution_role"] = "MAKER"
+        row["order_id"] = f"order-{i}"
+        row["order_type"] = "GTC"
+        row["post_only"] = True
+        row["order_status"] = "MATCHED"
+        row["trade_status"] = "TRADE_STATUS_CONFIRMED"
+        row["trader_side"] = "MAKER"
+        row["order_acceptance_ts"] = str(i * 100 - 20)
+        row["trade_matched_ts"] = str(i * 100)
         row["fee_taker_only"] = False
         row["fee_rebate_rate"] = "0.2"
         row["fee"] = "0"
@@ -161,6 +169,20 @@ class TestAuthenticatedCompoundBundle(unittest.TestCase):
         result = validate_bundle_document(document)
         self.assertIs(result["gate_passed"], False)
         self.assertEqual(result["failure_reason"], "fee_amount_schedule_mismatch")
+
+    def test_v2_bundle_rejects_maker_without_post_only(self):
+        document = maker_v2_bundle()
+        document["events"][0]["post_only"] = False
+        result = validate_bundle_document(document)
+        self.assertIs(result["gate_passed"], False)
+        self.assertEqual(result["failure_reason"], "maker_post_only_required")
+
+    def test_v2_bundle_rejects_maker_without_confirmed_match(self):
+        document = maker_v2_bundle()
+        document["events"][0]["trade_status"] = "TRADE_STATUS_MATCHED"
+        result = validate_bundle_document(document)
+        self.assertIs(result["gate_passed"], False)
+        self.assertEqual(result["failure_reason"], "maker_trade_confirmation_required")
 
     def test_v2_bundle_rejects_non_ten_cli_requirement(self):
         result = validate_bundle_document(v2_bundle(), required_fills=9)
