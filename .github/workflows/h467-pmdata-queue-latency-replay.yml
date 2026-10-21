@@ -32,7 +32,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pandas polars pyarrow numba numpy cryptography pytest
-          python -m pip install "git+https://github.com/mileswangs/pm-hftbacktest.git@${PM_HFTBACKTEST_COMMIT}"
+          # The pinned repository is a Rust/PyO3 workspace; its Python
+          # project lives under py-hftbacktest rather than at the repository
+          # root.  Install that subdirectory so this replay uses the exact
+          # pinned queue/latency implementation.
+          python -m pip install "git+https://github.com/mileswangs/pm-hftbacktest.git@${PM_HFTBACKTEST_COMMIT}#subdirectory=py-hftbacktest"
 
       - name: Download one fixed historical archive day
         run: |
