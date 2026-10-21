@@ -65,21 +65,34 @@ def _h508_paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
             })
     selection_stable = not selection_failures
     holdout_stable = not holdout_failures
+    fixed_policy = paper.get("fixed_fraction_policy")
+    fixed_policy_ready = bool(
+        isinstance(fixed_policy, dict)
+        and float(fixed_policy.get("gross_cash_fraction")) == 0.5
+        and fixed_policy.get("online_observable_policy") is True
+        and fixed_policy.get("selection_all_ten") is True
+        and fixed_policy.get("holdout_all_ten") is True
+        and fixed_policy.get("selection_min_fills") == 10
+        and fixed_policy.get("holdout_min_fills") == 10
+    )
     candidate = {
-        "pooled_exact_ten": protocol_ok and holdout_stable,
+        "pooled_exact_ten": protocol_ok and holdout_stable and fixed_policy_ready,
         "selection_cell_failures": selection_failures,
         "holdout_block_stress_failures": holdout_failures,
         "selection_stable": selection_stable,
         "block_stable": holdout_stable,
+        "fixed_fraction_policy_ready": fixed_policy_ready,
         "cell_count": len(cells),
     }
     return {
         "protocol_consistent": protocol_ok,
         "candidate_schema": "old-clean-h508-cash-fraction-depth-tradeoff-v1",
         "candidates": {"h508_cash_fraction_depth_tradeoff": candidate},
-        "pooled_frontier_consistent": protocol_ok and selection_stable and holdout_stable and paper.get("holdout_gate_passed") is True,
+        "pooled_frontier_consistent": protocol_ok and selection_stable and holdout_stable and fixed_policy_ready and paper.get("holdout_gate_passed") is True,
         "selection_cell_failures": selection_failures,
         "selection_cells_stable": selection_stable,
+        "fixed_fraction_policy": fixed_policy if isinstance(fixed_policy, dict) else None,
+        "fixed_fraction_policy_ready": fixed_policy_ready,
         "block_stress_failures": holdout_failures,
         "block_stress_stable": holdout_stable,
     }
@@ -261,6 +274,7 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
         frontier["pooled_frontier_consistent"]
         and frontier["block_stress_stable"]
         and frontier.get("selection_cells_stable", True)
+        and frontier.get("fixed_fraction_policy_ready", True)
         and settlement_evidence_ready
     )
     hard_blockers = []
@@ -276,6 +290,8 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
         hard_blockers.append("paper_block_stress_unstable")
     if not frontier.get("selection_cells_stable", True):
         hard_blockers.append("paper_selection_cells_unstable")
+    if not frontier.get("fixed_fraction_policy_ready", True):
+        hard_blockers.append("paper_executable_fraction_policy_missing_or_failed")
     for key, ready in evidence_ready.items():
         if not ready:
             hard_blockers.append(f"{key}_receipts_missing_or_unverified")

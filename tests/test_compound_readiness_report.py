@@ -49,6 +49,14 @@ def h508_paper_artifact(*, holdout_failure: bool = False) -> dict:
             "holdout_min_fills": 10 if not holdout_failure else 9,
             "holdout_min_cash": 11.0,
         }],
+        "fixed_fraction_policy": {
+            "gross_cash_fraction": 0.5,
+            "online_observable_policy": True,
+            "selection_all_ten": not holdout_failure,
+            "holdout_all_ten": not holdout_failure,
+            "selection_min_fills": 10 if not holdout_failure else 9,
+            "holdout_min_fills": 10 if not holdout_failure else 9,
+        },
     }
 
 
@@ -147,6 +155,7 @@ def test_report_consumes_h508_old_clean_holdout_contract():
     assert report["paper_frontier"]["pooled_frontier_consistent"] is True
     assert report["paper_frontier"]["block_stress_stable"] is True
     assert report["paper_frontier"]["selection_cells_stable"] is True
+    assert report["paper_frontier"]["fixed_fraction_policy_ready"] is True
     assert report["canary_ready"] is False
 
 
@@ -155,3 +164,11 @@ def test_h508_holdout_failure_blocks_the_compound_gate():
     assert report["paper_frontier"]["pooled_frontier_consistent"] is False
     assert report["paper_frontier"]["block_stress_stable"] is False
     assert "paper_block_stress_unstable" in report["hard_blockers"]
+
+
+def test_h508_without_online_fraction_policy_fails_closed():
+    artifact = h508_paper_artifact()
+    artifact.pop("fixed_fraction_policy")
+    report = build_report(state(), artifact)
+    assert report["paper_frontier"]["pooled_frontier_consistent"] is False
+    assert "paper_executable_fraction_policy_missing_or_failed" in report["hard_blockers"]
