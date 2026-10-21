@@ -331,9 +331,18 @@ def capture_account(
     query_failures = 0
     contracts = sorted(DEFAULT_CTF_CONTRACTS)
     tokens = sorted(DEFAULT_COLLATERAL_TOKENS)
+    # A delegated CtfCollateralAdapter calls ConditionalTokens on the
+    # owner's behalf.  In that receipt PayoutRedemption.topic1 is the adapter
+    # address, while the owner binding is established by the same receipt's
+    # owner-directed pUSD mint in decode_receipt_logs.  Filtering topic1 to the
+    # owner therefore drops valid delegated redemptions before decoding.  Use
+    # the condition's collateral token as the bounded source filter and leave
+    # the redeemer topic open; decode_receipt_logs still requires the exact
+    # owner-directed cash leg and the BTC condition id before admission.
+    collateral_topics = [_topic_address(token) for token in tokens]
     for start, end in _chunk_ranges(from_block, latest_block, chunk_blocks):
         filters = [
-            _log_filter(start, end, contracts, [PAYOUT_REDEMPTION_TOPIC, _topic_address(owner)]),
+            _log_filter(start, end, contracts, [PAYOUT_REDEMPTION_TOPIC, None, collateral_topics]),
         ]
         # Only inbound collateral is scanned for separate cash release. Seed
         # trade receipts already supply owner outbound/inbound deltas.

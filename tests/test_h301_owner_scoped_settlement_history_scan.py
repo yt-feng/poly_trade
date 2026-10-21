@@ -17,6 +17,7 @@ OWNER = "0x" + "11" * 20
 EXCHANGE = "0x" + "22" * 20
 ADAPTER = "0x" + "33" * 20
 COLLATERAL = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"
+PUSD = "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb"
 CTF = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
 CONDITION = "0x" + "07" * 32
 
@@ -31,9 +32,9 @@ def topic_address(value: str) -> str:
     return "0x" + "0" * 24 + value[2:]
 
 
-def transfer_log(source: str, target: str, amount: int) -> dict:
+def transfer_log(source: str, target: str, amount: int, token: str = COLLATERAL) -> dict:
     return {
-        "address": COLLATERAL,
+        "address": token,
         "topics": [TRANSFER_TOPIC, topic_address(source), topic_address(target)],
         "data": "0x" + word(amount),
     }
@@ -43,6 +44,15 @@ def payout_log(amount: int) -> dict:
     return {
         "address": CTF,
         "topics": [PAYOUT_REDEMPTION_TOPIC, topic_address(OWNER), topic_address(COLLATERAL), "0x" + word(0)],
+        "data": "0x" + word(CONDITION) + word(96) + word(amount) + word(1) + word(3),
+    }
+
+
+def delegated_payout_log(amount: int) -> dict:
+    """A CtfCollateralAdapter is the ConditionalTokens redeemer."""
+    return {
+        "address": CTF,
+        "topics": [PAYOUT_REDEMPTION_TOPIC, topic_address(ADAPTER), topic_address(COLLATERAL), "0x" + word(0)],
         "data": "0x" + word(CONDITION) + word(96) + word(amount) + word(1) + word(3),
     }
 
@@ -141,6 +151,75 @@ def test_unbound_payout_is_not_admitted_without_btc_condition_id():
     assert report["settlement_receipt_rows"] == 0
     assert report["cash_release_receipt_rows"] == 0
     assert report["verified_canary_fills"] == 0
+
+
+def test_delegated_redemption_is_found_when_redeemer_is_adapter():
+    tx_buy = "0x" + "05" * 32
+    tx_redeem = "0x" + "06" * 32
+
+    def rpc(method, params):
+        if method == "eth_getTransactionReceipt":
+            if params[0] == tx_buy:
+                return {"transactionHash": tx_buy, "status": "0x1", "blockNumber": "0x64", "logs": []}
+            return {"transactionHash": tx_redeem, "status": "0x1", "blockNumber": "0x6e",
+                    "logs": [delegated_payout_log(5_500_000), transfer_log("0x" + "00" * 20, OWNER, 5_500_000, PUSD)]}
+        if method == "eth_blockNumber":
+            return "0x70"
+        if method == "eth_getBlockByNumber":
+            return {"timestamp": "0x7d0"}
+        if method == "eth_getLogs":
+            topics = params[0]["topics"]
+            if topics[0] == PAYOUT_REDEMPTION_TOPIC:
+                log = delegated_payout_log(5_500_000)
+            else:
+                log = transfer_log("0x" + "00" * 20, OWNER, 5_500_000, PUSD)
+            return [{**log, "transactionHash": tx_redeem, "blockNumber": "0x6e"}]
+        raise AssertionError(method)
+
+    report = capture_account(
+        {
+            "owner": OWNER,
+            "btc_transaction_hashes": [tx_buy],
+            "activity": [{"type": "TRADE", "side": "BUY", "transactionHash": tx_buy,
+                           "timestamp": 1000, "usdcSize": "5", "slug": "btc-updown-5m-123",
+                           "conditionId": CONDITION}],
+        },
+        rpc_call=rpc,
+        max_history_blocks=20,
+        chunk_blocks=10,
+    )
+    assert report["settlement_receipt_rows"] == 1
+    assert report["cash_release_receipt_rows"] == 1
+    assert report["cash_reconciliation_by_collateral_token"][PUSD]["historical_cash_reuse_evidence"] is True
+    assert report["verified_canary_fills"] == 0
+
+
+def test_history_filter_leaves_redeemer_open_for_delegated_adapter():
+    tx_buy = "0x" + "07" * 32
+    calls = []
+
+    def rpc(method, params):
+        if method == "eth_getTransactionReceipt":
+            return {"transactionHash": tx_buy, "status": "0x1", "blockNumber": "0x64", "logs": []}
+        if method == "eth_blockNumber":
+            return "0x78"
+        if method == "eth_getLogs":
+            calls.append(params[0])
+            return []
+        raise AssertionError(method)
+
+    capture_account(
+        {"owner": OWNER, "btc_transaction_hashes": [tx_buy], "activity": [{
+            "type": "TRADE", "side": "BUY", "transactionHash": tx_buy,
+            "timestamp": 1000, "usdcSize": "5", "slug": "btc-updown-5m-123",
+            "conditionId": CONDITION,
+        }]},
+        rpc_call=rpc, max_history_blocks=20, chunk_blocks=10,
+    )
+    payout_filters = [call for call in calls if call["topics"][0] == PAYOUT_REDEMPTION_TOPIC]
+    assert payout_filters
+    assert payout_filters[0]["topics"][1] is None
+    assert isinstance(payout_filters[0]["topics"][2], list)
 
 
 def test_rpc_retries_transient_http_failure_then_returns_result(monkeypatch):
