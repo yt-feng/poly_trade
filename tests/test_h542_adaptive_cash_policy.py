@@ -45,4 +45,14 @@ def test_h542_workflow_does_not_export_recipient_material_as_step_env():
     text = workflow.read_text(encoding="utf-8")
     assert "QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars." not in text
     assert "QUALITY_FIRST_RECIPIENT_ID: ${{ vars." not in text
-    assert "gh', 'variable', 'get'" in text
+    assert "gh', 'variable', 'get'" not in text
+    assert "research_vault/recipient.json" in text
+
+
+def test_h544_workflow_uses_committed_recipient_without_variable_permission():
+    from pathlib import Path
+
+    workflow = Path(__file__).parents[1] / ".github" / "workflows" / "h544-intermediate-cash-boost.yml"
+    text = workflow.read_text(encoding="utf-8")
+    assert "gh', 'variable', 'get'" not in text
+    assert "research_vault/recipient.json" in text

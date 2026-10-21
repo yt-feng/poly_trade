@@ -46,25 +46,17 @@ jobs:
             --output "$PRIVATE_DIR/results" > "$PRIVATE_DIR/analysis-output.txt"
       - name: Seal H542 results
         env:
-          GH_TOKEN: ${{ github.token }}
           SOURCE_DATA_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
           python - "$RUNNER_TEMP/old-data-h542" <<'PY'
-          import base64, json, os, sys
-          import subprocess
+          import json, os, sys
           from pathlib import Path
           sys.path.insert(0, 'tools')
           import research_vault
           private = Path(sys.argv[1])
-          repository = os.environ['GITHUB_REPOSITORY']
-          def variable(name):
-              return subprocess.check_output(
-                  ['gh', 'variable', 'get', name, '--repo', repository],
-                  text=True,
-              ).strip()
-          recipient = research_vault.load_json_bytes(base64.b64decode(variable('QUALITY_FIRST_RECIPIENT_JSON_B64'), validate=True), 4096)
-          recipient_id = variable('QUALITY_FIRST_RECIPIENT_ID')
+          recipient = research_vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          recipient_id = recipient['recipient_id']
           research_vault.validate_recipient(recipient, recipient_id)
           results = private / 'results'
           payload = {
@@ -89,7 +81,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          RECIPIENT_ID="$(gh variable get QUALITY_FIRST_RECIPIENT_ID --repo "$GITHUB_REPOSITORY")"
+          RECIPIENT_ID="$(python -c 'import json; print(json.load(open("research_vault/recipient.json"))["recipient_id"])')"
           PYTHONPATH=tools python tools/publish_quality_first_journal.py \
             --source sealed-delivery \
             --repository yt-feng/poly_trade \
