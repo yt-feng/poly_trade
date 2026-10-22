@@ -294,6 +294,7 @@ def test_workflow_never_uploads_private_bundle_or_enables_orders():
     assert "h549_adaptive_one_profit" in text
     assert "h561_online_depth_proxy" in text
     assert "h578_online_depth_proxy" in text
+    assert "h30_legacy" in text
     assert "private_exact" in text
     assert "--strategy-profile" in text
     assert "--private-strategy-config" in text
