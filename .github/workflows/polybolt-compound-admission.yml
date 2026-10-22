@@ -6,8 +6,8 @@ on:
       strategy_profile:
         description: 'Frozen execution strategy contract to validate'
         type: choice
-        options: [h530_fixed_half_cash, h534_fixed_fraction_055, h546_adaptive_one_profit, h549_adaptive_one_profit, h561_online_depth_proxy, h578_online_depth_proxy, h600_favorite_side_depth, h30_legacy, private_exact]
-        default: h578_online_depth_proxy
+        options: [auto_trace_bound, h530_fixed_half_cash, h534_fixed_fraction_055, h546_adaptive_one_profit, h549_adaptive_one_profit, h561_online_depth_proxy, h578_online_depth_proxy, h600_favorite_side_depth, h30_legacy, private_exact]
+        default: auto_trace_bound
         required: true
 
 permissions:
@@ -116,7 +116,7 @@ jobs:
           python tools/run_polybolt_compound_admission.py \
             --bundle "$PRIVATE_DIR/bundle.json" \
             --output "$PRIVATE_DIR/result.json" \
-            --strategy-profile "${{ inputs.strategy_profile || 'h578_online_depth_proxy' }}" \
+            --strategy-profile "${{ inputs.strategy_profile || 'auto_trace_bound' }}" \
             --private-strategy-config "$PRIVATE_DIR/strategy-profile.json"
 
       - name: Write fail-closed result when bundle unavailable
@@ -133,7 +133,7 @@ jobs:
         env:
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
-          STRATEGY_PROFILE: ${{ inputs.strategy_profile || 'h578_online_depth_proxy' }}
+          STRATEGY_PROFILE: ${{ inputs.strategy_profile || 'auto_trace_bound' }}
         run: |
           set -euo pipefail
           PRIVATE_DIR="$RUNNER_TEMP/polybolt-compound-admission"
@@ -171,7 +171,7 @@ jobs:
           payload = {
               'format': 'polybolt-compound-offline-consistency-sealed-v1',
               'result': {**result, **verification},
-              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'strategy_profile': os.environ.get('STRATEGY_PROFILE', 'h578_online_depth_proxy')},
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'strategy_profile': os.environ.get('STRATEGY_PROFILE', 'auto_trace_bound')},
               **verification,
               'offline_consistent_compounding_rows': 10 if offline_passed else 0,
               'same_ledger_compounding_rows': 0,

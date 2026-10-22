@@ -19,8 +19,10 @@ from validate_polybolt_compound_bundle import H546_STRATEGY_CONFIG_SHA256, H546_
 from validate_polybolt_compound_bundle import H549_STRATEGY_CONFIG_SHA256, H549_STRATEGY_ID, H549_STRATEGY_PROFILE, H549_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H561_STRATEGY_CONFIG_SHA256, H561_STRATEGY_ID, H561_STRATEGY_PROFILE, H561_STRATEGY_VERSION, _expected_entry_terms
 from validate_polybolt_compound_bundle import H578_STRATEGY_CONFIG_SHA256, H578_STRATEGY_ID, H578_STRATEGY_PROFILE, H578_STRATEGY_VERSION
+from validate_polybolt_compound_bundle import H600_STRATEGY_CONFIG_SHA256, H600_STRATEGY_ID, H600_STRATEGY_PROFILE, H600_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import PRIVATE_STRATEGY_PROFILE
 from test_validate_polybolt_compound_bundle import (
+    attach_favorite_depth_trace,
     attach_strategy_trace,
     assert_unverified_receipts,
     bundle,
@@ -46,6 +48,78 @@ def test_tool_redacts_owner_and_ledger_identifiers(tmp_path):
     assert "ledger_id" not in result
     assert "chain_id" not in result
     assert "ending_cash" not in result
+
+
+def test_tool_auto_routes_the_default_frozen_identity(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    source.write_text(json.dumps(bundle()))
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", "auto_trace_bound",
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is True
+    assert result["strategy_profile"] == "h30_legacy"
+
+
+def test_tool_auto_routes_h534_by_exact_identity(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    document = bundle()
+    document["strategy"] = {
+        "id": H534_STRATEGY_ID,
+        "version": H534_STRATEGY_VERSION,
+        "config_sha256": H534_STRATEGY_CONFIG_SHA256,
+    }
+    configure_adaptive_fixture(document, ["0.55"] * 10)
+    attach_strategy_trace(document, ["0.55"] * 10, track_profits=False)
+    source.write_text(json.dumps(document))
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", "auto_trace_bound",
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is True
+    assert result["strategy_profile"] == H534_STRATEGY_PROFILE
+
+
+def test_tool_auto_routes_h600_without_relabeling(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    document = bundle()
+    document["strategy"] = {
+        "id": H600_STRATEGY_ID,
+        "version": H600_STRATEGY_VERSION,
+        "config_sha256": H600_STRATEGY_CONFIG_SHA256,
+    }
+    configure_adaptive_fixture(document, ["0.75"] * 10)
+    for snapshot in document["depth_snapshots"]:
+        snapshot["sell_available_shares_2m"] = "90"
+    attach_favorite_depth_trace(document, depth="90", favorite_ask="0.50", cash_fraction="0.75")
+    source.write_text(json.dumps(document))
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", "auto_trace_bound",
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is True
+    assert result["strategy_profile"] == H600_STRATEGY_PROFILE
+
+
+def test_tool_auto_route_unknown_identity_fails_closed(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    document = bundle()
+    document["strategy"] = {"id": "unknown", "version": "v1", "config_sha256": "0" * 64}
+    source.write_text(json.dumps(document))
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", "auto_trace_bound",
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "strategy_route_unbound"
 
 
 def test_tool_accepts_the_fixed_half_cash_profile_only_when_explicit(tmp_path):
@@ -309,8 +383,9 @@ def test_tool_seals_generic_failure_for_invalid_json(tmp_path):
 def test_workflow_never_uploads_private_bundle_or_enables_orders():
     text = WORKFLOW.read_text()
     assert "strategy_profile" in text
-    assert "default: h578_online_depth_proxy" in text
-    assert "inputs.strategy_profile || 'h578_online_depth_proxy'" in text
+    assert "default: auto_trace_bound" in text
+    assert "inputs.strategy_profile || 'auto_trace_bound'" in text
+    assert "auto_trace_bound" in text
     assert "h530_fixed_half_cash" in text
     assert "h534_fixed_fraction_055" in text
     assert "h546_adaptive_one_profit" in text

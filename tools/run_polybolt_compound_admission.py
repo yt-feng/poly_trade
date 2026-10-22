@@ -19,13 +19,37 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 from validate_polybolt_compound_bundle import (
     DEFAULT_STRATEGY_PROFILE,
+    FROZEN_STRATEGY_CONFIG_SHA256,
+    FROZEN_STRATEGY_ID,
+    FROZEN_STRATEGY_VERSION,
     H546_STRATEGY_PROFILE,
+    H546_STRATEGY_CONFIG_SHA256,
+    H546_STRATEGY_ID,
+    H546_STRATEGY_VERSION,
     H549_STRATEGY_PROFILE,
+    H549_STRATEGY_CONFIG_SHA256,
+    H549_STRATEGY_ID,
+    H549_STRATEGY_VERSION,
     H561_STRATEGY_PROFILE,
+    H561_STRATEGY_CONFIG_SHA256,
+    H561_STRATEGY_ID,
+    H561_STRATEGY_VERSION,
     H578_STRATEGY_PROFILE,
+    H578_STRATEGY_CONFIG_SHA256,
+    H578_STRATEGY_ID,
+    H578_STRATEGY_VERSION,
     H600_STRATEGY_PROFILE,
+    H600_STRATEGY_CONFIG_SHA256,
+    H600_STRATEGY_ID,
+    H600_STRATEGY_VERSION,
     H530_STRATEGY_PROFILE,
+    H530_STRATEGY_CONFIG_SHA256,
+    H530_STRATEGY_ID,
+    H530_STRATEGY_VERSION,
     H534_STRATEGY_PROFILE,
+    H534_STRATEGY_CONFIG_SHA256,
+    H534_STRATEGY_ID,
+    H534_STRATEGY_VERSION,
     PRIVATE_STRATEGY_PROFILE,
     OFFLINE_VERIFICATION,
     validate_bundle_document,
@@ -34,6 +58,21 @@ from validate_polybolt_compound_bundle import (
 
 MAX_BUNDLE_BYTES = 2 * 1024 * 1024
 MAX_RESULT_BYTES = 16 * 1024
+AUTO_ROUTE_PROFILE = "auto_trace_bound"
+
+# Auto routing is deliberately an identity lookup, never a best-effort guess.
+# A future bundle must carry one exact frozen strategy triple before the
+# validator is invoked.  Unknown, mixed, or incomplete identities fail closed.
+AUTO_ROUTE_IDENTITIES = {
+    DEFAULT_STRATEGY_PROFILE: (FROZEN_STRATEGY_ID, FROZEN_STRATEGY_VERSION, FROZEN_STRATEGY_CONFIG_SHA256),
+    H530_STRATEGY_PROFILE: (H530_STRATEGY_ID, H530_STRATEGY_VERSION, H530_STRATEGY_CONFIG_SHA256),
+    H534_STRATEGY_PROFILE: (H534_STRATEGY_ID, H534_STRATEGY_VERSION, H534_STRATEGY_CONFIG_SHA256),
+    H546_STRATEGY_PROFILE: (H546_STRATEGY_ID, H546_STRATEGY_VERSION, H546_STRATEGY_CONFIG_SHA256),
+    H549_STRATEGY_PROFILE: (H549_STRATEGY_ID, H549_STRATEGY_VERSION, H549_STRATEGY_CONFIG_SHA256),
+    H561_STRATEGY_PROFILE: (H561_STRATEGY_ID, H561_STRATEGY_VERSION, H561_STRATEGY_CONFIG_SHA256),
+    H578_STRATEGY_PROFILE: (H578_STRATEGY_ID, H578_STRATEGY_VERSION, H578_STRATEGY_CONFIG_SHA256),
+    H600_STRATEGY_PROFILE: (H600_STRATEGY_ID, H600_STRATEGY_VERSION, H600_STRATEGY_CONFIG_SHA256),
+}
 RESULT_KEYS = (
     "schema",
     "required_fills",
@@ -103,6 +142,18 @@ def _read_private_strategy_config(path: Path | None) -> dict[str, Any] | None:
     return value
 
 
+def resolve_auto_strategy_profile(document: dict[str, Any]) -> str:
+    """Resolve one exact frozen strategy identity without inspecting row outcomes."""
+    strategy = document.get("strategy")
+    if not isinstance(strategy, dict):
+        raise ValueError("strategy_route_unbound")
+    observed = (strategy.get("id"), strategy.get("version"), strategy.get("config_sha256"))
+    matches = [profile for profile, identity in AUTO_ROUTE_IDENTITIES.items() if observed == identity]
+    if len(matches) != 1:
+        raise ValueError("strategy_route_unbound")
+    return matches[0]
+
+
 def run(
     bundle_path: Path,
     *,
@@ -114,20 +165,25 @@ def run(
     document = _read_json(bundle_path)
     if not isinstance(document, dict):
         raise ValueError("bundle_json_object_required")
+    effective_profile = (
+        resolve_auto_strategy_profile(document)
+        if strategy_profile == AUTO_ROUTE_PROFILE
+        else strategy_profile
+    )
     # Built-in frozen profiles are self-contained.  A runner-local config is
     # required only for the opaque private_exact profile; passing the optional
     # path from the workflow must not make a built-in profile unavailable.
     private_config = (
         _read_private_strategy_config(private_strategy_config_path)
-        if strategy_profile == PRIVATE_STRATEGY_PROFILE
+        if effective_profile == PRIVATE_STRATEGY_PROFILE
         else None
     )
     result = validate_bundle_document(
         document,
-        strategy_profile=strategy_profile,
+        strategy_profile=effective_profile,
         private_strategy_config=private_config,
     )
-    result["strategy_profile"] = strategy_profile
+    result["strategy_profile"] = effective_profile
     return _allowlist(result)
 
 
@@ -137,7 +193,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--strategy-profile",
-        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H534_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, H561_STRATEGY_PROFILE, H578_STRATEGY_PROFILE, H600_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
+        choices=(AUTO_ROUTE_PROFILE, DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H534_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, H561_STRATEGY_PROFILE, H578_STRATEGY_PROFILE, H600_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
         default=DEFAULT_STRATEGY_PROFILE,
     )
     parser.add_argument("--private-strategy-config", type=Path)
@@ -150,7 +206,7 @@ def main() -> int:
         )
     except ValueError as exc:
         reason = str(exc)
-        if reason in {"private_strategy_profile_unavailable", "private_strategy_profile_invalid"}:
+        if reason in {"private_strategy_profile_unavailable", "private_strategy_profile_invalid", "strategy_route_unbound"}:
             result = _failure(reason)
         else:
             result = _failure("bundle_invalid")
