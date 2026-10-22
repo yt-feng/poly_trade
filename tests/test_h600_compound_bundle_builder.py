@@ -82,6 +82,12 @@ class H600CompoundBundleBuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "orderfilled_records_required"):
             build_h600_bundle(capture)
 
+    def test_builder_rejects_malformed_canonical_orderfilled_records_before_document_build(self):
+        capture = capture_fixture()
+        capture["orderfilled_records"][0]["tx_hash"] = "tx-other"
+        with self.assertRaisesRegex(ValueError, "orderfilled_event_id_mismatch"):
+            build_h600_bundle(capture)
+
     def test_capture_buffer_builds_one_continuous_ten_row_chain(self):
         capture = capture_fixture()
         buffer = H600CompoundCapture(capture)

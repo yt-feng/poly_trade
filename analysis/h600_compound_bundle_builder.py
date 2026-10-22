@@ -218,6 +218,10 @@ def build_h600_bundle(capture: Mapping[str, Any]) -> dict[str, Any]:
     )
     for field in required:
         _required(capture, field)
+    # Keep the direct builder fail-closed at the same boundary as the
+    # streaming capture.  A malformed canonical record must not produce a
+    # half-assembled H600 document that only fails after construction.
+    _orderfilled_index(capture["orderfilled_records"])
     return {
         "schema": "authenticated-polybolt-compound-bundle-v2",
         "required_fills": REQUIRED_FILLS,
