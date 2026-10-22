@@ -88,46 +88,21 @@ jobs:
       - name: Publish encrypted H601 journal
         run: |
           set -euo pipefail
-          RECIPIENT_ID="$(python -c 'import json; print(json.load(open("research_vault/recipient.json"))["recipient_id"])')"
-          for attempt in 1 2 3 4 5; do
-            if PYTHONPATH=tools python tools/publish_quality_first_journal.py \
-              --source sealed-delivery \
-              --repository yt-feng/poly_trade \
-              --run-id "$GITHUB_RUN_ID" \
-              --run-attempt "$GITHUB_RUN_ATTEMPT" \
-              --recipient-id "$RECIPIENT_ID"; then
-              exit 0
-            fi
-            sleep $((attempt * 2))
-          done
-          # API publication can fail before the sealed bytes leave the
-          # runner.  Fall back to an idempotent Git ref update that copies
-          # ciphertext and status only, then verify the pushed ref and files.
-          EPISODE_ID="$(PYTHONPATH=tools python - <<'PY'
-          from persist_quality_first_journal import episode_identity
-          print(episode_identity('yt-feng/poly_trade', __import__('os').environ['GITHUB_RUN_ID'], __import__('os').environ['GITHUB_RUN_ATTEMPT']))
-          PY
-          )"
-          JOURNAL_DIR="$RUNNER_TEMP/h601-sealed-journal-fallback"
-          git fetch origin sealed-research-journal
-          git worktree add --detach "$JOURNAL_DIR" origin/sealed-research-journal
-          TARGET="$JOURNAL_DIR/research_vault/episodes/$EPISODE_ID"
-          mkdir -p "$TARGET"
-          if [ -e "$TARGET/part-0000.vault" ] || [ -e "$TARGET/status.json" ]; then
-            cmp -s sealed-delivery/part-0000.vault "$TARGET/part-0000.vault" \
-              && cmp -s sealed-delivery/status.json "$TARGET/status.json" \
-              || { echo 'sealed journal episode conflict'; exit 1; }
+          umask 077
+          PRIVATE_DIR="$RUNNER_TEMP/h601-favorite-path-depth"
+          RECIPIENT_ID="$(python -c 'import json; print(json.load(open("research_vault/recipient.json"))["recipient_id"])' 2> "$PRIVATE_DIR/publish-output.txt")"
+          if PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RECIPIENT_ID" >> "$PRIVATE_DIR/publish-output.txt" 2>&1; then
+            echo '{"status":"publication_complete","plaintext_published":false}'
           else
-            cp sealed-delivery/part-0000.vault "$TARGET/part-0000.vault"
-            cp sealed-delivery/status.json "$TARGET/status.json"
-            git -C "$JOURNAL_DIR" add "research_vault/episodes/$EPISODE_ID/part-0000.vault" "research_vault/episodes/$EPISODE_ID/status.json"
-            git -C "$JOURNAL_DIR" -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Persist validated sealed research journal'
-            git -C "$JOURNAL_DIR" push origin HEAD:refs/heads/sealed-research-journal
+            publish_status=$?
+            echo '{"status":"publication_failed","plaintext_published":false}'
+            exit "$publish_status"
           fi
-          REMOTE_SHA="$(git ls-remote origin refs/heads/sealed-research-journal | cut -f1)"
-          LOCAL_SHA="$(git -C "$JOURNAL_DIR" rev-parse HEAD)"
-          test -n "$REMOTE_SHA" && test "$REMOTE_SHA" = "$LOCAL_SHA"
-          test -f "$TARGET/part-0000.vault" && test -f "$TARGET/status.json"
       - name: Write redacted summary and clean runner files
         run: |
           echo '## H601 favorite path-depth synergy' >> "$GITHUB_STEP_SUMMARY"
