@@ -1,0 +1,115 @@
+name: H600 old-clean favorite-side depth alignment
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Pinned old-clean source commit
+        required: true
+        default: bbda5f2050685f63153621a54641ebdfab943487
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout strategy code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout pinned old-clean source
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: ${{ inputs.source_commit }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install research dependencies and validate H600 contract
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy scikit-learn pytest pycryptodome
+          python -m pytest -q tests/test_h600_favorite_side_depth.py tests/test_h561_online_depth_proxy.py tests/test_h508_cash_fraction_depth_tradeoff.py
+      - name: Run the single pre-registered H600 replay
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h600-favorite-side-depth"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h600_favorite_side_depth.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "${{ inputs.source_commit }}" \
+            --output "$PRIVATE_DIR/results" > "$PRIVATE_DIR/analysis-output.txt"
+      - name: Seal the result with the verified public recipient
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/h600-favorite-side-depth" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          recipient = research_vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          recipient_id = recipient['recipient_id']
+          research_vault.validate_recipient(recipient, recipient_id)
+          results = private / 'results'
+          payload = {
+              'format': 'old-clean-h600-favorite-side-depth-sealed-v1',
+              'preregistration': {
+                  'hypothesis_id': 'H600_FAVORITE_SIDE_ALIGNMENT_H578_DEPTH',
+                  'source_commit': os.environ['SOURCE_COMMIT'],
+                  'rule': 'selected_side_two_minute_ask_ge_0.50_then_h578_depth_thresholds_3_5_7',
+                  'single_evolving_cash_ledger': True,
+                  'prior_cash_release_required': True,
+                  'no_reset': True,
+                  'no_cross_window_concatenation': True,
+                  'required_consecutive_fills': 10,
+              },
+              'summary': json.loads((results / 'summary.json').read_text()),
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'sources': [
+                  {'title': 'The Anatomy of a Decentralized Prediction Market', 'url': 'https://arxiv.org/abs/2604.24366'},
+                  {'title': 'polybtc research report', 'url': 'https://github.com/LukasNSteel/polybtc'},
+              ],
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+      - name: Publish encrypted H600 journal
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RECIPIENT_ID="$(python -c 'import json; print(json.load(open("research_vault/recipient.json"))["recipient_id"])')"
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RECIPIENT_ID"
+      - name: Write redacted summary and clean runner files
+        if: always()
+        run: |
+          echo '## H600 favorite-side depth alignment' >> "$GITHUB_STEP_SUMMARY"
+          echo '- H434 model candidate plus market-favorite-side ask >= 0.50 and retained H578 3/5/7 depth map.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Detailed metrics remain encrypted; no live orders or account access are enabled.' >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'h600-favorite-side-depth', Path('sealed-delivery')):
+              if path.exists(): shutil.rmtree(path)
+          PY
