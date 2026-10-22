@@ -224,3 +224,24 @@ def test_partial_ledger_identity_is_not_silently_ignored():
     result = evaluate_compound_chain([row], required_fills=1, evidence_mode="paper_upper_bound")
     assert result["fills"] == 0
     assert result["failure_reason"] == "ledger_identity_incomplete"
+
+
+def test_ten_rows_without_prior_release_are_not_a_continuous_compound_canary():
+    # Ten independent-looking rows must not pass merely because their cash
+    # amounts happen to fit.  The next entry has to occur after the prior
+    # entry's release timestamp on the same evolving ledger.
+    events = [event(i) for i in range(10)]
+    for i, row in enumerate(events):
+        row["entry_ts"] = str(i * 10)
+        row["cash_available_ts"] = str(i * 10 + 900)
+        row["ledger_id"] = "ledger-1"
+        row["chain_id"] = "chain-1"
+    result = evaluate_compound_chain(
+        events,
+        required_fills=10,
+        minimum_order="4",
+        evidence_mode="paper_upper_bound",
+        require_prior_cash_release=True,
+    )
+    assert result["fills"] == 1
+    assert result["failure_reason"] == "prior_cash_release_must_precede_next_entry"
