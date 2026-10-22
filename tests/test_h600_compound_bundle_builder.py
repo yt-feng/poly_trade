@@ -92,3 +92,16 @@ class H600CompoundBundleBuilderTests(unittest.TestCase):
             buffer.append(row)
         with self.assertRaisesRegex(ValueError, "capture_already_complete"):
             buffer.append(capture["rows"][0])
+
+    def test_capture_buffer_rejects_incomplete_execution_provenance_early(self):
+        capture = capture_fixture()
+        buffer = H600CompoundCapture(capture)
+        incomplete = copy.deepcopy(capture["rows"][0])
+        incomplete.pop("depth_ref")
+        with self.assertRaisesRegex(ValueError, "depth_ref_required"):
+            buffer.append(incomplete)
+
+        incomplete = copy.deepcopy(capture["rows"][0])
+        incomplete.pop("strategy_decision")
+        with self.assertRaisesRegex(ValueError, "strategy_decision_required"):
+            buffer.append(incomplete)

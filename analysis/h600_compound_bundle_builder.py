@@ -192,7 +192,19 @@ class H600CompoundCapture:
         expected_sequence = len(self._rows) + 1
         if candidate.get("sequence_no") != expected_sequence:
             raise ValueError("sequence_no_must_advance_without_reset")
-        for field in ("balance_checkpoint_id", "entry_ts_ms", "cash_available_ts_ms"):
+        # Reject an incomplete row at capture time.  Waiting until the tenth
+        # row reaches the bundle validator wastes a whole observation window
+        # and can leave a historical lifecycle row looking more admissible
+        # than it is.  These fields are the minimum owner-bundle join needed
+        # before a row may enter the continuous H600 buffer.
+        for field in (
+            "trade_id", "transaction_ref", "orderfilled_event_id",
+            "source_ref", "depth_ref", "strategy_decision",
+            "strategy_decision_ref", "settlement_receipt_id",
+            "cash_release_receipt_id", "balance_checkpoint_id",
+            "previous_checkpoint_id", "cash_reconciled",
+            "independent_checkpoint", "entry_ts_ms", "cash_available_ts_ms",
+        ):
             _required(candidate, field)
         try:
             entry_ts_ms = int(str(candidate["entry_ts_ms"]))
