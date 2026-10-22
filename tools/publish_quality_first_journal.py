@@ -130,8 +130,14 @@ def main():
         result = publish(args.source, args.repository, args.run_id, args.run_attempt, args.recipient_id, cell_id=args.cell_id)
         print(json.dumps(result, sort_keys=True))
         return 0
-    except Exception:
-        print('{"status":"publication_failed","plaintext_published":false}')
+    except Exception as error:
+        # The class name is safe operational telemetry; exception messages may
+        # contain paths, API payloads, or other sensitive publication details.
+        print(json.dumps({
+            'status': 'publication_failed',
+            'plaintext_published': False,
+            'error_class': type(error).__name__,
+        }, sort_keys=True))
         return 2
 
 
