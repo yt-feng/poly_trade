@@ -36,7 +36,7 @@ jobs:
       - name: Install research dependencies and validate H601 contract
         run: |
           python -m pip install --disable-pip-version-check -r requirements.txt
-          python -m pip install pytest pycryptodome
+          python -m pip install pytest pycryptodome cryptography
           python -m pytest -q tests/test_h601_favorite_path_depth.py tests/test_h600_favorite_side_depth.py tests/test_h561_online_depth_proxy.py tests/test_h508_cash_fraction_depth_tradeoff.py
       - name: Run the single pre-registered H601 replay
         run: |
