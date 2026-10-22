@@ -65,10 +65,12 @@ def _h508_paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
             })
     selection_stable = not selection_failures
     holdout_stable = not holdout_failures
-    fixed_policy = paper.get("fixed_fraction_policy")
+    is_h534 = str(paper.get("format", "")).startswith("old-clean-h534-")
+    fixed_policy = paper.get("dense_fixed_fraction_policy") if is_h534 else paper.get("fixed_fraction_policy")
+    expected_fraction = 0.55 if is_h534 else 0.5
     fixed_policy_ready = bool(
         isinstance(fixed_policy, dict)
-        and float(fixed_policy.get("gross_cash_fraction")) == 0.5
+        and float(fixed_policy.get("gross_cash_fraction")) == expected_fraction
         and fixed_policy.get("online_observable_policy") is True
         and fixed_policy.get("selection_all_ten") is True
         and fixed_policy.get("holdout_all_ten") is True
@@ -86,8 +88,13 @@ def _h508_paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
     }
     return {
         "protocol_consistent": protocol_ok,
-        "candidate_schema": "old-clean-h508-cash-fraction-depth-tradeoff-v1",
-        "candidates": {"h508_cash_fraction_depth_tradeoff": candidate},
+        "candidate_schema": (
+            "old-clean-h534-dense-cash-fraction-grid-v1"
+            if is_h534 else "old-clean-h508-cash-fraction-depth-tradeoff-v1"
+        ),
+        "candidates": {
+            "h534_dense_fixed_fraction_grid" if is_h534 else "h508_cash_fraction_depth_tradeoff": candidate
+        },
         "pooled_frontier_consistent": protocol_ok and selection_stable and holdout_stable and fixed_policy_ready and paper.get("holdout_gate_passed") is True,
         "selection_cell_failures": selection_failures,
         "selection_cells_stable": selection_stable,
@@ -99,7 +106,7 @@ def _h508_paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
 
 
 def _paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
-    if str(paper.get("format", "")).startswith("old-clean-h508-"):
+    if str(paper.get("format", "")).startswith(("old-clean-h508-", "old-clean-h534-")):
         return _h508_paper_frontier(paper)
     protocol = paper.get("protocol")
     if not isinstance(protocol, dict):

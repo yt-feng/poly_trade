@@ -14,6 +14,10 @@ from validate_polybolt_compound_bundle import (
     H530_STRATEGY_ID,
     H530_STRATEGY_PROFILE,
     H530_STRATEGY_VERSION,
+    H534_STRATEGY_CONFIG_SHA256,
+    H534_STRATEGY_ID,
+    H534_STRATEGY_PROFILE,
+    H534_STRATEGY_VERSION,
     H549_STRATEGY_CONFIG_SHA256,
     H549_STRATEGY_ID,
     H549_STRATEGY_PROFILE,
@@ -324,6 +328,22 @@ def test_fixed_half_cash_profile_is_explicitly_bound():
     assert legacy["failure_reason"] == "strategy_id_not_frozen"
     fixed = validate_bundle_document(doc, strategy_profile=H530_STRATEGY_PROFILE)
     assert fixed["offline_consistency_passed"] is True
+
+
+def test_dense_fixed_fraction_profile_is_distinct_and_bound():
+    doc = bundle()
+    doc["strategy"] = {
+        "id": H534_STRATEGY_ID,
+        "version": H534_STRATEGY_VERSION,
+        "config_sha256": H534_STRATEGY_CONFIG_SHA256,
+    }
+    configure_adaptive_fixture(doc, ["0.55"] * 10)
+    attach_strategy_trace(doc, ["0.55"] * 10, track_profits=False)
+    assert validate_bundle_document(doc, strategy_profile=H534_STRATEGY_PROFILE)["offline_consistency_passed"] is True
+    doc["strategy_decisions"][0]["cash_fraction"] = "0.5"
+    result = validate_bundle_document(doc, strategy_profile=H534_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "strategy_decision_trace_hash_mismatch"
 
 
 def test_known_profile_requires_a_per_fill_strategy_trace():

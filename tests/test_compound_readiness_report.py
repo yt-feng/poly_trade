@@ -60,6 +60,22 @@ def h508_paper_artifact(*, holdout_failure: bool = False) -> dict:
     }
 
 
+def h534_paper_artifact(*, holdout_failure: bool = False) -> dict:
+    artifact = h508_paper_artifact(holdout_failure=holdout_failure)
+    artifact["format"] = "old-clean-h534-dense-cash-fraction-grid-v1"
+    artifact.pop("fixed_fraction_policy")
+    artifact["dense_fixed_fraction_policy"] = {
+        "gross_cash_fraction": 0.55,
+        "online_observable_policy": True,
+        "selection_all_ten": not holdout_failure,
+        "holdout_all_ten": not holdout_failure,
+        "selection_min_fills": 10 if not holdout_failure else 9,
+        "holdout_min_fills": 10 if not holdout_failure else 9,
+    }
+    artifact["selected_fraction"] = 0.55
+    return artifact
+
+
 def state(*, bundle: bool = False, fills: int = 0, binding: bool = False, receipts: bool = False) -> dict:
     return {
         "actual_fills": fills,
@@ -172,3 +188,11 @@ def test_h508_without_online_fraction_policy_fails_closed():
     report = build_report(state(), artifact)
     assert report["paper_frontier"]["pooled_frontier_consistent"] is False
     assert "paper_executable_fraction_policy_missing_or_failed" in report["hard_blockers"]
+
+
+def test_report_consumes_h534_dense_fixed_fraction_contract():
+    report = build_report(state(), h534_paper_artifact())
+    assert report["paper_frontier"]["candidate_schema"] == "old-clean-h534-dense-cash-fraction-grid-v1"
+    assert report["paper_frontier"]["fixed_fraction_policy"]["gross_cash_fraction"] == 0.55
+    assert report["paper_frontier"]["fixed_fraction_policy_ready"] is True
+    assert report["canary_ready"] is False

@@ -55,6 +55,7 @@ FROZEN_MINIMUM_ENTRY_NOTIONAL_USD = Decimal("5")
 MINIMUM_ENTRY_COST_FOR_LEDGER = Decimal("0.0000001")
 DEFAULT_STRATEGY_PROFILE = "h30_legacy"
 H530_STRATEGY_PROFILE = "h530_fixed_half_cash"
+H534_STRATEGY_PROFILE = "h534_fixed_fraction_055"
 H546_STRATEGY_PROFILE = "h546_adaptive_one_profit"
 H549_STRATEGY_PROFILE = "h549_adaptive_one_profit"
 H561_STRATEGY_PROFILE = "h561_online_depth_proxy"
@@ -69,6 +70,7 @@ H600_STRATEGY_PROFILE = "h600_favorite_side_depth"
 PRIVATE_STRATEGY_PROFILE = "private_exact"
 TRACE_PROFILES = {
     H530_STRATEGY_PROFILE,
+    H534_STRATEGY_PROFILE,
     H546_STRATEGY_PROFILE,
     H549_STRATEGY_PROFILE,
     H561_STRATEGY_PROFILE,
@@ -95,6 +97,22 @@ H530_STRATEGY_CONFIG = {
     "policy": "fixed fraction of currently available cash",
     "entry_policy_is_online_observable": True,
     "taker_fee_rate": "0.07",
+    "cash_release_delay_seconds": "900",
+    "minimum_order_usd": "5",
+    "minimum_order_shares": "5",
+    "required_fills": 10,
+}
+H534_STRATEGY_ID = "h534_fixed_fraction_055"
+H534_STRATEGY_VERSION = "h534-old-clean-fixed-055-v1"
+H534_STRATEGY_CONFIG = {
+    "candidate": "H534_DENSE_FIXED_CASH_FRACTION_GRID",
+    "source_commit": "bbda5f2050685f63153621a54641ebdfab943487",
+    "signal": "H434_H452_FIXED_SIGNAL_UNDER_H506_STRESS",
+    "gross_cash_fraction": "0.55",
+    "policy": "fixed fraction of currently available cash",
+    "entry_policy_is_online_observable": True,
+    "taker_fee_rate": "0.07",
+    "settlement_seconds": "300",
     "cash_release_delay_seconds": "900",
     "minimum_order_usd": "5",
     "minimum_order_shares": "5",
@@ -234,6 +252,7 @@ def _strategy_profile(
     profiles = {
         DEFAULT_STRATEGY_PROFILE: (FROZEN_STRATEGY_ID, FROZEN_STRATEGY_VERSION, FROZEN_STRATEGY_CONFIG),
         H530_STRATEGY_PROFILE: (H530_STRATEGY_ID, H530_STRATEGY_VERSION, H530_STRATEGY_CONFIG),
+        H534_STRATEGY_PROFILE: (H534_STRATEGY_ID, H534_STRATEGY_VERSION, H534_STRATEGY_CONFIG),
         H546_STRATEGY_PROFILE: (H546_STRATEGY_ID, H546_STRATEGY_VERSION, H546_STRATEGY_CONFIG),
         H549_STRATEGY_PROFILE: (H549_STRATEGY_ID, H549_STRATEGY_VERSION, H549_STRATEGY_CONFIG),
         H561_STRATEGY_PROFILE: (H561_STRATEGY_ID, H561_STRATEGY_VERSION, H561_STRATEGY_CONFIG),
@@ -251,6 +270,9 @@ FROZEN_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
 ).hexdigest()
 H530_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
     json.dumps(H530_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+H534_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
+    json.dumps(H534_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
 ).hexdigest()
 H546_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
     json.dumps(H546_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -956,7 +978,7 @@ def _validate_strategy_decision_trace(
                 )
             )
             expected_profit_count = None
-        elif strategy_profile == H530_STRATEGY_PROFILE:
+        elif strategy_profile in {H530_STRATEGY_PROFILE, H534_STRATEGY_PROFILE}:
             expected_fraction = _decimal(strategy_config["gross_cash_fraction"], "gross_cash_fraction")
             expected_profit_count = 0
         else:
@@ -988,7 +1010,7 @@ def _validate_strategy_decision_trace(
             or abs(actual_fee - expected_fee) > STRATEGY_SIZE_TOLERANCE
         ):
             return "strategy_entry_size_mismatch"
-        if strategy_profile not in {H530_STRATEGY_PROFILE, *DEPTH_TRACE_PROFILES}:
+        if strategy_profile not in {H530_STRATEGY_PROFILE, H534_STRATEGY_PROFILE, *DEPTH_TRACE_PROFILES}:
             payout = _decimal(row.get("payout"), "payout")
             entry_cost = _decimal(row.get("entry_cost"), "entry_cost")
             fee = _decimal(row.get("fee"), "fee")
@@ -1167,7 +1189,7 @@ def main() -> int:
     parser.add_argument("--required-fills", type=int, default=10)
     parser.add_argument(
         "--strategy-profile",
-        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, H561_STRATEGY_PROFILE, H578_STRATEGY_PROFILE, H600_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
+        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H534_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, H561_STRATEGY_PROFILE, H578_STRATEGY_PROFILE, H600_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
         default=DEFAULT_STRATEGY_PROFILE,
     )
     parser.add_argument("--private-strategy-config", type=Path)

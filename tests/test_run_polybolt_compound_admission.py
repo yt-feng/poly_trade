@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from validate_polybolt_compound_bundle import validate_bundle_document
 from validate_polybolt_compound_bundle import H530_STRATEGY_CONFIG_SHA256, H530_STRATEGY_ID, H530_STRATEGY_PROFILE, H530_STRATEGY_VERSION
+from validate_polybolt_compound_bundle import H534_STRATEGY_CONFIG_SHA256, H534_STRATEGY_ID, H534_STRATEGY_PROFILE, H534_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H546_STRATEGY_CONFIG_SHA256, H546_STRATEGY_ID, H546_STRATEGY_PROFILE, H546_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H549_STRATEGY_CONFIG_SHA256, H549_STRATEGY_ID, H549_STRATEGY_PROFILE, H549_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H561_STRATEGY_CONFIG_SHA256, H561_STRATEGY_ID, H561_STRATEGY_PROFILE, H561_STRATEGY_VERSION, _expected_entry_terms
@@ -66,6 +67,27 @@ def test_tool_accepts_the_fixed_half_cash_profile_only_when_explicit(tmp_path):
     result = json.loads(output.read_text())
     assert result["offline_consistency_passed"] is True
     assert result["strategy_profile"] == H530_STRATEGY_PROFILE
+
+
+def test_tool_accepts_the_dense_fixed_fraction_profile_only_when_explicit(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    document = bundle()
+    document["strategy"] = {
+        "id": H534_STRATEGY_ID,
+        "version": H534_STRATEGY_VERSION,
+        "config_sha256": H534_STRATEGY_CONFIG_SHA256,
+    }
+    configure_adaptive_fixture(document, ["0.55"] * 10)
+    attach_strategy_trace(document, ["0.55"] * 10, track_profits=False)
+    source.write_text(json.dumps(document))
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", H534_STRATEGY_PROFILE,
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is True
+    assert result["strategy_profile"] == H534_STRATEGY_PROFILE
 
 
 def test_tool_accepts_the_frozen_h546_adaptive_profile(tmp_path):
@@ -290,6 +312,7 @@ def test_workflow_never_uploads_private_bundle_or_enables_orders():
     assert "default: h578_online_depth_proxy" in text
     assert "inputs.strategy_profile || 'h578_online_depth_proxy'" in text
     assert "h530_fixed_half_cash" in text
+    assert "h534_fixed_fraction_055" in text
     assert "h546_adaptive_one_profit" in text
     assert "h549_adaptive_one_profit" in text
     assert "h561_online_depth_proxy" in text
