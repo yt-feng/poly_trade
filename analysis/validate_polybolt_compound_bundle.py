@@ -301,6 +301,11 @@ def _fail(reason: str, *, event_count: int = 0, source_event_count: int = 0) -> 
         **OFFLINE_VERIFICATION,
         "offline_consistency_passed": False,
         "failure_reason": reason,
+        "capital_floor_diagnostic": {
+            "protocol": "h643_capital_buffer_loss_ladder_v1",
+            "same_evolving_ledger": True,
+            "status": "not_evaluated",
+        },
     }
 
 
@@ -1325,6 +1330,14 @@ def validate_bundle_document(
         "failure_reason": result.get("failure_reason"),
         "ending_cash": result.get("ending_cash"),
         "net_pnl": result.get("net_pnl"),
+        "capital_floor_diagnostic": result.get(
+            "capital_floor_diagnostic",
+            {
+                "protocol": "h643_capital_buffer_loss_ladder_v1",
+                "same_evolving_ledger": True,
+                "status": "not_evaluated",
+            },
+        ),
         "owner_scoped": bool(result.get("owner_scoped", False)),
         "identity_complete": bool(result.get("identity_complete", False)),
         "same_ledger_identity_verified": True,

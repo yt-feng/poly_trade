@@ -87,6 +87,13 @@ def evaluate_compound_chain(
     previous_entry: Decimal | None = None
     previous_cash_available: Decimal | None = None
     stopped_after_required = False
+    # Keep a redacted, sequence-level capital diagnostic alongside the normal
+    # failure reason.  It deliberately contains no receipt, owner, market, or
+    # wallet identifiers: the admission layer only needs to know where the
+    # single evolving cash ledger first stopped funding the next entry.
+    capital_failure_sequence: int | None = None
+    capital_failure_cash: Decimal | None = None
+    capital_failure_required_cash: Decimal | None = None
     # Paper rows normally do not carry account identities.  When a caller
     # does provide them, preserve the same-ledger contract instead of silently
     # accepting two reset ledgers concatenated into one ten-row sequence.
@@ -176,10 +183,16 @@ def evaluate_compound_chain(
         # next compound entry.
         if cash < floor:
             failure_reason = "insufficient_cash_for_minimum_order"
+            capital_failure_sequence = index
+            capital_failure_cash = cash
+            capital_failure_required_cash = floor
             break
         reserved = cost + fee
         if reserved > cash:
             failure_reason = "insufficient_cash_for_next_entry"
+            capital_failure_sequence = index
+            capital_failure_cash = cash
+            capital_failure_required_cash = reserved
             break
         cash_before = cash
         cash -= reserved
@@ -209,6 +222,22 @@ def evaluate_compound_chain(
     if failure_reason is None and cash < start_cash:
         failure_reason = "compound_chain_not_growth_positive"
     canary_gate_passed = paper_replay_passed and evidence_mode == "authenticated"
+    capital_floor_diagnostic = {
+        "protocol": "h643_capital_buffer_loss_ladder_v1",
+        "same_evolving_ledger": True,
+        "minimum_entry_cash": str(floor),
+        "first_unfunded_sequence": capital_failure_sequence,
+        "cash_before_first_unfunded_entry": (
+            str(capital_failure_cash) if capital_failure_cash is not None else None
+        ),
+        "required_cash_for_first_unfunded_entry": (
+            str(capital_failure_required_cash)
+            if capital_failure_required_cash is not None
+            else None
+        ),
+        "minimum_cash_before_admitted_entry": str(minimum_cash_before_entry),
+        "status": "blocked" if capital_failure_sequence is not None else "not_blocked",
+    }
     return {
         "required_fills": int(required_fills),
         "fills": fills,
@@ -222,5 +251,6 @@ def evaluate_compound_chain(
         "paper_replay_passed": paper_replay_passed,
         "gate_passed": canary_gate_passed,
         "failure_reason": failure_reason,
+        "capital_floor_diagnostic": capital_floor_diagnostic,
         "ledger": rows,
     }

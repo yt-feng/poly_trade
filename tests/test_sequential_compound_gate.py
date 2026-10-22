@@ -70,6 +70,13 @@ def test_resetting_cash_between_fills_cannot_hide_an_unfunded_next_entry():
     result = evaluate_compound_chain(events, required_fills=2)
     assert result["fills"] == 1
     assert result["failure_reason"] == "insufficient_cash_for_next_entry"
+    diagnostic = result["capital_floor_diagnostic"]
+    assert diagnostic["protocol"] == "h643_capital_buffer_loss_ladder_v1"
+    assert diagnostic["same_evolving_ledger"] is True
+    assert diagnostic["first_unfunded_sequence"] == 2
+    assert diagnostic["cash_before_first_unfunded_entry"] == "5"
+    assert diagnostic["required_cash_for_first_unfunded_entry"] == "6"
+    assert diagnostic["status"] == "blocked"
 
 
 def test_free_cash_must_stay_at_minimum_order_before_each_entry():

@@ -92,6 +92,7 @@ RESULT_KEYS = (
     "actual_fills",
     "verified_canary_fills",
     "failure_reason",
+    "capital_floor_diagnostic",
     "owner_scoped",
     "identity_complete",
     "same_ledger_identity_verified",
@@ -112,6 +113,11 @@ def _failure(reason: str) -> dict[str, Any]:
         **OFFLINE_VERIFICATION,
         "offline_consistency_passed": False,
         "failure_reason": reason,
+        "capital_floor_diagnostic": {
+            "protocol": "h643_capital_buffer_loss_ladder_v1",
+            "same_evolving_ledger": True,
+            "status": "not_evaluated",
+        },
     })
     return result
 

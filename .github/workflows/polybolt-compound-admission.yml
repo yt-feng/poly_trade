@@ -126,7 +126,7 @@ jobs:
           PRIVATE_DIR="$RUNNER_TEMP/polybolt-compound-admission"
           mkdir -m 700 -p "$PRIVATE_DIR"
           cat > "$PRIVATE_DIR/result.json" <<'JSON'
-          {"offline_consistency_passed":false,"evidence_scope":"offline_bundle_consistency_only","failure_reason":"bundle_secret_unavailable","fills":0,"required_fills":10,"consecutive":false,"same_ledger_identity_verified":false,"cash_amounts_reconciled":false,"source_fill_references_verified":false,"actual_fills":0,"verified_canary_fills":0}
+          {"offline_consistency_passed":false,"evidence_scope":"offline_bundle_consistency_only","failure_reason":"bundle_secret_unavailable","fills":0,"required_fills":10,"consecutive":false,"same_ledger_identity_verified":false,"cash_amounts_reconciled":false,"source_fill_references_verified":false,"actual_fills":0,"verified_canary_fills":0,"capital_floor_diagnostic":{"protocol":"h643_capital_buffer_loss_ladder_v1","same_evolving_ledger":true,"status":"not_evaluated"}}
           JSON
 
       - name: Seal redacted admission result

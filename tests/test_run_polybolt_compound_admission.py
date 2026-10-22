@@ -48,6 +48,8 @@ def test_tool_redacts_owner_and_ledger_identifiers(tmp_path):
     assert "ledger_id" not in result
     assert "chain_id" not in result
     assert "ending_cash" not in result
+    assert result["capital_floor_diagnostic"]["protocol"] == "h643_capital_buffer_loss_ladder_v1"
+    assert result["capital_floor_diagnostic"]["status"] == "not_blocked"
 
 
 def test_tool_auto_routes_the_default_frozen_identity(tmp_path):
@@ -366,6 +368,7 @@ def test_tool_records_missing_bundle_without_fabricating_evidence(tmp_path):
     assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "bundle_secret_unavailable"
     assert_unverified_receipts(result)
+    assert result["capital_floor_diagnostic"]["status"] == "not_evaluated"
 
 
 def test_tool_seals_generic_failure_for_invalid_json(tmp_path):
@@ -422,6 +425,7 @@ def test_workflow_never_uploads_private_bundle_or_enables_orders():
     assert "live_orders_enabled': False" in text
     assert "actual_fills': 0" in text
     assert "POLYBOLT_COMPOUND_BUNDLE_B64" not in text.split("name: Publish only encrypted admission result", 1)[1]
+    assert "h643_capital_buffer_loss_ladder_v1" in text
 
 
 @pytest.mark.parametrize("valid", [True, False])
