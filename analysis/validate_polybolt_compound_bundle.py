@@ -626,6 +626,13 @@ def _validate_same_ledger(
     seen_receipts: set[str] = set()
     seen_strategy_refs: set[str] = set()
     seen_depth_refs: set[tuple[str, str]] = set()
+    # The account event is only one leg of the execution join.  Keep the
+    # trade, transaction and canonical OrderFilled identities distinct across
+    # all ten rows so a direct validator caller cannot silently replay one
+    # execution under several sequence numbers.
+    seen_trade_ids: set[str] = set()
+    seen_transaction_refs: set[str] = set()
+    seen_orderfilled_event_ids: set[str] = set()
     previous_after = initial_cash
     previous_checkpoint = starting_checkpoint
     previous_entry_ms: int | None = None
@@ -683,6 +690,18 @@ def _validate_same_ledger(
             window = windows.get(market_id)
             if window is None or not (window["window_start_ms"] <= entry_ms <= window["window_end_ms"]):
                 return "entry_outside_market_window"
+            trade_id = _text(row.get("trade_id"), "trade_id")
+            if trade_id in seen_trade_ids:
+                return "trade_id_reused"
+            seen_trade_ids.add(trade_id)
+            transaction_ref = _text(row.get("transaction_ref"), "transaction_ref")
+            if transaction_ref in seen_transaction_refs:
+                return "transaction_ref_reused"
+            seen_transaction_refs.add(transaction_ref)
+            orderfilled_event_id = _text(row.get("orderfilled_event_id"), "orderfilled_event_id")
+            if orderfilled_event_id in seen_orderfilled_event_ids:
+                return "orderfilled_event_id_reused"
+            seen_orderfilled_event_ids.add(orderfilled_event_id)
             source_ref = row.get("source_ref")
             if not isinstance(source_ref, dict):
                 return "source_ref_required_per_fill"
@@ -763,7 +782,7 @@ def _validate_same_ledger(
                 return "settlement_receipt_not_in_bundle"
             if settlement["sequence_no"] != sequence or settlement["market_id"] != market_id:
                 return "settlement_receipt_link_mismatch"
-            if settlement["settlement_transaction_hash"] != _text(row.get("transaction_ref"), "transaction_ref"):
+            if settlement["settlement_transaction_hash"] != transaction_ref:
                 return "settlement_transaction_mismatch"
             if settlement["settled_ts_ms"] < entry_ms:
                 return "settlement_before_entry"

@@ -216,6 +216,7 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
         "status": "confirmed",
         "trade_id": f"trade-{i}",
         "transaction_ref": f"tx-{i}",
+        "orderfilled_event_id": f"orderfilled-{i}",
         "settlement_receipt_id": f"settlement-{i}",
         "cash_release_receipt_id": f"cash-release-{i}",
         "execution_role": "TAKER",
@@ -315,6 +316,21 @@ def test_supplied_source_and_cash_chain_pass_offline_consistency_only():
     assert result["cash_amounts_reconciled"] is True
     assert result["market_window_count"] == 1
     assert "owner-1" not in str(result)
+
+
+@pytest.mark.parametrize("field", ["trade_id", "transaction_ref", "orderfilled_event_id"])
+def test_execution_identity_is_required_and_unique(field):
+    doc = bundle()
+    del doc["events"][0][field]
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == f"{field}_required"
+
+    doc = bundle()
+    doc["events"][1][field] = doc["events"][0][field]
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == f"{field}_reused"
 
 
 def test_fixed_half_cash_profile_is_explicitly_bound():
