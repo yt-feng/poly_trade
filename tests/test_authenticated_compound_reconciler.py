@@ -75,6 +75,29 @@ def test_settled_zero_payout_can_continue_on_same_ledger_when_next_entry_is_fund
     assert result["ending_cash"] == "14.0"
 
 
+def test_negative_post_entry_balance_reports_first_unfunded_sequence():
+    rows = [row(i) for i in range(10)]
+    rows[0]["payout"] = "0"
+    rows[0]["fee"] = "0.2"
+    rows[0]["balance_after"] = "4.8"
+    rows[1]["released_cash_since_previous_entry"] = "0"
+    rows[1]["balance_before"] = "4.8"
+    rows[1]["balance_after"] = "-0.2"
+    result = reconcile_authenticated_chain(
+        rows,
+        owner="owner-1",
+        starting_checkpoint_id="opening",
+        closing_balance_checkpoint_id="closing",
+        closing_balance="15.00",
+    )
+    assert result["failure_reason"] == "negative_ledger_amount"
+    diagnostic = result["capital_floor_diagnostic"]
+    assert diagnostic["first_unfunded_sequence"] == 2
+    assert diagnostic["cash_before_first_unfunded_entry"] == "4.8"
+    assert diagnostic["required_cash_for_first_unfunded_entry"] == "5"
+    assert diagnostic["status"] == "blocked"
+
+
 def test_owner_mismatch_fails_closed_before_cash_replay():
     result = reconcile_authenticated_chain(
         [row(i, owner="other") for i in range(10)], owner="owner-1",

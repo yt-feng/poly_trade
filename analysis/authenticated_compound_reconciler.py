@@ -33,6 +33,25 @@ def _decimal(value: Any, field: str) -> Decimal:
     return parsed
 
 
+def _capital_floor_diagnostic(
+    sequence: int,
+    cash_before: Decimal,
+    required_cash: Decimal,
+    minimum_order: Any,
+) -> dict[str, Any]:
+    """Return identifier-free funding diagnostics for the first blocked row."""
+    return {
+        "protocol": "h643_capital_buffer_loss_ladder_v1",
+        "same_evolving_ledger": True,
+        "minimum_entry_cash": str(minimum_order),
+        "first_unfunded_sequence": int(sequence),
+        "cash_before_first_unfunded_entry": str(cash_before),
+        "required_cash_for_first_unfunded_entry": str(required_cash),
+        "minimum_cash_before_admitted_entry": str(cash_before),
+        "status": "blocked",
+    }
+
+
 def reconcile_authenticated_chain(
     events: Iterable[dict[str, Any]],
     *,
@@ -333,7 +352,22 @@ def reconcile_authenticated_chain(
         if balance_after != balance_before - cost - fee:
             return {"gate_passed": False, "fills": 0, "failure_reason": "balance_after_arithmetic_mismatch", "owner_scoped": True, "identity_complete": False}
         if balance_after < 0 or released < 0 or cost < 0 or fee < 0 or payout < 0:
-            return {"gate_passed": False, "fills": 0, "failure_reason": "negative_ledger_amount", "owner_scoped": True, "identity_complete": False}
+            result = {
+                "gate_passed": False,
+                "fills": 0,
+                "failure_reason": "negative_ledger_amount",
+                "owner_scoped": True,
+                "identity_complete": False,
+            }
+            # A negative post-entry balance is the authenticated form of the
+            # same capital-floor break handled by the shared paper gate.  Keep
+            # the first failing sequence and required reserve, while omitting
+            # all owner, receipt, market and transaction identifiers.
+            if balance_after < 0 and cost >= 0 and fee >= 0:
+                result["capital_floor_diagnostic"] = _capital_floor_diagnostic(
+                    index + 1, balance_before, cost + fee, minimum_order
+                )
+            return result
         expected_released = Decimal("0")
         due_receipt_ids: set[str] = set()
         for due_ts, due_amount, due_receipt_id in scheduled_releases:
