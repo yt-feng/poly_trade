@@ -13,5 +13,18 @@ def test_owner_bundle_still_requires_settlement_and_cash_checkpoints():
     result = audit()
     required = set(result["required_owner_bundle_fields"])
     assert {"settlement_receipt", "cash_release_receipt", "independent_balance_checkpoint"} <= required
+    assert {
+        "orderfilled_event_id",
+        "source_ref",
+        "depth_ref",
+        "strategy_decision_ref",
+        "strategy_decision_sha256",
+        "previous_checkpoint_id",
+        "balance_checkpoint_id",
+        "cash_release_receipt_id",
+        "settlement_receipt_id",
+        "cash_reconciled",
+        "independent_checkpoint",
+    } <= required
     assert result["actual_fills"] == 0
     assert result["verified_canary_fills"] == 0

@@ -120,6 +120,23 @@ def audit() -> dict[str, Any]:
             "transaction_hash",
             "match_time",
             "last_update",
+            # A confirmed user-stream trade is only one part of the v2 row.
+            # These execution-time references must be captured before entry so
+            # a historical account scan cannot be mistaken for a full bundle.
+            "orderfilled_event_id",
+            "source_ref",
+            "depth_ref",
+            "strategy_decision_ref",
+            "strategy_decision_sha256",
+            "execution_role",
+            "trader_side_source",
+            "fee_rate",
+            "previous_checkpoint_id",
+            "balance_checkpoint_id",
+            "cash_release_receipt_id",
+            "settlement_receipt_id",
+            "cash_reconciled",
+            "independent_checkpoint",
             "settlement_receipt",
             "cash_release_receipt",
             "independent_balance_checkpoint",
