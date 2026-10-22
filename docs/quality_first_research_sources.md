@@ -87,6 +87,8 @@ For a future account-level admission, `analysis/validate_polybolt_compound_bundl
 
 The H600 favorite-side/depth candidate has a separate `h600_favorite_side_depth` profile. Its per-fill trace must bind the selected-side two-minute ask to the raw depth snapshot and keep that ask at or above `0.50`; a plain H578 depth trace is rejected. This preserves the extra paper filter at the future owner-bundle boundary.
 
+The H600 route is now frozen separately in `analysis/frozen_h600_canary_candidate_manifest.py`: its strategy id/version/config digest, old-clean source commit, 3/5/7 depth map, favorite ask floor, $10 single-ledger protocol and `auto_trace_bound` admission identity are checked together. The manifest keeps `gate_passed=false` and all Canary counters at zero; it freezes routing without promoting paper rows.
+
 The H534 dense fixed-fraction candidate has a separate `h534_fixed_fraction_055` profile. Its ten per-fill traces must carry the fixed `0.55` fraction and zero prior-profit boost state; the H530 `0.50` route and adaptive H546/H549 routes cannot be relabelled as H534. This keeps the old-clean cash-fraction result bound to its own paper protocol before any owner bundle is admitted.
 
 **Capture-to-bundle boundary (2026-10-22).** Historical account scans such as H300/H353 can corroborate activity and decode settlement transfers, but they do not contain the execution-time TWAP source reference, pre-entry CLOB depth, per-fill frozen strategy trace or distinct canonical `OrderFilled` event required by the v2 compound row. A future owner bundle must capture those fields at entry and link them to the later confirmed trade, settlement, release and balance checkpoint; an account-history row by itself cannot be promoted to a Canary.
