@@ -75,4 +75,4 @@ jobs:
         run: |
           echo '## H498 frozen Canary candidate manifest' >> "$GITHUB_STEP_SUMMARY"
           echo '- Frozen old-clean H447/H434 parameters and one-ledger consecutive ten-fill admission contract.' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Paper evidence remains diagnostic; live gate remains closed until H497 owner-scoped V2 receipts reconcile.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Paper evidence remains diagnostic; live gate remains closed until owner-scoped taker V2 receipts reconcile through the authenticated PolyBolt taker adapter.' >> "$GITHUB_STEP_SUMMARY"
