@@ -1,0 +1,107 @@
+name: H623 old-clean H600 cash-release sensitivity
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Pinned old-clean source commit
+        required: true
+        default: bbda5f2050685f63153621a54641ebdfab943487
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout strategy code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout pinned old-clean source
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: ${{ inputs.source_commit }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy scikit-learn pytest pycryptodome
+      - name: Validate H623 contract
+        run: |
+          python -m py_compile analysis/h623_h600_cash_release_sensitivity.py
+          python -m pytest -q tests/test_h623_h600_cash_release_sensitivity.py tests/test_h600_favorite_side_depth.py tests/test_h561_online_depth_proxy.py tests/test_h508_cash_fraction_depth_tradeoff.py
+      - name: Run H623 on pinned old-clean source
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h623-h600-cash-release"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h623_h600_cash_release_sensitivity.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "${{ inputs.source_commit }}" \
+            --output "$PRIVATE_DIR/results" > "$PRIVATE_DIR/analysis-output.txt"
+      - name: Seal and publish encrypted H623 journal
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h623-h600-cash-release"
+          python - "$PRIVATE_DIR" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          recipient = research_vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          recipient_id = recipient['recipient_id']
+          research_vault.validate_recipient(recipient, recipient_id)
+          results = private / 'results'
+          payload = {
+              'format': 'old-clean-h623-h600-cash-release-sensitivity-sealed-v1',
+              'preregistration': {
+                  'hypothesis_id': 'H623_H600_CASH_RELEASE_CLOCK_SENSITIVITY',
+                  'source_commit': os.environ['SOURCE_COMMIT'],
+                  'rule': 'H600 favorite-side floor plus H578 3/5/7 depth map; only cash release clock 300/600/900 seconds changes',
+                  'frozen_protocol_delay_seconds': 900.0,
+                  'single_evolving_cash_ledger': True,
+                  'prior_cash_release_required': True,
+                  'no_reset': True,
+                  'no_cross_window_concatenation': True,
+                  'required_consecutive_fills': 10,
+              },
+              'summary': json.loads((results / 'summary.json').read_text()),
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+          RECIPIENT_ID="$(python -c 'import json; print(json.load(open("research_vault/recipient.json"))["recipient_id"])')"
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RECIPIENT_ID" \
+            --cell-id h623-h600-cash-release
+      - name: Redacted summary and cleanup
+        if: always()
+        run: |
+          echo '## H623 H600 cash-release sensitivity' >> "$GITHUB_STEP_SUMMARY"
+          echo '- H600 entry, favorite-side filter, H578 3/5/7 depth map, fee, slippage and one-ledger protocol stayed fixed; only the diagnostic release clock changed.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Detailed metrics remain encrypted; no live orders or account access are enabled.' >> "$GITHUB_STEP_SUMMARY"
+          rm -rf "$RUNNER_TEMP/h623-h600-cash-release" sealed-delivery
+
