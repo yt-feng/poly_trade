@@ -1,0 +1,111 @@
+name: H651 fixed H159 high-growth holdout
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Pinned old-clean source commit
+        required: true
+        default: bbda5f2050685f63153621a54641ebdfab943487
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout strategy code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout pinned old-clean source
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: ${{ inputs.source_commit }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install research and vault dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy scikit-learn pytest pycryptodome
+      - name: Validate H651 contract
+        run: |
+          python -m py_compile analysis/h651_h159_fixed_holdout.py
+          python -m pytest -q tests/test_h651_h159_fixed_holdout.py tests/test_h159_fraction_ladder_exact_target_chain.py tests/test_sequential_compound_gate.py
+      - name: Run fixed H651 holdout on pinned old-clean source
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h651-h159-fixed-holdout"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h651_h159_fixed_holdout.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "${{ inputs.source_commit }}" \
+            --output "$PRIVATE_DIR/results" > "$PRIVATE_DIR/analysis-output.txt"
+      - name: Seal and publish encrypted H651 journal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h651-h159-fixed-holdout"
+          python - "$PRIVATE_DIR" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          recipient = research_vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          recipient_id = recipient['recipient_id']
+          research_vault.validate_recipient(recipient, recipient_id)
+          results = private / 'results'
+          payload = {
+              'format': 'old-clean-h651-h159-fixed-holdout-sealed-v1',
+              'preregistration': {
+                  'hypothesis_id': 'H651_H159_FIXED_HIGH_GROWTH_HOLDOUT',
+                  'source_commit': os.environ['SOURCE_COMMIT'],
+                  'fixed_strategy': 'classic_breakout_up__fraction_0p80',
+                  'selection_origin': 'H159 selection-best; fixed before reading holdout',
+                  'single_evolving_cash_ledger': True,
+                  'prior_cash_release_required': True,
+                  'no_reset': True,
+                  'no_cross_window_concatenation': True,
+                  'required_consecutive_fills': 10,
+                  'holdout_tuning': False,
+              },
+              'summary': json.loads((results / 'summary.json').read_text()),
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'sources': [
+                  {'title': 'The Anatomy of a Decentralized Prediction Market', 'url': 'https://arxiv.org/abs/2604.24366'},
+                  {'title': 'OpenMarket', 'url': 'https://arxiv.org/abs/2607.26245'},
+              ],
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+          RECIPIENT_ID="$(python -c 'import json; print(json.load(open("research_vault/recipient.json"))["recipient_id"])')"
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RECIPIENT_ID" \
+            --cell-id h651-h159-fixed-holdout
+      - name: Redacted summary and cleanup
+        if: always()
+        run: |
+          echo '## H651 fixed H159 high-growth holdout' >> "$GITHUB_STEP_SUMMARY"
+          echo '- The H159 selection-best fraction was fixed before holdout; no target or threshold tuning was performed.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Detailed metrics remain encrypted; no live orders or account access are enabled.' >> "$GITHUB_STEP_SUMMARY"
+          rm -rf "$RUNNER_TEMP/h651-h159-fixed-holdout" sealed-delivery
