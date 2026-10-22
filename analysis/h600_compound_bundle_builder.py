@@ -92,7 +92,7 @@ def _normalize_row(raw: Mapping[str, Any], trace: dict[str, Any]) -> dict[str, A
     # half-assembled document whose missing execution identity or cash links
     # are discovered only by the later v2 validator.
     for field in (
-        "trade_id", "transaction_ref", "orderfilled_event_id",
+        "order_id", "order_status", "trade_id", "transaction_ref", "orderfilled_event_id",
         "settlement_receipt_id", "cash_release_receipt_id",
         "balance_checkpoint_id", "previous_checkpoint_id",
         "cash_reconciled", "independent_checkpoint",
@@ -181,6 +181,7 @@ class H600CompoundCapture:
         self._header.pop("rows", None)
         self._rows: list[dict[str, Any]] = []
         self._seen: dict[str, set[str]] = {
+            "order_id": set(),
             "trade_id": set(),
             "transaction_ref": set(),
             "orderfilled_event_id": set(),
@@ -208,7 +209,7 @@ class H600CompoundCapture:
         # than it is.  These fields are the minimum owner-bundle join needed
         # before a row may enter the continuous H600 buffer.
         for field in (
-            "trade_id", "transaction_ref", "orderfilled_event_id",
+            "order_id", "order_status", "trade_id", "transaction_ref", "orderfilled_event_id",
             "source_ref", "depth_ref", "strategy_decision",
             "strategy_decision_ref", "settlement_receipt_id",
             "cash_release_receipt_id", "balance_checkpoint_id",

@@ -70,7 +70,7 @@ class H600CompoundBundleBuilderTests(unittest.TestCase):
             build_h600_bundle(capture)
 
     def test_builder_rejects_incomplete_execution_identity_before_document_build(self):
-        for field in ("trade_id", "transaction_ref", "orderfilled_event_id", "settlement_receipt_id"):
+        for field in ("order_id", "order_status", "trade_id", "transaction_ref", "orderfilled_event_id", "settlement_receipt_id"):
             capture = capture_fixture()
             capture["rows"][0].pop(field)
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, f"{field}_required"):

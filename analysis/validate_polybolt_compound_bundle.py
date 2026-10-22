@@ -589,6 +589,7 @@ def _validate_same_ledger(
     settlement_by_id: dict[str, dict[str, Any]],
     *,
     required_fills: int,
+    require_order_identity: bool = False,
 ) -> str | None:
     """Require a literal ten-row, linked, amount-reconciled cash chain.
 
@@ -633,6 +634,7 @@ def _validate_same_ledger(
     seen_trade_ids: set[str] = set()
     seen_transaction_refs: set[str] = set()
     seen_orderfilled_event_ids: set[str] = set()
+    seen_order_ids: set[str] = set()
     previous_after = initial_cash
     previous_checkpoint = starting_checkpoint
     previous_entry_ms: int | None = None
@@ -702,6 +704,14 @@ def _validate_same_ledger(
             if orderfilled_event_id in seen_orderfilled_event_ids:
                 return "orderfilled_event_id_reused"
             seen_orderfilled_event_ids.add(orderfilled_event_id)
+            if require_order_identity:
+                order_id = _text(row.get("order_id"), "order_id")
+                if order_id in seen_order_ids:
+                    return "order_id_reused"
+                seen_order_ids.add(order_id)
+                order_status = _text(row.get("order_status"), "order_status").upper()
+                if order_status not in {"MATCHED", "ORDER_STATUS_MATCHED"}:
+                    return "order_status_must_be_matched"
             source_ref = row.get("source_ref")
             if not isinstance(source_ref, dict):
                 return "source_ref_required_per_fill"
@@ -1143,6 +1153,7 @@ def validate_bundle_document(
         depth_by_ref,
         settlement_by_id,
         required_fills=required_fills,
+        require_order_identity=strategy_profile == H600_STRATEGY_PROFILE,
     )
     if ledger_failure:
         return {

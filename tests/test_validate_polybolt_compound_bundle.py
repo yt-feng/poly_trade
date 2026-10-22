@@ -214,6 +214,8 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
         "previous_checkpoint_id": "opening" if i == 1 else f"balance-{i - 1}",
         "market_id": MARKET_ID,
         "status": "confirmed",
+        "order_id": f"order-{i}",
+        "order_status": "MATCHED",
         "trade_id": f"trade-{i}",
         "transaction_ref": f"tx-{i}",
         "orderfilled_event_id": f"orderfilled-{i}",
@@ -507,6 +509,27 @@ def test_h600_profile_binds_favorite_floor_and_depth_trace_separately():
     result = validate_bundle_document(doc, strategy_profile=H600_STRATEGY_PROFILE)
     assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "strategy_trace_favorite_ask_below_floor"
+
+
+@pytest.mark.parametrize("field", ["order_id", "order_status"])
+def test_h600_profile_requires_matched_order_identity(field):
+    doc = bundle()
+    doc["strategy"] = {
+        "id": H600_STRATEGY_ID,
+        "version": H600_STRATEGY_VERSION,
+        "config_sha256": H600_STRATEGY_CONFIG_SHA256,
+    }
+    configure_adaptive_fixture(doc, ["0.75"] * 10)
+    for snapshot in doc["depth_snapshots"]:
+        snapshot["sell_available_shares_2m"] = "90"
+    attach_favorite_depth_trace(doc, depth="90", favorite_ask="0.50", cash_fraction="0.75")
+    if field == "order_id":
+        del doc["events"][0][field]
+    else:
+        doc["events"][0][field] = "CONFIRMED"
+    result = validate_bundle_document(doc, strategy_profile=H600_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == ("order_id_required" if field == "order_id" else "order_status_must_be_matched")
 
 
 def test_private_exact_profile_is_supplied_without_public_config():
