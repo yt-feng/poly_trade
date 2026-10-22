@@ -118,3 +118,18 @@ class H600CompoundBundleBuilderTests(unittest.TestCase):
         incomplete.pop("strategy_decision")
         with self.assertRaisesRegex(ValueError, "strategy_decision_required"):
             buffer.append(incomplete)
+
+    def test_capture_buffer_rejects_orderfilled_mismatch_before_accumulating_rows(self):
+        capture = capture_fixture()
+        buffer = H600CompoundCapture(capture)
+        mismatched = copy.deepcopy(capture["rows"][0])
+        mismatched["transaction_ref"] = "tx-other"
+        with self.assertRaisesRegex(ValueError, "orderfilled_transaction_mismatch"):
+            buffer.append(mismatched)
+        self.assertEqual(buffer.rows, ())
+
+        unknown = copy.deepcopy(capture["rows"][0])
+        unknown["orderfilled_event_id"] = "unknown:0"
+        with self.assertRaisesRegex(ValueError, "orderfilled_event_not_in_bundle"):
+            buffer.append(unknown)
+        self.assertEqual(buffer.rows, ())

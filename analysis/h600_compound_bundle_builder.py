@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 try:
@@ -53,6 +54,84 @@ def _canonical_hash(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     ).hexdigest()
+
+
+ORDERFILLED_TOLERANCE = Decimal("0.000001")
+
+
+def _orderfilled_index(records: Any) -> dict[str, dict[str, Any]]:
+    """Index the canonical records used by the streaming H600 buffer.
+
+    The final v2 validator repeats the full structural check.  This smaller
+    index is intentionally run before the first row is accepted so a capture
+    cannot accumulate nine rows around an unknown or malformed event id.
+    """
+    if not isinstance(records, list) or len(records) != REQUIRED_FILLS:
+        raise ValueError("exactly_ten_orderfilled_records_required")
+    out: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError("invalid_orderfilled_record")
+        event_id = _text(record.get("event_id"), "orderfilled_event_id")
+        tx_hash = _text(record.get("tx_hash"), "orderfilled_tx_hash")
+        try:
+            log_index = int(record.get("log_index"))
+            block_number = int(record.get("block_number"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("orderfilled_identity_invalid") from exc
+        if log_index < 0 or block_number < 0 or event_id != f"{tx_hash}:{log_index}":
+            raise ValueError("orderfilled_event_id_mismatch")
+        if event_id in out:
+            raise ValueError("duplicate_orderfilled_event_id")
+        if _text(record.get("side"), "orderfilled_side").upper() != "BUY" or record.get("sign") != 1:
+            raise ValueError("orderfilled_not_buy_entry")
+        try:
+            size = Decimal(str(record.get("size")))
+            price = Decimal(str(record.get("price")))
+            cash_amount = Decimal(str(record.get("cash_amount")))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError("orderfilled_amount_or_price_invalid") from exc
+        if not size.is_finite() or not cash_amount.is_finite() or not price.is_finite():
+            raise ValueError("orderfilled_amount_or_price_invalid")
+        if size <= 0 or cash_amount <= 0 or not (Decimal("0") < price < Decimal("1")):
+            raise ValueError("orderfilled_amount_or_price_invalid")
+        out[event_id] = {
+            "event_id": event_id,
+            "tx_hash": tx_hash,
+            "market_id": _text(record.get("market_id"), "orderfilled_market_id"),
+            "taker": _text(record.get("taker"), "orderfilled_taker").lower(),
+            "size": size,
+            "price": price,
+            "cash_amount": cash_amount,
+        }
+    return out
+
+
+def _check_capture_orderfilled_binding(
+    row: Mapping[str, Any],
+    record: Mapping[str, Any] | None,
+    *,
+    owner: str,
+) -> None:
+    if record is None:
+        raise ValueError("orderfilled_event_not_in_bundle")
+    if record["tx_hash"] != _text(row.get("transaction_ref"), "transaction_ref"):
+        raise ValueError("orderfilled_transaction_mismatch")
+    if record["market_id"] != _text(row.get("market_id"), "event_market_id"):
+        raise ValueError("orderfilled_market_mismatch")
+    if record["taker"] != owner.lower():
+        raise ValueError("orderfilled_taker_owner_mismatch")
+    try:
+        if abs(record["size"] - Decimal(str(row.get("shares")))) > ORDERFILLED_TOLERANCE:
+            raise ValueError("orderfilled_size_mismatch")
+        if abs(record["price"] - Decimal(str(row.get("price")))) > ORDERFILLED_TOLERANCE:
+            raise ValueError("orderfilled_price_mismatch")
+        if abs(record["cash_amount"] - Decimal(str(row.get("entry_cost")))) > ORDERFILLED_TOLERANCE:
+            raise ValueError("orderfilled_cash_amount_mismatch")
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith("orderfilled_"):
+            raise
+        raise ValueError("orderfilled_amount_or_price_invalid") from exc
 
 
 def _strategy_trace(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -180,6 +259,7 @@ class H600CompoundCapture:
             _required(header, field)
         self._header = deepcopy(dict(header))
         self._header.pop("rows", None)
+        self._orderfilled_by_id = _orderfilled_index(self._header["orderfilled_records"])
         self._rows: list[dict[str, Any]] = []
         self._seen: dict[str, set[str]] = {
             "order_id": set(),
@@ -216,6 +296,7 @@ class H600CompoundCapture:
             "cash_release_receipt_id", "balance_checkpoint_id",
             "previous_checkpoint_id", "cash_reconciled",
             "independent_checkpoint", "entry_ts_ms", "cash_available_ts_ms",
+            "shares", "price", "entry_cost",
         ):
             _required(candidate, field)
         try:
@@ -228,6 +309,11 @@ class H600CompoundCapture:
         for field in ("owner", "ledger_id", "chain_id"):
             if candidate.get(field) != self._header.get(field):
                 raise ValueError(f"{field}_mismatch")
+        _check_capture_orderfilled_binding(
+            candidate,
+            self._orderfilled_by_id.get(str(candidate["orderfilled_event_id"]).strip()),
+            owner=_text(self._header["owner"], "owner"),
+        )
         previous = self._header["starting_checkpoint_id"] if expected_sequence == 1 else self._rows[-1].get("balance_checkpoint_id")
         if candidate.get("previous_checkpoint_id") != previous:
             raise ValueError("previous_checkpoint_link_mismatch")
