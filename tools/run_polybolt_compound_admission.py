@@ -22,6 +22,7 @@ from validate_polybolt_compound_bundle import (
     H546_STRATEGY_PROFILE,
     H549_STRATEGY_PROFILE,
     H561_STRATEGY_PROFILE,
+    H578_STRATEGY_PROFILE,
     H530_STRATEGY_PROFILE,
     PRIVATE_STRATEGY_PROFILE,
     OFFLINE_VERIFICATION,
@@ -134,7 +135,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--strategy-profile",
-        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, H561_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
+        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, H561_STRATEGY_PROFILE, H578_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
         default=DEFAULT_STRATEGY_PROFILE,
     )
     parser.add_argument("--private-strategy-config", type=Path)

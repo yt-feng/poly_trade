@@ -6,7 +6,7 @@ on:
       strategy_profile:
         description: 'Frozen execution strategy contract to validate'
         type: choice
-        options: [h530_fixed_half_cash, h546_adaptive_one_profit, h549_adaptive_one_profit, h561_online_depth_proxy, h30_legacy, private_exact]
+        options: [h530_fixed_half_cash, h546_adaptive_one_profit, h549_adaptive_one_profit, h561_online_depth_proxy, h578_online_depth_proxy, h30_legacy, private_exact]
         default: h549_adaptive_one_profit
         required: true
 
