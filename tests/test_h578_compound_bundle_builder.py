@@ -1,9 +1,8 @@
 import copy
 import importlib.util
 import sys
+import unittest
 from pathlib import Path
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
@@ -54,28 +53,27 @@ def capture_fixture():
     }
 
 
-def test_builder_maps_taker_adapter_timestamps_and_validates_h578():
-    capture = capture_fixture()
-    for row in capture["rows"]:
-        row["entry_ts"] = row.pop("entry_ts_ms")
-        row["cash_available_ts"] = row.pop("cash_available_ts_ms")
-    document = build_h578_bundle(capture)
-    assert document["required_fills"] == 10
-    assert document["events"][0]["entry_ts_ms"] == capture["rows"][0]["entry_ts"]
-    result = validate_built_h578_bundle(capture)
-    assert result["offline_consistency_passed"] is True
-    assert result["fills"] == 10
+class H578CompoundBundleBuilderTests(unittest.TestCase):
+    def test_builder_maps_taker_adapter_timestamps_and_validates_h578(self):
+        capture = capture_fixture()
+        for row in capture["rows"]:
+            row["entry_ts"] = row.pop("entry_ts_ms")
+            row["cash_available_ts"] = row.pop("cash_available_ts_ms")
+        document = build_h578_bundle(capture)
+        self.assertEqual(document["required_fills"], 10)
+        self.assertEqual(document["events"][0]["entry_ts_ms"], capture["rows"][0]["entry_ts"])
+        result = validate_built_h578_bundle(capture)
+        self.assertTrue(result["offline_consistency_passed"])
+        self.assertEqual(result["fills"], 10)
 
+    def test_builder_rejects_missing_depth_trace(self):
+        capture = capture_fixture()
+        capture["rows"][0]["strategy_decision"].pop("entry_sell_depth_shares", None)
+        with self.assertRaisesRegex(ValueError, "entry_sell_depth_shares_required"):
+            build_h578_bundle(capture)
 
-def test_builder_rejects_missing_depth_trace():
-    capture = capture_fixture()
-    capture["rows"][0]["strategy_decision"].pop("entry_sell_depth_shares", None)
-    with pytest.raises(ValueError, match="entry_sell_depth_shares_required"):
-        build_h578_bundle(capture)
-
-
-def test_builder_rejects_reset_or_partial_row_set():
-    capture = capture_fixture()
-    capture["rows"] = copy.deepcopy(capture["rows"][:9])
-    with pytest.raises(ValueError, match="exactly_ten_rows_required"):
-        build_h578_bundle(capture)
+    def test_builder_rejects_reset_or_partial_row_set(self):
+        capture = capture_fixture()
+        capture["rows"] = copy.deepcopy(capture["rows"][:9])
+        with self.assertRaisesRegex(ValueError, "exactly_ten_rows_required"):
+            build_h578_bundle(capture)
