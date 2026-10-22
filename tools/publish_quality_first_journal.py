@@ -20,6 +20,12 @@ from persist_quality_first_journal import persist_delivery
 
 BRANCH = 'sealed-research-journal'
 REPOSITORY = 'yt-feng/poly_trade'
+ERROR_CODES = {400, 401, 403, 404, 405, 408, 409, 410, 415, 422, 429, 500, 501, 502, 503, 504}
+ERROR_CATEGORIES = {'unknown', 'authentication', 'permission', 'validation', 'conflict',
+                    'not_found', 'rate_limit', 'ref_non_fast_forward', 'ref_already_exists',
+                    'timeout', 'server_error', 'invalid_response', 'unverified_write'}
+ERROR_CLASSES = {'ApiError', 'ValueError', 'TimeoutExpired', 'JSONDecodeError', 'OSError',
+                 'FileNotFoundError', 'PermissionError', 'KeyError', 'TypeError'}
 
 
 class ApiError(Exception):
@@ -38,21 +44,56 @@ def github_api(method, path, payload=None):
     if result.returncode:
         match = re.search(r'HTTP (\d{3})', result.stderr)
         status_code = int(match.group(1)) if match else None
+        try:
+            body = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        message = body.get('message')
         text = result.stderr.lower()
-        if 'rate limit' in text or 'too many requests' in text:
+        # Status alone is not evidence of a ref race: 422 also covers invalid
+        # requests and spam rejection. Require the exact message AND operation.
+        # https://docs.github.com/en/rest/git/refs#update-a-reference
+        ref_root = 'repos/' + REPOSITORY + '/git/refs'
+        race = None
+        if status_code == 422 and not body.get('errors') and isinstance(payload, dict):
+            if (method == 'PATCH' and path == ref_root + '/heads/' + BRANCH
+                    and payload.get('force') is False and message == 'Update is not a fast forward'):
+                race = 'ref_non_fast_forward'
+            elif (method == 'POST' and path == ref_root and payload.get('ref') == 'refs/heads/' + BRANCH
+                    and message == 'Reference already exists'):
+                race = 'ref_already_exists'
+        if status_code == 401:
+            category = 'authentication'
+        elif status_code == 429 or 'rate limit' in text or 'too many requests' in text:
             category = 'rate_limit'
         elif 'forbidden' in text or 'permission' in text or status_code == 403:
             category = 'permission'
-        elif 'validation' in text or status_code == 422:
+        elif status_code == 404:
+            category = 'not_found'
+        elif race:
+            category = race
+        elif 'validation' in text or status_code in {400, 422}:
             category = 'validation'
         elif 'conflict' in text or status_code == 409:
             category = 'conflict'
         elif 'not found' in text or status_code == 404:
             category = 'not_found'
+        elif status_code == 408 or 'timeout' in text or 'timed out' in text:
+            category = 'timeout'
+        elif status_code in {500, 501, 502, 503, 504}:
+            category = 'server_error'
         else:
             category = 'unknown'
         raise ApiError(status_code == 404, status_code=status_code, category=category)
-    return json.loads(result.stdout)
+    try:
+        body = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        # A successful HTTP write with an unreadable response may have applied.
+        raise ApiError(category='invalid_response') from None
+    if not isinstance(body, dict):
+        raise ApiError(category='invalid_response')
+    return body
 
 
 def blob_id(data):
@@ -91,19 +132,29 @@ def publish(source, repository, run_id, run_attempt, recipient_id, api=github_ap
         return tree_sha, {entry['path']: {key: entry[key] for key in ('sha', 'type', 'mode')}
                           for entry in tree['tree']}
 
-    uploaded = False
-    # Parallel matrix cells can all read the same branch tip and race on the
-    # compare-and-swap ref update.  Re-read and rebase with bounded backoff so
-    # a transient publication race is not reported as a research failure.
-    for attempt in range(6):
-        parent = read_ref()
-        tree_sha, existing = read_tree(parent)
-        episode_prefix = f'research_vault/episodes/{receipt["episode_id"]}/'
+    def read_state():
+        try:
+            parent = read_ref()
+            tree_sha, existing = read_tree(parent)
+            return parent, tree_sha, existing
+        except (KeyError, TypeError, AttributeError):
+            raise ApiError(category='invalid_response') from None
+
+    episode_prefix = f'research_vault/episodes/{receipt["episode_id"]}/'
+
+    def verified(existing):
         found = {p: sha for p, sha in existing.items() if p.startswith(episode_prefix)}
-        if found:
-            if found != desired:
-                raise ValueError('EXISTING_EPISODE_CONFLICT')
-            return dict(receipt, status='verified_remote', branch=BRANCH)
+        if found and found != desired:
+            raise ValueError('EXISTING_EPISODE_CONFLICT')
+        return found == desired
+
+    parent, tree_sha, existing = read_state()
+    if verified(existing):
+        return dict(receipt, status='verified_remote', branch=BRANCH)
+    uploaded = False
+    # Only a proven ref race with a newly observed parent can repeat writes.
+    # Object creation errors remain outside this retry boundary.
+    for attempt in range(6):
         if not uploaded:
             for path, data in files.items():
                 saved = api('POST', prefix + '/git/blobs', {'encoding': 'base64', 'content': base64.b64encode(data).decode()})
@@ -118,20 +169,33 @@ def publish(source, repository, run_id, run_attempt, recipient_id, api=github_ap
             'message': 'Persist validated sealed research journal', 'tree': tree['sha'],
             'parents': [parent] if parent else [],
         })
+        race_category = 'ref_non_fast_forward' if parent else 'ref_already_exists'
+        failure = ApiError(category='unverified_write')
         try:
             if parent:
                 api('PATCH', ref_path, {'sha': commit['sha'], 'force': False})
             else:
                 api('POST', prefix + '/git/refs', {'ref': 'refs/heads/' + BRANCH, 'sha': commit['sha']})
-        except (ApiError, subprocess.TimeoutExpired):
-            # An uncertain write is resolved by readback before any retry.
-            time.sleep(min(0.25 * (2 ** attempt), 2.0))
-            continue
-        # Read the actual branch tree on the next iteration, even after success.
-    _, actual = read_tree(read_ref())
-    if {p: sha for p, sha in actual.items() if p.startswith(episode_prefix)} != desired:
-        raise ValueError('REMOTE_PUBLICATION_NOT_VERIFIED')
-    return dict(receipt, status='verified_remote', branch=BRANCH)
+        except subprocess.TimeoutExpired:
+            failure = ApiError(category='timeout')
+        except ApiError as error:
+            if not (error.status_code == 422 and error.category == race_category
+                    or error.category in {'timeout', 'server_error', 'invalid_response'}):
+                raise
+            failure = error
+        try:
+            new_parent, new_tree, actual = read_state()
+        except (ApiError, subprocess.TimeoutExpired, ValueError):
+            # A failed read cannot establish that an uncertain write did not
+            # execute. Preserve its cause and never replay it blindly.
+            raise failure from None
+        if verified(actual):
+            return dict(receipt, status='verified_remote', branch=BRANCH)
+        if (failure.status_code != 422 or failure.category != race_category
+                or new_parent is None or new_parent == parent or attempt == 5):
+            raise failure
+        parent, tree_sha = new_parent, new_tree
+        time.sleep(min(0.25 * (2 ** attempt), 2.0))
 
 
 def main():
@@ -148,14 +212,16 @@ def main():
         print(json.dumps(result, sort_keys=True))
         return 0
     except Exception as error:
-        # The class name is safe operational telemetry; exception messages may
-        # contain paths, API payloads, or other sensitive publication details.
+        # Only allowlisted telemetry is public, even for unexpected exceptions.
+        error_class = type(error).__name__
+        error_code = getattr(error, 'status_code', None)
+        category = getattr(error, 'category', 'unknown')
         print(json.dumps({
             'status': 'publication_failed',
             'plaintext_published': False,
-            'error_class': type(error).__name__,
-            'error_code': getattr(error, 'status_code', None),
-            'error_category': getattr(error, 'category', 'unknown'),
+            'error_class': error_class if error_class in ERROR_CLASSES else 'Exception',
+            'error_code': error_code if type(error_code) is int and error_code in ERROR_CODES else None,
+            'error_category': category if isinstance(category, str) and category in ERROR_CATEGORIES else 'unknown',
         }, sort_keys=True))
         return 2
 

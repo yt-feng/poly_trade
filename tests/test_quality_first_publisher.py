@@ -1,7 +1,7 @@
 """Fake Git Data API tests: no GitHub calls, credentials or real research."""
 import base64
 import copy
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import hashlib
 import io
 import json
@@ -75,7 +75,7 @@ class FakeGitDataAPI:
             return {'sha': self.save(self.commits, value)}
         if method == 'POST' and suffix == 'refs':
             if self.ref is not None:
-                raise publisher.ApiError()
+                raise publisher.ApiError(status_code=422, category='ref_already_exists')
             if payload['ref'] != 'refs/heads/' + publisher.BRANCH:
                 raise AssertionError('Wrong branch')
             self.ref = payload['sha']
@@ -89,9 +89,9 @@ class FakeGitDataAPI:
                 tree[self.concurrent_path] = {'sha': 'c' * 40, 'mode': '100644', 'type': 'blob'}
                 tree_sha = self.save(self.trees, tree)
                 self.ref = self.save(self.commits, {'tree': {'sha': tree_sha}, 'parents': [self.ref]})
-                raise publisher.ApiError()
+                raise publisher.ApiError(status_code=422, category='ref_non_fast_forward')
             if self.ref not in self.commits[payload['sha']]['parents']:
-                raise publisher.ApiError()
+                raise publisher.ApiError(status_code=422, category='ref_non_fast_forward')
             self.ref = payload['sha']
             if self.uncertain_patch_once:
                 self.uncertain_patch_once = False
@@ -121,8 +121,44 @@ class JournalPublisherTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def publish(self):
-        return publisher.publish(self.source, publisher.REPOSITORY, '123', '1', self.rid, api=self.api)
+    def publish(self, api=None):
+        return publisher.publish(self.source, publisher.REPOSITORY, '123', '1', self.rid, api=api or self.api)
+
+    def ref_fault(self, error, *, applied=False, advance=False, count=None, read_error=None):
+        """Inject only synthetic ref outcomes; all objects stay in FakeGitDataAPI."""
+        api = self.api
+        writes = 0
+        def injected(method, path, payload=None):
+            nonlocal writes
+            if method in {'PATCH', 'POST'} and '/git/refs' in path:
+                writes += 1
+                if count is not None and writes > count:
+                    return api(method, path, payload)
+                if applied:
+                    api(method, path, payload)
+                else:
+                    api.calls.append((method, path, copy.deepcopy(payload)))
+                if advance:
+                    tree = api.current_files()
+                    tree['other-' + str(writes)] = {'sha': 'a' * 40, 'mode': '100644', 'type': 'blob'}
+                    tree_sha = api.save(api.trees, tree)
+                    api.ref = api.save(api.commits, {'tree': {'sha': tree_sha}, 'parents': [api.ref] if api.ref else []})
+                if error is not None:
+                    raise error(method) if callable(error) else error
+                return {}
+            if writes and read_error is not None:
+                api.calls.append((method, path, copy.deepcopy(payload)))
+                raise read_error
+            return api(method, path, payload)
+        return injected
+
+    def prepare_ref(self, method):
+        self.api = FakeGitDataAPI()
+        if method == 'PATCH':
+            self.api.seed_branch({'unrelated': {'sha': 'a' * 40, 'mode': '100644', 'type': 'blob'}})
+
+    def ref_writes(self):
+        return [(m, p, body) for m, p, body in self.api.calls if m in {'POST', 'PATCH'} and '/git/refs' in p]
 
     def test_first_publication_creates_orphan_journal_branch_and_reads_back(self):
         result = self.publish()
@@ -251,6 +287,156 @@ class JournalPublisherTests(unittest.TestCase):
                                   self.rid, api=self.api, cell_id=label)
         self.assertEqual(self.api.calls, [])
 
+    def test_ref_rejections_stop_after_one_write_without_readback_or_sleep(self):
+        for method in ('PATCH', 'POST'):
+            for status, category in ((401, 'authentication'), (403, 'permission'), (400, 'validation'),
+                                     (404, 'not_found'), (429, 'rate_limit'), (409, 'conflict'),
+                                     (422, 'validation'), (409, 'unknown'), (422, 'unknown'),
+                                     (None, 'unknown'), (422, 'ref_already_exists' if method == 'PATCH' else 'ref_non_fast_forward')):
+                with self.subTest(method=method, category=category), patch.object(publisher.time, 'sleep') as sleep:
+                    self.prepare_ref(method)
+                    error = publisher.ApiError(status_code=status, category=category)
+                    with self.assertRaises(publisher.ApiError) as raised:
+                        self.publish(self.ref_fault(error))
+                    self.assertIs(raised.exception, error)
+                    self.assertEqual(len(self.ref_writes()), 1)
+                    self.assertEqual(self.api.calls[-1], self.ref_writes()[0])
+                    self.assertEqual(self.api.count('POST', '/commits'), 1)
+                    sleep.assert_not_called()
+
+    def test_ref_races_require_new_parent_and_have_six_write_limit(self):
+        def race(method):
+            return publisher.ApiError(status_code=422, category=(
+                'ref_non_fast_forward' if method == 'PATCH' else 'ref_already_exists'))
+        for method in ('PATCH', 'POST'):
+            for advance, count in ((False, None), (True, 1), (True, 5), (True, None)):
+                with self.subTest(method=method, advance=advance, count=count), patch.object(publisher.time, 'sleep') as sleep:
+                    self.prepare_ref(method)
+                    injected = self.ref_fault(race, advance=advance, count=count)
+                    if count is not None:
+                        self.assertEqual(self.publish(injected)['status'], 'verified_remote')
+                        self.assertIn('other-1', self.api.current_files())
+                        if method == 'PATCH':
+                            self.assertIn('unrelated', self.api.current_files())
+                        expected = count + 1
+                    else:
+                        with self.assertRaises(publisher.ApiError) as raised:
+                            self.publish(injected)
+                        self.assertEqual(raised.exception.status_code, 422)
+                        self.assertEqual(raised.exception.category, race('PATCH' if advance else method).category)
+                        expected = 6 if advance else 1
+                    self.assertEqual(len(self.ref_writes()), expected)
+                    self.assertEqual(self.api.count('POST', '/commits'), expected)
+                    self.assertEqual(self.api.count('POST', '/blobs'), 2)
+                    self.assertEqual(sleep.call_count, expected - 1)
+                    for verb, _, body in self.ref_writes():
+                        if verb == 'PATCH':
+                            self.assertIs(body['force'], False)
+
+    def test_uncertain_or_successful_ref_writes_never_replay_without_confirmation(self):
+        errors = [subprocess.TimeoutExpired('SYNTHETIC_PRIVATE_COMMAND', 90),
+                  publisher.ApiError(category='invalid_response'),
+                  publisher.ApiError(status_code=503, category='server_error'), None]
+        for method in ('PATCH', 'POST'):
+            for error in errors:
+                for applied in (False, True):
+                    with self.subTest(method=method, error=type(error).__name__, applied=applied), patch.object(publisher.time, 'sleep') as sleep:
+                        self.prepare_ref(method)
+                        injected = self.ref_fault(error, applied=applied, advance=True)
+                        if applied:
+                            self.assertEqual(self.publish(injected)['status'], 'verified_remote')
+                        else:
+                            with self.assertRaises(publisher.ApiError) as raised:
+                                self.publish(injected)
+                            expected = ('unverified_write' if error is None else
+                                        'timeout' if isinstance(error, subprocess.TimeoutExpired) else error.category)
+                            self.assertEqual(raised.exception.category, expected)
+                        self.assertEqual(len(self.ref_writes()), 1)
+                        self.assertEqual(self.api.count('POST', '/commits'), 1)
+                        sleep.assert_not_called()
+
+    def test_uncertain_ref_readback_failure_preserves_original_cause(self):
+        for method in ('PATCH', 'POST'):
+            for read_error in (publisher.ApiError(status_code=403, category='permission'),
+                               subprocess.TimeoutExpired('SYNTHETIC_READ_COMMAND', 90),
+                               publisher.ApiError(category='invalid_response'),
+                               ValueError('JOURNAL_TREE_TRUNCATED')):
+                with self.subTest(method=method, read_error=type(read_error).__name__), patch.object(publisher.time, 'sleep') as sleep:
+                    self.prepare_ref(method)
+                    error = subprocess.TimeoutExpired('SYNTHETIC_WRITE_COMMAND', 90)
+                    with self.assertRaises(publisher.ApiError) as raised:
+                        self.publish(self.ref_fault(error, applied=True, read_error=read_error))
+                    self.assertEqual(raised.exception.category, 'timeout')
+                    self.assertEqual(len(self.ref_writes()), 1)
+                    sleep.assert_not_called()
+
+    def test_ref_race_with_matching_episode_succeeds_without_retry(self):
+        for method in ('PATCH', 'POST'):
+            with self.subTest(method=method), patch.object(publisher.time, 'sleep') as sleep:
+                self.prepare_ref(method)
+                error = publisher.ApiError(status_code=422, category=(
+                    'ref_non_fast_forward' if method == 'PATCH' else 'ref_already_exists'))
+                self.assertEqual(self.publish(self.ref_fault(error, applied=True))['status'], 'verified_remote')
+                self.assertEqual(len(self.ref_writes()), 1)
+                sleep.assert_not_called()
+
+    def test_ref_readback_conflict_fails_without_retry(self):
+        self.api.seed_branch()
+        original = self.api
+        def api(method, path, payload=None):
+            result = original(method, path, payload)
+            if method == 'PATCH':
+                tree = original.current_files()
+                tree[self.prefix + 'part-0000.vault']['mode'] = '100755'
+                original.seed_branch(tree)
+                raise subprocess.TimeoutExpired('synthetic', 90)
+            return result
+        with patch.object(publisher.time, 'sleep') as sleep, self.assertRaisesRegex(ValueError, 'CONFLICT'):
+            self.publish(api)
+        self.assertEqual(len(self.ref_writes()), 1)
+        sleep.assert_not_called()
+
+    def test_malformed_readback_stops_with_original_uncertain_cause(self):
+        for suffix in ('/git/ref/', '/git/commits/', '/git/trees/'):
+            with self.subTest(suffix=suffix), patch.object(publisher.time, 'sleep') as sleep:
+                self.prepare_ref('PATCH')
+                original = self.api
+                wrote = False
+                def api(method, path, payload=None):
+                    nonlocal wrote
+                    if wrote and suffix in path:
+                        original.calls.append((method, path, payload))
+                        return {'SYNTHETIC_PRIVATE_KEY': 'SYNTHETIC_PRIVATE_PAYLOAD'}
+                    result = original(method, path, payload)
+                    if method == 'PATCH':
+                        wrote = True
+                        raise publisher.ApiError(category='invalid_response')
+                    return result
+                with self.assertRaises(publisher.ApiError) as raised:
+                    self.publish(api)
+                self.assertEqual(raised.exception.category, 'invalid_response')
+                self.assertEqual(len(self.ref_writes()), 1)
+                sleep.assert_not_called()
+
+    def test_object_creation_errors_are_never_retried(self):
+        for stage in ('blobs', 'trees', 'commits'):
+            for error in (publisher.ApiError(status_code=403, category='permission'),
+                          publisher.ApiError(category='invalid_response'),
+                          subprocess.TimeoutExpired('SYNTHETIC_PRIVATE_COMMAND', 90)):
+                with self.subTest(stage=stage, error=type(error).__name__), patch.object(publisher.time, 'sleep') as sleep:
+                    self.prepare_ref('PATCH')
+                    def api(method, path, payload=None):
+                        if method == 'POST' and path.endswith('/' + stage):
+                            self.api.calls.append((method, path, payload))
+                            raise error
+                        return self.api(method, path, payload)
+                    with self.assertRaises(type(error)) as raised:
+                        self.publish(api)
+                    self.assertIs(raised.exception, error)
+                    self.assertEqual(self.api.count('POST', '/' + stage), 1)
+                    self.assertEqual(self.ref_writes(), [])
+                    sleep.assert_not_called()
+
     def test_cli_optional_cell_uses_real_publisher_with_fake_api(self):
         original_publish = publisher.publish
         def offline_publish(*args, **kwargs):
@@ -276,6 +462,83 @@ class JournalPublisherTests(unittest.TestCase):
             if label:
                 self.assertNotIn(label, output.getvalue())
         self.assertNotEqual(*identities)
+
+
+class ApiResponseTests(unittest.TestCase):
+    def invoke(self, method, suffix, status, body, payload):
+        result = subprocess.CompletedProcess(['SYNTHETIC_PRIVATE_COMMAND'], 1 if status else 0,
+            stdout=body, stderr=f'gh: SYNTHETIC_PRIVATE_DIAGNOSTIC (HTTP {status})' if status else '')
+        with patch.object(publisher.subprocess, 'run', return_value=result):
+            return publisher.github_api(method, 'repos/' + publisher.REPOSITORY + '/git/' + suffix, payload)
+
+    def test_only_exact_operation_and_422_message_identify_ref_race(self):
+        cases = [('PATCH', 'refs/heads/' + publisher.BRANCH, {'sha': 'a' * 40, 'force': False},
+                  'Update is not a fast forward', 'ref_non_fast_forward'),
+                 ('POST', 'refs', {'sha': 'a' * 40, 'ref': 'refs/heads/' + publisher.BRANCH},
+                  'Reference already exists', 'ref_already_exists')]
+        for method, suffix, payload, message, category in cases:
+            for change in ('none', 'status', 'message', 'method', 'path', 'payload', 'force_or_ref', 'errors', 'non_json'):
+                with self.subTest(method=method, change=change):
+                    body = {'message': message, 'private': 'SYNTHETIC_PRIVATE_PAYLOAD'}
+                    if change == 'message':
+                        body['message'] += ' SYNTHETIC_PRIVATE_DIAGNOSTIC'
+                    if change == 'errors':
+                        body['errors'] = [{'code': 'invalid'}]
+                    with self.assertRaises(publisher.ApiError) as raised:
+                        self.invoke('POST' if method == 'PATCH' and change == 'method' else
+                                    'PATCH' if change == 'method' else method,
+                                    'blobs' if change == 'path' else suffix,
+                                    409 if change == 'status' else 422,
+                                    'not JSON' if change == 'non_json' else json.dumps(body),
+                                    {} if change == 'payload' else
+                                    dict(payload, force=True, ref='refs/heads/other') if change == 'force_or_ref' else payload)
+                    self.assertEqual(raised.exception.category, category if change == 'none' else
+                                     'conflict' if change == 'status' else 'validation')
+
+    def test_rejections_and_server_errors_retain_safe_classification(self):
+        for status, category in ((401, 'authentication'), (403, 'permission'), (404, 'not_found'),
+                                 (400, 'validation'), (409, 'conflict'), (422, 'validation'),
+                                 (429, 'rate_limit'), (408, 'timeout'), (503, 'server_error')):
+            with self.subTest(status=status), self.assertRaises(publisher.ApiError) as raised:
+                self.invoke('PATCH', 'refs/heads/' + publisher.BRANCH, status,
+                            json.dumps({'message': 'SYNTHETIC_PRIVATE_PAYLOAD'}), {'force': False})
+            self.assertEqual((raised.exception.status_code, raised.exception.category), (status, category))
+        with patch.object(publisher.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                ['synthetic'], 1, stdout='{}', stderr='gh: API rate limit exceeded (HTTP 403)')):
+            with self.assertRaises(publisher.ApiError) as raised:
+                publisher.github_api('PATCH', 'synthetic', {})
+        self.assertEqual((raised.exception.status_code, raised.exception.category), (403, 'rate_limit'))
+
+    def test_successful_http_with_invalid_json_is_narrowly_classified(self):
+        for body in ('SYNTHETIC_PRIVATE_NON_JSON', '[]', 'null', '"SYNTHETIC_PRIVATE_STRING"'):
+            with self.subTest(body=body), self.assertRaises(publisher.ApiError) as raised:
+                self.invoke('POST', 'refs', None, body, {})
+            self.assertEqual(raised.exception.category, 'invalid_response')
+        self.assertEqual(self.invoke('POST', 'blobs', None, '{"sha":"synthetic"}', {}), {'sha': 'synthetic'})
+
+    def test_cli_error_telemetry_is_allowlisted_and_never_contains_diagnostics(self):
+        sentinel = 'SYNTHETIC_PRIVATE_PATH_COMMAND_PAYLOAD'
+        errors = [publisher.ApiError(status_code=403, category='permission'),
+                  publisher.ApiError(status_code=sentinel, category=sentinel),
+                  type(sentinel, (Exception,), {})(sentinel),
+                  subprocess.TimeoutExpired(sentinel, 90, output=sentinel, stderr=sentinel),
+                  ValueError(sentinel)]
+        for error in errors:
+            output = io.StringIO()
+            stderr = io.StringIO()
+            with self.subTest(error=type(error).__name__), patch.object(sys, 'argv',
+                    ['publish', '--source', sentinel, '--run-id', '123', '--run-attempt', '1']), \
+                    patch.object(publisher, 'publish', side_effect=error), redirect_stdout(output), redirect_stderr(stderr):
+                self.assertEqual(publisher.main(), 2)
+            self.assertEqual(stderr.getvalue(), '')
+            self.assertNotIn(sentinel, output.getvalue())
+            result = json.loads(output.getvalue())
+            self.assertEqual(set(result), {'status', 'plaintext_published', 'error_class', 'error_code', 'error_category'})
+            self.assertEqual(result['status'], 'publication_failed')
+            self.assertIs(result['plaintext_published'], False)
+            self.assertIn(result['error_category'], publisher.ERROR_CATEGORIES)
+            self.assertIn(result['error_class'], publisher.ERROR_CLASSES | {'Exception'})
+            self.assertIn(result['error_code'], publisher.ERROR_CODES | {None})
 
 
 if __name__ == '__main__':
