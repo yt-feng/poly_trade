@@ -1,4 +1,4 @@
-"""Synthetic H601 publish-stage tests; no real data, credentials or publication."""
+"""Synthetic H601/H604 publish-stage tests; no data, credentials or publication."""
 import json
 from pathlib import Path
 import re
@@ -18,22 +18,30 @@ FAILURES = [
     ("unknown", 37), ("uncertain", 124), ("terminated", 143),
     ("wrong_mode", 2), ("extra_entry", 2),
 ]
+WORKFLOWS = {
+    "h601": "h601-favorite-path-depth",
+    "h604": "h604-h220-current-notional-floor",
+}
+PRIVATE_DIRS = {
+    "h601": "h601-favorite-path-depth",
+    "h604": "h604-h220-current-floor",
+}
 
 
-def publication_script():
-    source = (ROOT / ".github/workflows/h601-favorite-path-depth.yml").read_text()
+def publication_script(workflow="h601"):
+    source = (ROOT / f".github/workflows/{WORKFLOWS[workflow]}.yml").read_text()
     match = re.search(
-        r"^      - name: Publish encrypted H601 journal\n        run: \|\n"
+        rf"^      - name: Publish encrypted {workflow.upper()} journal\n        run: \|\n"
         r"(.*?)(?=^      - name: |\Z)", source, re.M | re.S,
     )
     assert match is not None
     return textwrap.dedent(match.group(1))
 
 
-def run_synthetic_stage(tmp_path, outcome, exit_code):
+def run_synthetic_stage(tmp_path, outcome, exit_code, workflow="h601"):
     for directory in ("bin", "tools", "research_vault", "sealed-delivery", "runner"):
         (tmp_path / directory).mkdir()
-    private = tmp_path / "runner/h601-favorite-path-depth"
+    private = tmp_path / "runner" / PRIVATE_DIRS[workflow]
     private.mkdir(mode=0o700)
     # Deliberately invalid synthetic delivery: a failed validator must never
     # be bypassed by copying these original bytes into a journal tree.
@@ -114,16 +122,17 @@ def run_synthetic_stage(tmp_path, outcome, exit_code):
         "SYNTHETIC_OUTCOME": outcome, "SYNTHETIC_EXIT": str(exit_code),
     }
     result = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", publication_script()],
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", publication_script(workflow)],
         cwd=tmp_path, env=env, text=True, capture_output=True, timeout=10,
     )
     calls = [json.loads(line) for line in trace.read_text().splitlines()] if trace.exists() else []
     return result, calls, private
 
 
+@pytest.mark.parametrize("workflow", WORKFLOWS)
 @pytest.mark.parametrize("outcome,exit_code", FAILURES + [("success", 0)])
-def test_h601_uses_validated_publisher_once_and_preserves_result(tmp_path, outcome, exit_code):
-    result, calls, private = run_synthetic_stage(tmp_path, outcome, exit_code)
+def test_workflow_uses_validated_publisher_once_and_preserves_result(tmp_path, outcome, exit_code, workflow):
+    result, calls, private = run_synthetic_stage(tmp_path, outcome, exit_code, workflow)
     assert result.returncode == exit_code
     assert [call["kind"] for call in calls] == ["publisher"]
     assert calls[0]["args"] == [
@@ -133,7 +142,7 @@ def test_h601_uses_validated_publisher_once_and_preserves_result(tmp_path, outco
     ]
     assert (tmp_path / "synthetic-success.json").exists() == (exit_code == 0)
     assert (tmp_path / "synthetic-uncertain.json").exists() == (outcome == "uncertain")
-    assert not (tmp_path / "runner/h601-sealed-journal-fallback").exists()
+    assert not (tmp_path / f"runner/{workflow}-sealed-journal-fallback").exists()
     assert MARKER not in result.stdout + result.stderr
     assert json.loads(result.stdout) == {
         "status": "publication_complete" if exit_code == 0 else "publication_failed",
