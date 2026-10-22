@@ -25,7 +25,11 @@ def event(i: int, *, status: str = "confirmed", cost: str = "5", payout: str = "
 
 
 def test_ten_fills_are_one_growth_positive_reusable_cash_chain():
-    result = evaluate_compound_chain([event(i) for i in range(10)])
+    result = evaluate_compound_chain(
+        [event(i) for i in range(10)],
+        require_cash_release_receipt=True,
+        require_prior_cash_release=True,
+    )
     assert result["gate_passed"] is True
     assert result["fills"] == 10
     assert result["ending_cash"] == "15.00"
@@ -58,7 +62,9 @@ def test_unbounded_history_still_includes_later_trades():
 
 def test_chain_does_not_reset_cash_between_independent_trials():
     events = [event(0, payout="0"), event(1, cost="5", payout="0")]
-    result = evaluate_compound_chain(events, required_fills=2)
+    result = evaluate_compound_chain(
+        events, required_fills=2, evidence_mode="paper_upper_bound"
+    )
     assert result["gate_passed"] is False
     assert result["failure_reason"] == "compound_chain_not_growth_positive"
 
@@ -115,6 +121,34 @@ def test_authenticated_chain_requires_independent_settlement_and_balance_evidenc
     assert result["failure_reason"] == "missing_authoritative_receipt_or_checkpoint"
 
 
+def test_authenticated_canary_cannot_be_shorter_than_ten_fills():
+    # A complete-looking single row is still only a diagnostic observation;
+    # it must not become a one-fill authenticated Canary through this generic
+    # gate.
+    result = evaluate_compound_chain(
+        [event(0)],
+        required_fills=1,
+        evidence_mode="authenticated",
+        require_cash_release_receipt=True,
+        require_prior_cash_release=True,
+    )
+    assert result["fills"] == 1
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "required_fills_fixed_at_ten"
+
+
+def test_authenticated_canary_requires_the_continuous_release_flags():
+    result = evaluate_compound_chain(
+        [event(i) for i in range(10)],
+        evidence_mode="authenticated",
+        require_cash_release_receipt=True,
+        require_prior_cash_release=False,
+    )
+    assert result["fills"] == 10
+    assert result["gate_passed"] is False
+    assert result["failure_reason"] == "prior_cash_release_required_for_authenticated_canary"
+
+
 def test_authenticated_chain_rejects_unreconciled_cash_checkpoint():
     row = event(0)
     row["cash_reconciled"] = False
@@ -144,8 +178,14 @@ def test_overlapping_entries_use_one_cash_ledger_and_are_compounding():
     second = event(1)
     second["entry_ts"] = "5"
     second["entry_cost"] = "4"
-    result = evaluate_compound_chain([first, second], required_fills=2, minimum_order="4")
-    assert result["gate_passed"] is True
+    result = evaluate_compound_chain(
+        [first, second],
+        required_fills=2,
+        minimum_order="4",
+        evidence_mode="paper_upper_bound",
+    )
+    assert result["paper_replay_passed"] is True
+    assert result["gate_passed"] is False
 
 
 def test_strict_canary_chain_requires_prior_release_before_next_entry():

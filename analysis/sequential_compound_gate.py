@@ -61,7 +61,10 @@ def evaluate_compound_chain(
     ``stop_after_required_fills`` is true, processing ends immediately after
     the required number of valid entries and later events are outside the
     bounded batch.  This keeps a ten-fill Canary result from being invalidated
-    by trades that were never part of that batch.
+    by trades that were never part of that batch.  In ``authenticated`` mode,
+    the admission contract is fixed at ten fills and requires both explicit
+    release receipts and strict prior-release ordering, regardless of the
+    caller's optional flags.
     """
     if required_fills <= 0:
         raise ValueError("required_fills must be positive")
@@ -73,6 +76,19 @@ def evaluate_compound_chain(
         raise ValueError("require_cash_release_receipt must be a bool")
     if type(require_prior_cash_release) is not bool:
         raise ValueError("require_prior_cash_release must be a bool")
+    # The paper upper-bound mode is intentionally reusable by smaller
+    # diagnostic experiments.  Authenticated mode is different: it is the
+    # admission boundary for the user's Canary and therefore cannot be
+    # weakened by a direct caller that omits one of the continuous-ledger
+    # flags or asks for a shorter batch.
+    authenticated_contract_violation: str | None = None
+    if evidence_mode == "authenticated":
+        if required_fills != 10:
+            authenticated_contract_violation = "required_fills_fixed_at_ten"
+        elif not require_cash_release_receipt:
+            authenticated_contract_violation = "cash_release_receipt_required_for_authenticated_canary"
+        elif not require_prior_cash_release:
+            authenticated_contract_violation = "prior_cash_release_required_for_authenticated_canary"
     cash = _money(initial_cash, "initial_cash")
     start_cash = cash
     floor = _money(minimum_order, "minimum_order")
@@ -221,7 +237,13 @@ def evaluate_compound_chain(
     paper_replay_passed = failure_reason is None and fills >= required_fills and cash >= start_cash
     if failure_reason is None and cash < start_cash:
         failure_reason = "compound_chain_not_growth_positive"
-    canary_gate_passed = paper_replay_passed and evidence_mode == "authenticated"
+    if failure_reason is None and authenticated_contract_violation is not None:
+        failure_reason = authenticated_contract_violation
+    canary_gate_passed = (
+        paper_replay_passed
+        and evidence_mode == "authenticated"
+        and authenticated_contract_violation is None
+    )
     capital_floor_diagnostic = {
         "protocol": "h643_capital_buffer_loss_ladder_v1",
         "same_evolving_ledger": True,
