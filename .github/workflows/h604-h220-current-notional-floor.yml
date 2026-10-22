@@ -1,0 +1,142 @@
+name: H604 H220 current $5 notional floor
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        required: true
+        type: string
+        default: bbda5f2050685f63153621a54641ebdfab943487
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Checkout pinned old-clean source
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          ref: ${{ inputs.source_commit }}
+          path: source_poly
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install research dependencies and validate H604 contract
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m pip install pytest pycryptodome cryptography
+          python -m pytest -q tests/test_h220_cash_buffer_replay.py tests/test_cash_release_sensitivity.py tests/test_sequential_compound_gate.py
+      - name: Run the single pre-registered H604 replay
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/h604-h220-current-floor"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h220_cash_buffer_replay.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "$SOURCE_COMMIT" \
+            --minimum-order-notional 5.0 \
+            --output "$PRIVATE_DIR/results" > "$PRIVATE_DIR/analysis-output.txt"
+      - name: Seal the result with the verified public recipient
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/h604-h220-current-floor" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          recipient = research_vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          recipient_id = recipient['recipient_id']
+          research_vault.validate_recipient(recipient, recipient_id)
+          results = private / 'results'
+          payload = {
+              'format': 'old-clean-h604-h220-current-notional-floor-sealed-v1',
+              'preregistration': {
+                  'hypothesis_id': 'H604_H220_WITH_CURRENT_5_USD_NOTIONAL_FLOOR',
+                  'source_commit': os.environ['SOURCE_COMMIT'],
+                  'minimum_order_notional_usd': 5.0,
+                  'minimum_order_shares': 5.0,
+                  'required_consecutive_fills': 10,
+                  'same_evolving_cash_ledger': True,
+                  'prior_cash_release_required': True,
+                  'no_reset': True,
+                  'no_cross_window_concatenation': True,
+              },
+              'summary': json.loads((results / 'summary.json').read_text()),
+              'analysis_output': (private / 'analysis-output.txt').read_text(),
+              'sources': [
+                  {'title': 'The Anatomy of a Decentralized Prediction Market: Microstructure Evidence from the Polymarket Order Book', 'url': 'https://arxiv.org/abs/2604.24366'},
+                  {'title': 'polybtc research report', 'url': 'https://github.com/LukasNSteel/polybtc/blob/main/research/REPORT.md'},
+              ],
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_COMMIT']},
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+      - name: Publish encrypted H604 journal
+        run: |
+          set -euo pipefail
+          RECIPIENT_ID="$(python -c 'import json; print(json.load(open("research_vault/recipient.json"))["recipient_id"])')"
+          for attempt in 1 2 3 4 5; do
+            if PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+              --source sealed-delivery \
+              --repository yt-feng/poly_trade \
+              --run-id "$GITHUB_RUN_ID" \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --recipient-id "$RECIPIENT_ID"; then
+              exit 0
+            fi
+            sleep $((attempt * 2))
+          done
+          EPISODE_ID="$(PYTHONPATH=tools python - <<'PY'
+          from persist_quality_first_journal import episode_identity
+          import os
+          print(episode_identity('yt-feng/poly_trade', os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']))
+          PY
+          )"
+          JOURNAL_DIR="$RUNNER_TEMP/h604-sealed-journal-fallback"
+          git fetch origin sealed-research-journal
+          git worktree add --detach "$JOURNAL_DIR" origin/sealed-research-journal
+          TARGET="$JOURNAL_DIR/research_vault/episodes/$EPISODE_ID"
+          mkdir -p "$TARGET"
+          if [ -e "$TARGET/part-0000.vault" ] || [ -e "$TARGET/status.json" ]; then
+            cmp -s sealed-delivery/part-0000.vault "$TARGET/part-0000.vault" \
+              && cmp -s sealed-delivery/status.json "$TARGET/status.json" \
+              || { echo 'sealed journal episode conflict'; exit 1; }
+          else
+            cp sealed-delivery/part-0000.vault "$TARGET/part-0000.vault"
+            cp sealed-delivery/status.json "$TARGET/status.json"
+            git -C "$JOURNAL_DIR" add "research_vault/episodes/$EPISODE_ID/part-0000.vault" "research_vault/episodes/$EPISODE_ID/status.json"
+            git -C "$JOURNAL_DIR" -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Persist validated sealed research journal'
+            git -C "$JOURNAL_DIR" push origin HEAD:refs/heads/sealed-research-journal
+          fi
+          REMOTE_SHA="$(git ls-remote origin refs/heads/sealed-research-journal | cut -f1)"
+          LOCAL_SHA="$(git -C "$JOURNAL_DIR" rev-parse HEAD)"
+          test -n "$REMOTE_SHA" && test "$REMOTE_SHA" = "$LOCAL_SHA"
+          test -f "$TARGET/part-0000.vault" && test -f "$TARGET/status.json"
+      - name: Write redacted summary and clean runner files
+        if: always()
+        run: |
+          echo '## H604 H220 current $5 notional floor' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Existing H220 candidate family retested under the current $5 entry notional contract.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Detailed metrics remain encrypted; no live orders or account access are enabled.' >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'h604-h220-current-floor', Path('sealed-delivery')):
+              if path.exists(): shutil.rmtree(path)
+          PY

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 from pathlib import Path
 import sys
@@ -84,14 +85,17 @@ def replay(
     buffer: float,
     slippage: float,
     depth_floor: float,
+    minimum_order_notional: float = MINIMUM_ORDER_NOTIONAL,
 ) -> dict[str, object]:
+    if not math.isfinite(float(minimum_order_notional)) or float(minimum_order_notional) < 0:
+        raise ValueError("minimum_order_notional must be finite and non-negative")
     working = frame[frame["run_name"].astype(str).isin([str(x) for x in run_names])].copy()
     logs, metrics = simulate_cash_locked(
         working,
         candidate,
         study.ExecutionConfig(fixed_slippage=float(slippage), min_depth=float(depth_floor)),
         INITIAL_CASH,
-        MINIMUM_ORDER_NOTIONAL,
+        float(minimum_order_notional),
         CASH_RELEASE_DELAY_SECONDS,
         cooldown_events=0,
         capture_logs=True,
@@ -110,7 +114,15 @@ def replay(
     }
 
 
-def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str, object]:
+def evaluate(
+    source_root: Path,
+    *,
+    source_commit: str,
+    output: Path,
+    minimum_order_notional: float = MINIMUM_ORDER_NOTIONAL,
+) -> dict[str, object]:
+    if not math.isfinite(float(minimum_order_notional)) or float(minimum_order_notional) < 0:
+        raise ValueError("minimum_order_notional must be finite and non-negative")
     observed = subprocess.check_output(
         ["git", "-C", str(source_root.parent.parent), "rev-parse", "HEAD"], text=True
     ).strip()
@@ -130,7 +142,15 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
                     for depth_floor in DEPTH_FLOORS:
                         rows.append({
                             "split": split,
-                            **replay(frame, candidate, names, buffer, slippage, depth_floor),
+                            **replay(
+                                frame,
+                                candidate,
+                                names,
+                                buffer,
+                                slippage,
+                                depth_floor,
+                                minimum_order_notional=float(minimum_order_notional),
+                            ),
                         })
     selection_rows = [row for row in rows if row["split"] == "selection20"]
     holdout_rows = [row for row in rows if row["split"] == "holdout59"]
@@ -154,7 +174,7 @@ def evaluate(source_root: Path, *, source_commit: str, output: Path) -> dict[str
         "protocol": {
             "initial_cash_usd": INITIAL_CASH,
             "required_fills": REQUIRED_FILLS,
-            "minimum_order_notional_usd": MINIMUM_ORDER_NOTIONAL,
+            "minimum_order_notional_usd": float(minimum_order_notional),
             "minimum_order_shares": MINIMUM_ORDER_SHARES,
             "fee_rate": FEE_RATE,
             "cash_release_delay_seconds": CASH_RELEASE_DELAY_SECONDS,
@@ -205,8 +225,14 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--source-commit", default=SOURCE_COMMIT)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--minimum-order-notional", type=float, default=MINIMUM_ORDER_NOTIONAL)
     args = parser.parse_args()
-    evaluate(args.source_root, source_commit=args.source_commit, output=args.output)
+    evaluate(
+        args.source_root,
+        source_commit=args.source_commit,
+        output=args.output,
+        minimum_order_notional=args.minimum_order_notional,
+    )
 
 
 if __name__ == "__main__":

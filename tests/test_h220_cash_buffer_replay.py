@@ -1,9 +1,12 @@
 import sys
 from pathlib import Path
+from unittest.mock import patch
+
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
-from h220_cash_buffer_replay import BUFFER_LEVELS, CANDIDATES, select_candidate
+from h220_cash_buffer_replay import BUFFER_LEVELS, CANDIDATES, replay, select_candidate
 
 
 def row(candidate, buffer, *, passed=True, ending=12.0, fills=10):
@@ -34,3 +37,26 @@ def test_selection_returns_none_when_no_buffer_group_survives():
     rows = cells(CANDIDATES[0], BUFFER_LEVELS[0], 15.0)
     rows[0]["first_ten_fills"] = 9
     assert select_candidate(rows) is None
+
+
+def test_replay_passes_the_current_notional_floor_to_the_cash_simulator():
+    seen = {}
+
+    def fake_simulator(*args, **kwargs):
+        seen["min_cost"] = args[4]
+        return pd.DataFrame(), {}
+
+    frame = pd.DataFrame({"run_name": ["run-1"]})
+    with patch("h220_cash_buffer_replay.simulate_cash_locked", fake_simulator):
+        result = replay(
+            frame,
+            CANDIDATES[0],
+            ["run-1"],
+            0.0,
+            0.005,
+            100.0,
+            minimum_order_notional=5.0,
+        )
+
+    assert seen["min_cost"] == 5.0
+    assert result["first_ten_fills"] == 0
