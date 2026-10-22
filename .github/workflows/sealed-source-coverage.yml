@@ -6,6 +6,7 @@ on:
       - '.github/workflows/sealed-journal-persist.yml'
       - 'analysis/polybolt_twap_adapter.py'
       - 'analysis/validate_polybolt_compound_bundle.py'
+      - 'analysis/h578_compound_bundle_builder.py'
       - 'tools/run_polybolt_compound_admission.py'
       - '.github/workflows/polybolt-compound-admission.yml'
       - 'tools/run_source_coverage.py'
@@ -15,6 +16,7 @@ on:
       - 'tools/research_vault.py'
       - 'tests/test_polybolt_twap_adapter.py'
       - 'tests/test_validate_polybolt_compound_bundle.py'
+      - 'tests/test_h578_compound_bundle_builder.py'
       - 'tests/test_run_polybolt_compound_admission.py'
       - 'tests/test_source_coverage_runner.py'
       - 'tests/test_settlement_source_coverage.py'
@@ -25,11 +27,13 @@ on:
       - '.github/workflows/sealed-source-coverage.yml'
       - 'analysis/polybolt_twap_adapter.py'
       - 'analysis/validate_polybolt_compound_bundle.py'
+      - 'analysis/h578_compound_bundle_builder.py'
       - 'tools/run_polybolt_compound_admission.py'
       - '.github/workflows/polybolt-compound-admission.yml'
       - 'analysis/settlement_source_coverage.py'
       - 'tests/test_polybolt_twap_adapter.py'
       - 'tests/test_validate_polybolt_compound_bundle.py'
+      - 'tests/test_h578_compound_bundle_builder.py'
       - 'tests/test_run_polybolt_compound_admission.py'
       - 'tests/test_settlement_source_coverage.py'
   workflow_dispatch:
@@ -54,6 +58,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_polybolt_twap_adapter.py' -v
           python -m pytest -q tests/test_validate_polybolt_compound_bundle.py
+          python -m pytest -q tests/test_h578_compound_bundle_builder.py
           python -m pytest -q tests/test_run_polybolt_compound_admission.py
           python -m unittest discover -s tests -p 'test_settlement_source_coverage.py' -v
           python -m unittest discover -s tests -p 'test_source_coverage_runner.py' -v
