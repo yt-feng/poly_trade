@@ -86,7 +86,9 @@ def evaluate(
     if observed != source_commit:
         raise RuntimeError(f"SOURCE_COMMIT_MISMATCH:{observed}:{source_commit}")
 
-    by_slippage, runs, feature_rows = h600._candidate_frames(source_root)
+    # H600 delegates the prequential candidate construction to H561's shared
+    # implementation; keep that exact source/model path instead of recreating it.
+    by_slippage, runs, feature_rows = h600.base._candidate_frames(source_root)
     all_candidates = pd.concat(
         [frame for frames in by_slippage.values() for frame in frames], ignore_index=True
     )
