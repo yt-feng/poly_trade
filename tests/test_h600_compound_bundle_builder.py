@@ -6,7 +6,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
-from analysis.h600_compound_bundle_builder import build_h600_bundle, validate_built_h600_bundle
+from analysis.h600_compound_bundle_builder import (
+    H600CompoundCapture,
+    build_h600_bundle,
+    validate_built_h600_bundle,
+)
+from analysis.validate_polybolt_compound_bundle import validate_bundle_document
 
 _fixture_spec = importlib.util.spec_from_file_location(
     "polybolt_bundle_fixture", Path(__file__).with_name("test_validate_polybolt_compound_bundle.py")
@@ -31,6 +36,7 @@ def capture_fixture():
     traces = {item["sequence_no"]: item for item in document["strategy_decisions"]}
     for row in rows:
         row["strategy_decision"] = traces[row["sequence_no"]]
+        row["orderfilled_event_id"] = f"orderfilled-{row['sequence_no']}"
     return {
         **{key: document[key] for key in (
             "owner", "ledger_id", "chain_id", "starting_checkpoint_id", "closing_balance_checkpoint_id",
@@ -62,3 +68,27 @@ class H600CompoundBundleBuilderTests(unittest.TestCase):
         capture["rows"] = capture["rows"][:9]
         with self.assertRaisesRegex(ValueError, "exactly_ten_rows_required"):
             build_h600_bundle(capture)
+
+    def test_capture_buffer_builds_one_continuous_ten_row_chain(self):
+        capture = capture_fixture()
+        buffer = H600CompoundCapture(capture)
+        for row in capture["rows"]:
+            buffer.append(row)
+        document = buffer.build()
+        self.assertEqual([row["sequence_no"] for row in document["events"]], list(range(1, 11)))
+        result = validate_bundle_document(document, strategy_profile=_fixture_module.H600_STRATEGY_PROFILE)
+        self.assertTrue(result["offline_consistency_passed"])
+        self.assertEqual(result["fills"], 10)
+
+    def test_capture_buffer_rejects_reset_or_concatenation(self):
+        capture = capture_fixture()
+        buffer = H600CompoundCapture(capture)
+        buffer.append(capture["rows"][0])
+        reset = copy.deepcopy(capture["rows"][1])
+        reset["previous_checkpoint_id"] = capture["starting_checkpoint_id"]
+        with self.assertRaisesRegex(ValueError, "previous_checkpoint_link_mismatch"):
+            buffer.append(reset)
+        for row in capture["rows"][1:]:
+            buffer.append(row)
+        with self.assertRaisesRegex(ValueError, "capture_already_complete"):
+            buffer.append(capture["rows"][0])

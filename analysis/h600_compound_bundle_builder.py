@@ -147,4 +147,94 @@ def validate_built_h600_bundle(capture: Mapping[str, Any]) -> dict[str, Any]:
     return validate_bundle_document(build_h600_bundle(capture), strategy_profile=H600_STRATEGY_PROFILE)
 
 
-__all__ = ["build_h600_bundle", "validate_built_h600_bundle"]
+class H600CompoundCapture:
+    """Accumulate one owner-scoped H600 chain without allowing concatenation.
+
+    Rows are accepted only in sequence 1..10 on the same owner, ledger and
+    chain.  Each row must point at the immediately preceding balance
+    checkpoint, and evidence identities may not be reused.  This is an
+    offline capture buffer; it never reads a wallet or submits an order.
+    """
+
+    def __init__(self, header: Mapping[str, Any]):
+        if not isinstance(header, Mapping):
+            raise ValueError("capture_header_must_be_object")
+        required = (
+            "owner", "ledger_id", "chain_id", "starting_checkpoint_id",
+            "closing_balance_checkpoint_id", "initial_cash", "closing_balance",
+            "market_windows", "source_events", "depth_snapshots",
+            "settlement_receipts", "cash_release_receipts",
+        )
+        for field in required:
+            _required(header, field)
+        self._header = deepcopy(dict(header))
+        self._header.pop("rows", None)
+        self._rows: list[dict[str, Any]] = []
+        self._seen: dict[str, set[str]] = {
+            "trade_id": set(),
+            "transaction_ref": set(),
+            "orderfilled_event_id": set(),
+            "source_ref": set(),
+            "depth_ref": set(),
+            "strategy_decision_ref": set(),
+        }
+
+    @property
+    def rows(self) -> tuple[dict[str, Any], ...]:
+        return tuple(deepcopy(self._rows))
+
+    def append(self, row: Mapping[str, Any]) -> None:
+        if len(self._rows) >= REQUIRED_FILLS:
+            raise ValueError("capture_already_complete")
+        if not isinstance(row, Mapping):
+            raise ValueError("capture_row_must_be_object")
+        candidate = deepcopy(dict(row))
+        expected_sequence = len(self._rows) + 1
+        if candidate.get("sequence_no") != expected_sequence:
+            raise ValueError("sequence_no_must_advance_without_reset")
+        for field in ("balance_checkpoint_id", "entry_ts_ms", "cash_available_ts_ms"):
+            _required(candidate, field)
+        try:
+            entry_ts_ms = int(str(candidate["entry_ts_ms"]))
+            cash_available_ts_ms = int(str(candidate["cash_available_ts_ms"]))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("capture_timestamps_must_be_integer") from exc
+        if cash_available_ts_ms < entry_ts_ms:
+            raise ValueError("cash_available_timestamp_before_entry")
+        for field in ("owner", "ledger_id", "chain_id"):
+            if candidate.get(field) != self._header.get(field):
+                raise ValueError(f"{field}_mismatch")
+        previous = self._header["starting_checkpoint_id"] if expected_sequence == 1 else self._rows[-1].get("balance_checkpoint_id")
+        if candidate.get("previous_checkpoint_id") != previous:
+            raise ValueError("previous_checkpoint_link_mismatch")
+        for field in self._seen:
+            if field == "source_ref":
+                ref = candidate.get(field)
+                if not isinstance(ref, Mapping):
+                    raise ValueError(f"{field}_reused_or_missing")
+                key = json.dumps(ref, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            elif field == "depth_ref":
+                ref = candidate.get(field)
+                if not isinstance(ref, Mapping):
+                    raise ValueError(f"{field}_reused_or_missing")
+                key = json.dumps(ref, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            else:
+                key = str(candidate.get(field) or "").strip()
+            if not key or key in self._seen[field]:
+                raise ValueError(f"{field}_reused_or_missing")
+            self._seen[field].add(key)
+        if self._rows:
+            try:
+                if entry_ts_ms <= int(str(self._rows[-1]["entry_ts_ms"])):
+                    raise ValueError("entry_timestamps_must_increase")
+            except KeyError as exc:
+                raise ValueError("entry_ts_ms_required") from exc
+        self._rows.append(candidate)
+
+    def build(self) -> dict[str, Any]:
+        if len(self._rows) != REQUIRED_FILLS:
+            raise ValueError("exactly_ten_rows_required")
+        return build_h600_bundle({**deepcopy(self._header), "rows": list(self.rows)})
+
+
+__all__ = ["build_h600_bundle", "validate_built_h600_bundle", "H600CompoundCapture"]

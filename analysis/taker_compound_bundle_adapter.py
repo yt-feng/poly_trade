@@ -325,6 +325,7 @@ def assemble_h600_taker_compound_row(
         },
         "strategy_decision_ref": _required_text(trace, "decision_ref"),
         "strategy_decision_sha256": _canonical_strategy_hash(trace),
+        "strategy_decision": dict(trace),
         "position_side": position_side,
     })
     return row
