@@ -23,9 +23,10 @@ REPOSITORY = 'yt-feng/poly_trade'
 
 
 class ApiError(Exception):
-    def __init__(self, not_found=False, status_code=None):
+    def __init__(self, not_found=False, status_code=None, category='unknown'):
         self.not_found = not_found
         self.status_code = status_code
+        self.category = category
 
 
 def github_api(method, path, payload=None):
@@ -37,7 +38,20 @@ def github_api(method, path, payload=None):
     if result.returncode:
         match = re.search(r'HTTP (\d{3})', result.stderr)
         status_code = int(match.group(1)) if match else None
-        raise ApiError(status_code == 404, status_code=status_code)
+        text = result.stderr.lower()
+        if 'rate limit' in text or 'too many requests' in text:
+            category = 'rate_limit'
+        elif 'forbidden' in text or 'permission' in text or status_code == 403:
+            category = 'permission'
+        elif 'validation' in text or status_code == 422:
+            category = 'validation'
+        elif 'conflict' in text or status_code == 409:
+            category = 'conflict'
+        elif 'not found' in text or status_code == 404:
+            category = 'not_found'
+        else:
+            category = 'unknown'
+        raise ApiError(status_code == 404, status_code=status_code, category=category)
     return json.loads(result.stdout)
 
 
@@ -141,6 +155,7 @@ def main():
             'plaintext_published': False,
             'error_class': type(error).__name__,
             'error_code': getattr(error, 'status_code', None),
+            'error_category': getattr(error, 'category', 'unknown'),
         }, sort_keys=True))
         return 2
 
