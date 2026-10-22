@@ -293,6 +293,9 @@ def bundle(events=None, source=None):
                 "market_id": MARKET_ID,
                 "settled_ts_ms": START + (i - 1) * 10_000 + 5_000,
                 "raw_payload_sha256": hashlib.sha256(f"settlement-{i}".encode()).hexdigest(),
+                "settlement_transaction_hash": f"tx-{i}",
+                "settlement_status": "CONFIRMED",
+                "settlement_reverted": False,
                 "payout": "5.435",
             }
             for i in range(1, 11)
@@ -680,6 +683,30 @@ def test_settlement_payout_must_match_the_cash_release_payout():
     result = validate_bundle_document(doc)
     assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "settlement_payout_mismatch"
+
+
+def test_settlement_receipt_must_bind_to_the_account_transaction():
+    doc = bundle()
+    doc["settlement_receipts"][0]["settlement_transaction_hash"] = "unrelated-tx"
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "settlement_transaction_mismatch"
+
+
+def test_reverted_settlement_receipt_is_not_admissible():
+    doc = bundle()
+    doc["settlement_receipts"][0]["settlement_reverted"] = True
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "settlement_must_not_be_reverted"
+
+
+def test_nonterminal_settlement_receipt_is_not_admissible():
+    doc = bundle()
+    doc["settlement_receipts"][0]["settlement_status"] = "MATCHED"
+    result = validate_bundle_document(doc)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "settlement_status_must_be_confirmed"
 
 
 def test_unconfirmed_or_non_independent_account_evidence_fails_closed():

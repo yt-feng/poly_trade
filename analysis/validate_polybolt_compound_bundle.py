@@ -519,7 +519,13 @@ def _settlement_receipts(
     document: dict[str, Any],
     windows: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, dict[str, Any]], str | None]:
-    """Check supplied settlement references; hashes do not authenticate origin."""
+    """Check supplied settlement references; hashes do not authenticate origin.
+
+    A terminal account event is still not enough to establish reusable cash.
+    The receipt must carry the settlement transaction identity and an explicit
+    non-reverted terminal status so an off-chain match or reverted execution
+    cannot be promoted by matching only market, timestamp and payout.
+    """
     receipts = document.get("settlement_receipts")
     if not isinstance(receipts, list) or len(receipts) != REQUIRED_FILLS:
         return {}, "exactly_ten_settlement_receipts_required"
@@ -538,6 +544,11 @@ def _settlement_receipts(
                 return {}, "settlement_timestamp_invalid"
             payload_hash = _hash(receipt.get("raw_payload_sha256"), "settlement_raw_payload_sha256")
             payout = _decimal(receipt.get("payout"), "settlement_payout")
+            transaction_hash = _text(
+                receipt.get("settlement_transaction_hash"), "settlement_transaction_hash"
+            )
+            settlement_status = _text(receipt.get("settlement_status"), "settlement_status").upper()
+            settlement_reverted = receipt.get("settlement_reverted")
         except ValueError as exc:
             return {}, str(exc)
         window = windows.get(market_id)
@@ -545,6 +556,12 @@ def _settlement_receipts(
             return {}, "settlement_receipt_market_unknown"
         if payout < 0:
             return {}, "settlement_payout_negative"
+        if settlement_status != "CONFIRMED":
+            return {}, "settlement_status_must_be_confirmed"
+        if type(settlement_reverted) is not bool:
+            return {}, "settlement_reversion_status_required"
+        if settlement_reverted:
+            return {}, "settlement_must_not_be_reverted"
         if receipt_id in out:
             return {}, "duplicate_settlement_receipt_id"
         out[receipt_id] = {
@@ -554,6 +571,9 @@ def _settlement_receipts(
             "settled_ts_ms": settled_ms,
             "raw_payload_sha256": payload_hash,
             "payout": payout,
+            "settlement_transaction_hash": transaction_hash,
+            "settlement_status": settlement_status,
+            "settlement_reverted": settlement_reverted,
         }
     if {row["sequence_no"] for row in out.values()} != set(range(1, REQUIRED_FILLS + 1)):
         return {}, "settlement_receipt_sequence_coverage_mismatch"
@@ -743,6 +763,8 @@ def _validate_same_ledger(
                 return "settlement_receipt_not_in_bundle"
             if settlement["sequence_no"] != sequence or settlement["market_id"] != market_id:
                 return "settlement_receipt_link_mismatch"
+            if settlement["settlement_transaction_hash"] != _text(row.get("transaction_ref"), "transaction_ref"):
+                return "settlement_transaction_mismatch"
             if settlement["settled_ts_ms"] < entry_ms:
                 return "settlement_before_entry"
             if settlement["settled_ts_ms"] > release_ms:
