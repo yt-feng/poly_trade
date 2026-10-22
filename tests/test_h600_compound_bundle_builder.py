@@ -1,7 +1,10 @@
 import copy
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
 from analysis.h600_compound_bundle_builder import build_h600_bundle, validate_built_h600_bundle
 
