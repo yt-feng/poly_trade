@@ -89,12 +89,18 @@ jobs:
         run: |
           set -euo pipefail
           RECIPIENT_ID="$(python -c 'import json; print(json.load(open("research_vault/recipient.json"))["recipient_id"])')"
-          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
-            --source sealed-delivery \
-            --repository yt-feng/poly_trade \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --recipient-id "$RECIPIENT_ID"
+          for attempt in 1 2 3 4 5; do
+            if PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+              --source sealed-delivery \
+              --repository yt-feng/poly_trade \
+              --run-id "$GITHUB_RUN_ID" \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --recipient-id "$RECIPIENT_ID"; then
+              exit 0
+            fi
+            sleep $((attempt * 2))
+          done
+          exit 1
       - name: Write redacted summary and clean runner files
         run: |
           echo '## H601 favorite path-depth synergy' >> "$GITHUB_STEP_SUMMARY"
