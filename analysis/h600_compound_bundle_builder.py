@@ -87,7 +87,17 @@ def _normalize_row(raw: Mapping[str, Any], trace: dict[str, Any]) -> dict[str, A
         row["cash_available_ts_ms"] = row["cash_available_ts"]
     row["strategy_decision_ref"] = trace["decision_ref"]
     row["strategy_decision_sha256"] = _canonical_hash(trace)
-    for field in ("entry_ts_ms", "cash_available_ts_ms", "source_ref", "depth_ref", "market_id"):
+    # Keep the direct builder path aligned with H600CompoundCapture.  A
+    # caller that bypasses the streaming buffer must fail before producing a
+    # half-assembled document whose missing execution identity or cash links
+    # are discovered only by the later v2 validator.
+    for field in (
+        "trade_id", "transaction_ref", "orderfilled_event_id",
+        "settlement_receipt_id", "cash_release_receipt_id",
+        "balance_checkpoint_id", "previous_checkpoint_id",
+        "cash_reconciled", "independent_checkpoint",
+        "entry_ts_ms", "cash_available_ts_ms", "source_ref", "depth_ref", "market_id",
+    ):
         _required(row, field)
     return row
 

@@ -69,6 +69,13 @@ class H600CompoundBundleBuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly_ten_rows_required"):
             build_h600_bundle(capture)
 
+    def test_builder_rejects_incomplete_execution_identity_before_document_build(self):
+        for field in ("trade_id", "transaction_ref", "orderfilled_event_id", "settlement_receipt_id"):
+            capture = capture_fixture()
+            capture["rows"][0].pop(field)
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, f"{field}_required"):
+                build_h600_bundle(capture)
+
     def test_capture_buffer_builds_one_continuous_ten_row_chain(self):
         capture = capture_fixture()
         buffer = H600CompoundCapture(capture)
