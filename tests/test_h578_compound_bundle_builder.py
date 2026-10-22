@@ -1,8 +1,13 @@
 import copy
 import importlib.util
+import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+
+TOOL = Path(__file__).resolve().parents[1] / "tools" / "run_polybolt_compound_admission.py"
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
@@ -77,3 +82,23 @@ class H578CompoundBundleBuilderTests(unittest.TestCase):
         capture["rows"] = copy.deepcopy(capture["rows"][:9])
         with self.assertRaisesRegex(ValueError, "exactly_ten_rows_required"):
             build_h578_bundle(capture)
+
+    def test_builder_output_is_accepted_by_the_admission_runner(self):
+        capture = capture_fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "bundle.json"
+            output = root / "result.json"
+            source.write_text(json.dumps(build_h578_bundle(capture)))
+            completed = subprocess.run(
+                [
+                    sys.executable, str(TOOL), "--bundle", str(source),
+                    "--output", str(output), "--strategy-profile", "h578_online_depth_proxy",
+                ],
+                check=True, capture_output=True, text=True,
+            )
+            result = json.loads(output.read_text())
+            self.assertTrue(result["offline_consistency_passed"])
+            self.assertEqual(result["strategy_profile"], "h578_online_depth_proxy")
+            self.assertIn('"gate_passed": false', completed.stdout)
+            self.assertEqual(result["verified_canary_fills"], 0)
