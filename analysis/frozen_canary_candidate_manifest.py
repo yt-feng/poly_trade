@@ -49,6 +49,9 @@ MIN_DEPTH = 100.0
 MAX_SPREAD = 0.06
 MAX_OVERROUND = 0.03
 REQUIRED_FILLS = 10
+EXECUTION_ROLE = "TAKER"
+TRADER_SIDE_SOURCE = "SETTLED_TAKER_LEG"
+TAKER_BUNDLE_SCHEMA = "authenticated-polybolt-compound-bundle-v2"
 
 
 def _literal_assignments(path: Path) -> dict[str, Any]:
@@ -167,6 +170,7 @@ def build_manifest() -> dict[str, Any]:
             "minimum_order_usd": float(MINIMUM_ORDER_USD),
             "minimum_order_shares": float(MINIMUM_ORDER_SHARES),
             "taker_fee_rate": float(TAKER_FEE_RATE),
+            "execution_role": EXECUTION_ROLE,
             "cash_release_delay_seconds": float(CASH_RELEASE_SECONDS),
             "single_position_only": True,
             "prior_cash_release_required": True,
@@ -177,9 +181,17 @@ def build_manifest() -> dict[str, Any]:
             "paper_fill_count": 0,
         },
         "canary_admission": {
-            "requires_h497_v2_path_adapter": True,
+            # H434/H453 is a taker paper route.  H497 is a synthetic maker
+            # pair adapter and cannot authenticate this candidate's fills.
+            "admission_route": "authenticated_polybolt_taker_v2",
+            "required_bundle_schema": TAKER_BUNDLE_SCHEMA,
+            "required_execution_role": EXECUTION_ROLE,
+            "required_trader_side": EXECUTION_ROLE,
+            "required_trader_side_source": TRADER_SIDE_SOURCE,
+            "requires_taker_compound_bundle_adapter": True,
+            "requires_h497_v2_path_adapter": False,
             "required_exchange_version": "ctf-exchange-v2",
-            "required_match_paths": ["COMPLEMENTARY", "MINT", "MERGE"],
+            "required_match_paths": ["TAKER_ORDERFILLED"],
             "requires_owner_scoped_order_filled": True,
             "requires_confirmed_settlement_receipt": True,
             "requires_payout_or_redeem_receipt": True,
@@ -194,8 +206,7 @@ def build_manifest() -> dict[str, Any]:
             "cash_fraction_confirmation": "H453_H447_UPPER_CASH_FRACTION",
             "evidence_boundary": (
                 "strict-quality old-clean quote replay only; displayed quotes do "
-                "not prove queue position, owner fill, settlement, payout, or "
-                "reusable cash"
+                "not prove owner taker fill, settlement, payout, or reusable cash"
             ),
             "paper_only": True,
             "actual_fills": 0,
@@ -264,7 +275,8 @@ def audit() -> dict[str, Any]:
         "no_reset_or_concatenation": manifest["execution_contract"]["no_reset"] is True and manifest["execution_contract"]["no_concatenation"] is True,
         "ten_means_consecutive": manifest["execution_contract"]["required_consecutive_fills"] == 10,
         "release_required_before_next_entry": manifest["execution_contract"]["prior_cash_release_required"] is True,
-        "h497_receipt_gate_required": manifest["canary_admission"]["requires_h497_v2_path_adapter"] is True,
+        "taker_receipt_gate_required": manifest["canary_admission"]["requires_taker_compound_bundle_adapter"] is True,
+        "maker_pair_route_excluded": manifest["canary_admission"]["requires_h497_v2_path_adapter"] is False,
         "paper_never_counts_as_canary": result["gate_passed"] is False and result["verified_canary_fills"] == 0,
         "no_live_action": manifest["live_orders_enabled"] is False,
         "validator_accepts_unchanged_manifest": result["all_checks_passed"] is True,
@@ -278,8 +290,8 @@ def audit() -> dict[str, Any]:
         "source_parity": parity,
         "checks": checks,
         "all_checks_passed": all(checks.values()),
-        "decision": "freeze_candidate_wait_for_owner_scoped_v2_receipts",
-        "root_cause": "The old-clean replay can prove a paper prefix but cannot prove ten chronological owner fills, settlement, and reusable cash; the manifest makes that boundary executable and prevents parameter drift.",
+        "decision": "freeze_taker_candidate_wait_for_owner_scoped_v2_receipts",
+        "root_cause": "The old-clean replay can prove a paper prefix but cannot prove ten chronological owner taker fills, settlement, and reusable cash. The prior maker-pair route was semantically incompatible with this taker candidate; the manifest now binds the correct taker adapter and fails closed on maker evidence.",
     }
 
 

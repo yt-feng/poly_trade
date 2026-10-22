@@ -11,6 +11,10 @@ def test_h498_freezes_one_consecutive_compounding_contract():
     assert result["manifest"]["execution_contract"]["no_concatenation"] is True
     assert result["manifest"]["canary_admission"]["gate_passed"] is False
     assert result["manifest"]["paper_evidence"]["verified_canary_fills"] == 0
+    assert result["manifest"]["execution_contract"]["execution_role"] == "TAKER"
+    assert result["manifest"]["canary_admission"]["requires_taker_compound_bundle_adapter"] is True
+    assert result["manifest"]["canary_admission"]["requires_h497_v2_path_adapter"] is False
+    assert result["manifest"]["canary_admission"]["required_trader_side_source"] == "SETTLED_TAKER_LEG"
     assert result["source_parity"]["all_literals_match"] is True
 
 
@@ -28,4 +32,12 @@ def test_h498_fails_closed_on_parameter_or_promotion_drift():
     assert result["all_checks_passed"] is False
     assert "execution_contract.minimum_order_usd" in result["failures"]
     assert "live_orders_enabled" in result["failures"]
+
+
+def test_h498_rejects_reintroducing_the_maker_pair_route():
+    manifest = deepcopy(build_manifest())
+    manifest["canary_admission"]["requires_h497_v2_path_adapter"] = True
+    result = validate_manifest(manifest)
+    assert result["all_checks_passed"] is False
+    assert "canary_admission.requires_h497_v2_path_adapter" in result["failures"]
 
