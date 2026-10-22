@@ -23,8 +23,9 @@ REPOSITORY = 'yt-feng/poly_trade'
 
 
 class ApiError(Exception):
-    def __init__(self, not_found=False):
+    def __init__(self, not_found=False, status_code=None):
         self.not_found = not_found
+        self.status_code = status_code
 
 
 def github_api(method, path, payload=None):
@@ -34,7 +35,9 @@ def github_api(method, path, payload=None):
     result = subprocess.run(command, input=json.dumps(payload) if payload is not None else None,
                             capture_output=True, text=True, timeout=90, check=False)
     if result.returncode:
-        raise ApiError('(HTTP 404)' in result.stderr)
+        match = re.search(r'HTTP (\d{3})', result.stderr)
+        status_code = int(match.group(1)) if match else None
+        raise ApiError(status_code == 404, status_code=status_code)
     return json.loads(result.stdout)
 
 
@@ -137,6 +140,7 @@ def main():
             'status': 'publication_failed',
             'plaintext_published': False,
             'error_class': type(error).__name__,
+            'error_code': getattr(error, 'status_code', None),
         }, sort_keys=True))
         return 2
 
