@@ -106,6 +106,21 @@ def state(*, bundle: bool = False, fills: int = 0, binding: bool = False, receip
     }
 
 
+def h600_state() -> dict:
+    fixture = state()
+    fixture["h600_favorite_side_depth"] = {
+        "status": "verified_remote_retained_paper_challenger",
+        "source_commit": "bbda5f2050685f63153621a54641ebdfab943487",
+        "remote_episode_id": "episode-h600",
+        "selection_rows": 192,
+        "selection_passed_rows": 192,
+        "holdout_rows": 216,
+        "holdout_passed_rows": 216,
+        "all_408_stress_rows_passed": True,
+    }
+    return fixture
+
+
 def test_report_separates_pooled_prefix_from_block_stress_and_receipts():
     report = build_report(state(), paper_artifact())
     assert report["paper_frontier"]["pooled_frontier_consistent"] is True
@@ -196,3 +211,21 @@ def test_report_consumes_h534_dense_fixed_fraction_contract():
     assert report["paper_frontier"]["fixed_fraction_policy"]["gross_cash_fraction"] == 0.55
     assert report["paper_frontier"]["fixed_fraction_policy_ready"] is True
     assert report["canary_ready"] is False
+
+
+def test_report_prefers_verified_h600_checkpoint_over_stale_paper_artifact():
+    report = build_report(h600_state(), paper_artifact(block_failure=True))
+    assert report["paper_frontier"]["candidate_schema"] == "old-clean-h600-favorite-side-depth-sealed-v1"
+    assert report["paper_frontier"]["frontier_source"] == "verified_checkpoint_h600_summary"
+    assert report["paper_frontier"]["block_stress_stable"] is True
+    assert "paper_block_stress_unstable" not in report["hard_blockers"]
+    assert report["canary_ready"] is False
+
+
+def test_incomplete_h600_checkpoint_does_not_override_paper_artifact():
+    fixture = h600_state()
+    fixture["h600_favorite_side_depth"]["holdout_passed_rows"] = 215
+    report = build_report(fixture, paper_artifact(block_failure=True))
+    assert "h30_move_uncertainty" in report["paper_frontier"]["candidates"]
+    assert report["paper_frontier"]["block_stress_stable"] is False
+    assert "paper_block_stress_unstable" in report["hard_blockers"]
