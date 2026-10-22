@@ -300,6 +300,11 @@ def test_workflow_never_uploads_private_bundle_or_enables_orders():
     assert "POLYBOLT_STRATEGY_PROFILE_JSON_B64" in text
     assert "STRATEGY_PROFILE" in text
     assert "POLYBOLT_COMPOUND_BUNDLE_B64" in text
+    assert "Detect private bundle without exposing its contents" in text
+    assert "id: bundle_preflight" in text
+    assert "steps.bundle_preflight.outputs.available == 'true'" in text
+    assert "Write fail-closed result when bundle unavailable" in text
+    assert "bundle_secret_unavailable" in text
     assert "redacted fail-closed result" in text
     materialize = text.split("name: Materialize private bundle only in runner temp", 1)[1].split(
         "name: Run v2 offline consistency checks", 1

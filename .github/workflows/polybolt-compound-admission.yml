@@ -31,9 +31,28 @@ jobs:
         with:
           python-version: '3.11'
 
-      - run: python -m pip install -r requirements-vault.txt pytest
+      - name: Detect private bundle without exposing its contents
+        id: bundle_preflight
+        env:
+          POLYBOLT_COMPOUND_BUNDLE_B64: ${{ secrets.POLYBOLT_COMPOUND_BUNDLE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${POLYBOLT_COMPOUND_BUNDLE_B64:-}" ]; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+            echo 'No private compound bundle is available; creating only a sealed fail-closed result.'
+          fi
+
+      - name: Install vault dependencies
+        run: python -m pip install -r requirements-vault.txt
+
+      - name: Install admission test dependencies
+        if: steps.bundle_preflight.outputs.available == 'true'
+        run: python -m pip install pytest
 
       - name: Validate admission contracts
+        if: steps.bundle_preflight.outputs.available == 'true'
         run: |
           python -m pytest -q \
             tests/test_polybolt_twap_adapter.py \
@@ -90,6 +109,7 @@ jobs:
           PY
 
       - name: Run v2 offline consistency checks and retain only redacted result
+        if: steps.bundle_preflight.outputs.available == 'true'
         run: |
           set -euo pipefail
           PRIVATE_DIR="$RUNNER_TEMP/polybolt-compound-admission"
@@ -98,6 +118,16 @@ jobs:
             --output "$PRIVATE_DIR/result.json" \
             --strategy-profile "${{ inputs.strategy_profile || 'h578_online_depth_proxy' }}" \
             --private-strategy-config "$PRIVATE_DIR/strategy-profile.json"
+
+      - name: Write fail-closed result when bundle unavailable
+        if: steps.bundle_preflight.outputs.available != 'true'
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/polybolt-compound-admission"
+          mkdir -m 700 -p "$PRIVATE_DIR"
+          cat > "$PRIVATE_DIR/result.json" <<'JSON'
+          {"offline_consistency_passed":false,"evidence_scope":"offline_bundle_consistency_only","failure_reason":"bundle_secret_unavailable","fills":0,"required_fills":10,"consecutive":false,"same_ledger_identity_verified":false,"cash_amounts_reconciled":false,"source_fill_references_verified":false,"actual_fills":0,"verified_canary_fills":0}
+          JSON
 
       - name: Seal redacted admission result
         env:
