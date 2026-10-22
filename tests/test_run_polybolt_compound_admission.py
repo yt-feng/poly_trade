@@ -287,8 +287,8 @@ def test_tool_seals_generic_failure_for_invalid_json(tmp_path):
 def test_workflow_never_uploads_private_bundle_or_enables_orders():
     text = WORKFLOW.read_text()
     assert "strategy_profile" in text
-    assert "default: h549_adaptive_one_profit" in text
-    assert "inputs.strategy_profile || 'h549_adaptive_one_profit'" in text
+    assert "default: h578_online_depth_proxy" in text
+    assert "inputs.strategy_profile || 'h578_online_depth_proxy'" in text
     assert "h530_fixed_half_cash" in text
     assert "h546_adaptive_one_profit" in text
     assert "h549_adaptive_one_profit" in text
