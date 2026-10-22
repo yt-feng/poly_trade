@@ -36,12 +36,12 @@ def capture_fixture():
     traces = {item["sequence_no"]: item for item in document["strategy_decisions"]}
     for row in rows:
         row["strategy_decision"] = traces[row["sequence_no"]]
-        row["orderfilled_event_id"] = f"orderfilled-{row['sequence_no']}"
+        row["orderfilled_event_id"] = f"tx-{row['sequence_no']}:{row['sequence_no']}"
     return {
         **{key: document[key] for key in (
             "owner", "ledger_id", "chain_id", "starting_checkpoint_id", "closing_balance_checkpoint_id",
             "initial_cash", "closing_balance", "market_windows", "source_events", "depth_snapshots",
-            "settlement_receipts", "cash_release_receipts",
+            "settlement_receipts", "cash_release_receipts", "orderfilled_records",
         )},
         "rows": rows,
         "strategy": document["strategy"],
@@ -75,6 +75,12 @@ class H600CompoundBundleBuilderTests(unittest.TestCase):
             capture["rows"][0].pop(field)
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, f"{field}_required"):
                 build_h600_bundle(capture)
+
+    def test_builder_rejects_missing_canonical_orderfilled_records(self):
+        capture = capture_fixture()
+        capture.pop("orderfilled_records")
+        with self.assertRaisesRegex(ValueError, "orderfilled_records_required"):
+            build_h600_bundle(capture)
 
     def test_capture_buffer_builds_one_continuous_ten_row_chain(self):
         capture = capture_fixture()

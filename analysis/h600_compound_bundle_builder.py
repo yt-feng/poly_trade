@@ -135,7 +135,7 @@ def build_h600_bundle(capture: Mapping[str, Any]) -> dict[str, Any]:
     required = (
         "owner", "ledger_id", "chain_id", "starting_checkpoint_id", "closing_balance_checkpoint_id",
         "initial_cash", "closing_balance", "market_windows", "source_events", "depth_snapshots",
-        "settlement_receipts", "cash_release_receipts",
+        "settlement_receipts", "cash_release_receipts", "orderfilled_records",
     )
     for field in required:
         _required(capture, field)
@@ -148,6 +148,7 @@ def build_h600_bundle(capture: Mapping[str, Any]) -> dict[str, Any]:
         "strategy": dict(strategy), "market_windows": deepcopy(capture["market_windows"]),
         "cash_release_receipts": deepcopy(capture["cash_release_receipts"]),
         "settlement_receipts": deepcopy(capture["settlement_receipts"]),
+        "orderfilled_records": deepcopy(capture["orderfilled_records"]),
         "source_events": deepcopy(capture["source_events"]), "depth_snapshots": deepcopy(capture["depth_snapshots"]),
         "events": rows, "strategy_decisions": traces,
     }
@@ -173,7 +174,7 @@ class H600CompoundCapture:
             "owner", "ledger_id", "chain_id", "starting_checkpoint_id",
             "closing_balance_checkpoint_id", "initial_cash", "closing_balance",
             "market_windows", "source_events", "depth_snapshots",
-            "settlement_receipts", "cash_release_receipts",
+            "settlement_receipts", "cash_release_receipts", "orderfilled_records",
         )
         for field in required:
             _required(header, field)

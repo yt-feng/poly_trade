@@ -580,6 +580,94 @@ def _settlement_receipts(
     return out, None
 
 
+def _orderfilled_records(
+    document: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], str | None]:
+    """Validate normalized canonical OrderFilled evidence for H600.
+
+    The row's event id is only a reference. H600 carries the normalized event
+    records alongside the ledger rows so a direct bundle caller cannot pass an
+    arbitrary id without binding transaction, market, owner, side, quantity,
+    price and collateral amount.
+    """
+    records = document.get("orderfilled_records")
+    if not isinstance(records, list) or len(records) != REQUIRED_FILLS:
+        return {}, "exactly_ten_orderfilled_records_required"
+    out: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            return {}, "invalid_orderfilled_record"
+        try:
+            event_id = _text(record.get("event_id"), "orderfilled_event_id")
+            tx_hash = _text(record.get("tx_hash"), "orderfilled_tx_hash")
+            log_index = record.get("log_index")
+            block_number = record.get("block_number")
+            market_id = _text(record.get("market_id"), "orderfilled_market_id")
+            taker = _text(record.get("taker"), "orderfilled_taker").lower()
+            side = _text(record.get("side"), "orderfilled_side").upper()
+            sign = record.get("sign")
+            size = _decimal(record.get("size"), "orderfilled_size")
+            price = _decimal(record.get("price"), "orderfilled_price")
+            cash_amount = _decimal(record.get("cash_amount"), "orderfilled_cash_amount")
+        except ValueError as exc:
+            return {}, str(exc)
+        if not _integer(log_index) or not _integer(block_number):
+            return {}, "orderfilled_identity_invalid"
+        if event_id != f"{tx_hash}:{log_index}":
+            return {}, "orderfilled_event_id_mismatch"
+        if side != "BUY" or sign != 1:
+            return {}, "orderfilled_not_buy_entry"
+        if size <= 0 or cash_amount <= 0 or not (Decimal("0") < price < Decimal("1")):
+            return {}, "orderfilled_amount_or_price_invalid"
+        if event_id in out:
+            return {}, "duplicate_orderfilled_event_id"
+        out[event_id] = {
+            "event_id": event_id,
+            "tx_hash": tx_hash,
+            "market_id": market_id,
+            "taker": taker,
+            "size": size,
+            "price": price,
+            "cash_amount": cash_amount,
+        }
+    return out, None
+
+
+def _validate_orderfilled_bindings(
+    document: dict[str, Any],
+    events: list[dict[str, Any]],
+    orderfilled_by_id: dict[str, dict[str, Any]],
+) -> str | None:
+    owner = _text(document.get("owner"), "bundle_owner")
+    used: set[str] = set()
+    for row in events:
+        event_id = _text(row.get("orderfilled_event_id"), "orderfilled_event_id")
+        if event_id in used:
+            return "orderfilled_event_id_reused"
+        used.add(event_id)
+        fill = orderfilled_by_id.get(event_id)
+        if fill is None:
+            return "orderfilled_event_not_in_bundle"
+        if fill["tx_hash"] != _text(row.get("transaction_ref"), "transaction_ref"):
+            return "orderfilled_transaction_mismatch"
+        if fill["market_id"] != _text(row.get("market_id"), "event_market_id"):
+            return "orderfilled_market_mismatch"
+        if fill["taker"] != owner.lower():
+            return "orderfilled_taker_owner_mismatch"
+        try:
+            if abs(fill["size"] - _decimal(row.get("shares"), "shares")) > FEE_AMOUNT_TOLERANCE:
+                return "orderfilled_size_mismatch"
+            if abs(fill["price"] - _decimal(row.get("price"), "price")) > FEE_AMOUNT_TOLERANCE:
+                return "orderfilled_price_mismatch"
+            if abs(fill["cash_amount"] - _decimal(row.get("entry_cost"), "entry_cost")) > FEE_AMOUNT_TOLERANCE:
+                return "orderfilled_cash_amount_mismatch"
+        except ValueError as exc:
+            return str(exc)
+    if used != set(orderfilled_by_id):
+        return "orderfilled_record_coverage_mismatch"
+    return None
+
+
 def _validate_same_ledger(
     document: dict[str, Any],
     events: list[dict[str, Any]],
@@ -1145,6 +1233,19 @@ def validate_bundle_document(
             **_fail("source_continuity_not_admissible", event_count=len(events), source_event_count=len(source_events)),
             "source_continuity_manifest": manifest,
         }
+    if strategy_profile == H600_STRATEGY_PROFILE:
+        orderfilled_by_id, orderfilled_error = _orderfilled_records(document)
+        if orderfilled_error:
+            return {
+                **_fail(orderfilled_error, event_count=len(events), source_event_count=len(source_events)),
+                "source_continuity_manifest": manifest,
+            }
+        orderfilled_binding_error = _validate_orderfilled_bindings(document, events, orderfilled_by_id)
+        if orderfilled_binding_error:
+            return {
+                **_fail(orderfilled_binding_error, event_count=len(events), source_event_count=len(source_events)),
+                "source_continuity_manifest": manifest,
+            }
     ledger_failure = _validate_same_ledger(
         document,
         events,

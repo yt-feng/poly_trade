@@ -132,8 +132,9 @@ def configure_adaptive_fixture(document: dict[str, object], fractions: list[str]
     """Build a profitable synthetic chain whose size follows each fraction."""
     cash = Decimal("10")
     previous_payout = Decimal("0")
-    for event, receipt, settlement, fraction in zip(
-        document["events"], document["cash_release_receipts"], document["settlement_receipts"], fractions, strict=True
+    for event, receipt, settlement, orderfilled, fraction in zip(
+        document["events"], document["cash_release_receipts"], document["settlement_receipts"],
+        document["orderfilled_records"], fractions, strict=True
     ):
         fraction_decimal = Decimal(fraction)
         price = Decimal("0.5")
@@ -153,6 +154,11 @@ def configure_adaptive_fixture(document: dict[str, object], fractions: list[str]
             "released_cash_since_previous_entry": format(previous_payout, "f"),
             "balance_before": format(before, "f"),
             "balance_after": format(after, "f"),
+        })
+        orderfilled.update({
+            "size": format(shares, "f"),
+            "price": format(price, "f"),
+            "cash_amount": format(cost, "f"),
         })
         receipt["amount"] = format(payout, "f")
         settlement["payout"] = format(payout, "f")
@@ -218,7 +224,7 @@ def account_event(i: int, *, ledger_id: str = "ledger-1", chain_id: str = "chain
         "order_status": "MATCHED",
         "trade_id": f"trade-{i}",
         "transaction_ref": f"tx-{i}",
-        "orderfilled_event_id": f"orderfilled-{i}",
+        "orderfilled_event_id": f"tx-{i}:{i}",
         "settlement_receipt_id": f"settlement-{i}",
         "cash_release_receipt_id": f"cash-release-{i}",
         "execution_role": "TAKER",
@@ -300,6 +306,22 @@ def bundle(events=None, source=None):
                 "settlement_status": "CONFIRMED",
                 "settlement_reverted": False,
                 "payout": "5.435",
+            }
+            for i in range(1, 11)
+        ],
+        "orderfilled_records": [
+            {
+                "event_id": f"tx-{i}:{i}",
+                "tx_hash": f"tx-{i}",
+                "log_index": i,
+                "block_number": 1000 + i,
+                "market_id": MARKET_ID,
+                "taker": "owner-1",
+                "side": "BUY",
+                "sign": 1,
+                "size": "10",
+                "price": "0.5",
+                "cash_amount": "5",
             }
             for i in range(1, 11)
         ],
@@ -530,6 +552,34 @@ def test_h600_profile_requires_matched_order_identity(field):
     result = validate_bundle_document(doc, strategy_profile=H600_STRATEGY_PROFILE)
     assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == ("order_id_required" if field == "order_id" else "order_status_must_be_matched")
+
+
+def test_h600_profile_requires_canonical_orderfilled_record_binding():
+    doc = bundle()
+    doc["strategy"] = {
+        "id": H600_STRATEGY_ID,
+        "version": H600_STRATEGY_VERSION,
+        "config_sha256": H600_STRATEGY_CONFIG_SHA256,
+    }
+    configure_adaptive_fixture(doc, ["0.75"] * 10)
+    for snapshot in doc["depth_snapshots"]:
+        snapshot["sell_available_shares_2m"] = "90"
+    attach_favorite_depth_trace(doc, depth="90", favorite_ask="0.50", cash_fraction="0.75")
+
+    missing = dict(doc)
+    missing.pop("orderfilled_records")
+    result = validate_bundle_document(missing, strategy_profile=H600_STRATEGY_PROFILE)
+    assert result["failure_reason"] == "exactly_ten_orderfilled_records_required"
+
+    mismatched = bundle()
+    mismatched["strategy"] = doc["strategy"]
+    configure_adaptive_fixture(mismatched, ["0.75"] * 10)
+    for snapshot in mismatched["depth_snapshots"]:
+        snapshot["sell_available_shares_2m"] = "90"
+    attach_favorite_depth_trace(mismatched, depth="90", favorite_ask="0.50", cash_fraction="0.75")
+    mismatched["events"][0]["transaction_ref"] = "tx-other"
+    result = validate_bundle_document(mismatched, strategy_profile=H600_STRATEGY_PROFILE)
+    assert result["failure_reason"] == "orderfilled_transaction_mismatch"
 
 
 def test_private_exact_profile_is_supplied_without_public_config():
