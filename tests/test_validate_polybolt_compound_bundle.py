@@ -26,6 +26,10 @@ from validate_polybolt_compound_bundle import (
     H578_STRATEGY_ID,
     H578_STRATEGY_PROFILE,
     H578_STRATEGY_VERSION,
+    H600_STRATEGY_CONFIG_SHA256,
+    H600_STRATEGY_ID,
+    H600_STRATEGY_PROFILE,
+    H600_STRATEGY_VERSION,
     PRIVATE_STRATEGY_PROFILE,
     FROZEN_STRATEGY_CONFIG_SHA256,
     FROZEN_STRATEGY_ID,
@@ -84,6 +88,33 @@ def attach_depth_proxy_trace(
             "position_side": "up",
             "entry_sell_depth_shares": depth,
             "depth_capacity_ratio": format(ratio, "f"),
+        }
+        event["strategy_decision_sha256"] = hashlib.sha256(
+            json.dumps(decision, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        decisions.append(decision)
+    document["strategy_decisions"] = decisions
+    return document
+
+
+def attach_favorite_depth_trace(
+    document: dict[str, object], depth: str = "90", favorite_ask: str = "0.50", cash_fraction: str = "1.0"
+) -> dict[str, object]:
+    decisions = []
+    for event in document["events"]:
+        balance_before = Decimal(str(event["balance_before"]))
+        price = Decimal(str(event["price"]))
+        per_share = price + Decimal("0.07") * price * (Decimal("1") - price)
+        full_shares = max(Decimal("5"), balance_before / per_share)
+        ratio = Decimal(depth) / full_shares
+        decision = {
+            "decision_ref": event["strategy_decision_ref"],
+            "sequence_no": event["sequence_no"],
+            "cash_fraction": cash_fraction,
+            "position_side": "up",
+            "entry_sell_depth_shares": depth,
+            "depth_capacity_ratio": format(ratio, "f"),
+            "favorite_ask_price": favorite_ask,
         }
         event["strategy_decision_sha256"] = hashlib.sha256(
             json.dumps(decision, sort_keys=True, separators=(",", ":")).encode()
@@ -414,6 +445,29 @@ def test_h578_profile_binds_the_separate_3_5_7_depth_contract():
     result = validate_bundle_document(doc, strategy_profile=H561_STRATEGY_PROFILE)
     assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "strategy_decision_trace_fraction_mismatch"
+
+
+def test_h600_profile_binds_favorite_floor_and_depth_trace_separately():
+    assert H600_STRATEGY_PROFILE not in {H561_STRATEGY_PROFILE, H578_STRATEGY_PROFILE}
+    doc = bundle()
+    doc["strategy"] = {
+        "id": H600_STRATEGY_ID,
+        "version": H600_STRATEGY_VERSION,
+        "config_sha256": H600_STRATEGY_CONFIG_SHA256,
+    }
+    configure_adaptive_fixture(doc, ["0.75"] * 10)
+    for snapshot in doc["depth_snapshots"]:
+        snapshot["sell_available_shares_2m"] = "90"
+    attach_favorite_depth_trace(doc, depth="90", favorite_ask="0.50", cash_fraction="0.75")
+    result = validate_bundle_document(doc, strategy_profile=H600_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is True
+
+    for snapshot in doc["depth_snapshots"]:
+        snapshot["ask_price"] = "0.49"
+    attach_favorite_depth_trace(doc, depth="90", favorite_ask="0.49", cash_fraction="0.75")
+    result = validate_bundle_document(doc, strategy_profile=H600_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "strategy_trace_favorite_ask_below_floor"
 
 
 def test_private_exact_profile_is_supplied_without_public_config():

@@ -62,6 +62,10 @@ H561_STRATEGY_PROFILE = "h561_online_depth_proxy"
 # profile; the explicit thresholds prevent an owner bundle from being read as
 # H561 by accident.
 H578_STRATEGY_PROFILE = "h578_online_depth_proxy"
+# H600 adds an entry-visible favorite-side ask floor to the H578 depth map.
+# Keep it separate so a H578 bundle cannot be relabelled as H600 by changing
+# only the top-level strategy id.
+H600_STRATEGY_PROFILE = "h600_favorite_side_depth"
 PRIVATE_STRATEGY_PROFILE = "private_exact"
 TRACE_PROFILES = {
     H530_STRATEGY_PROFILE,
@@ -69,6 +73,7 @@ TRACE_PROFILES = {
     H549_STRATEGY_PROFILE,
     H561_STRATEGY_PROFILE,
     H578_STRATEGY_PROFILE,
+    H600_STRATEGY_PROFILE,
 }
 FROZEN_STRATEGY_ID = "h30_move_uncertainty"
 FROZEN_STRATEGY_VERSION = "h54-execution-contract-prefix-v1"
@@ -163,6 +168,24 @@ H578_STRATEGY_CONFIG = {
     "minimum_order_shares": "5",
     "required_fills": 10,
 }
+H600_STRATEGY_ID = "h600_favorite_side_depth"
+H600_STRATEGY_VERSION = "h600-old-clean-favorite-side-depth-v1"
+H600_STRATEGY_CONFIG = {
+    "candidate": "H600_FAVORITE_SIDE_ALIGNMENT_H578_DEPTH",
+    "source_commit": "bbda5f2050685f63153621a54641ebdfab943487",
+    "favorite_price_floor": "0.50",
+    "depth_capacity_thresholds": ["3", "5", "7"],
+    "gross_cash_fractions": ["0.5", "0.75", "0.9", "1.0"],
+    "depth_source": "selected-side sell depth visible in the first two minutes",
+    "favorite_price_source": "selected-side ask visible in the first two minutes",
+    "entry_policy_is_online_observable": True,
+    "taker_fee_rate": "0.07",
+    "settlement_seconds": "300",
+    "cash_release_delay_seconds": "900",
+    "minimum_order_usd": "5",
+    "minimum_order_shares": "5",
+    "required_fills": 10,
+}
 
 STRATEGY_DECISION_TRACE_KEYS = {
     "decision_ref",
@@ -179,8 +202,11 @@ H561_STRATEGY_DECISION_TRACE_KEYS = {
     "depth_capacity_ratio",
 }
 H578_STRATEGY_DECISION_TRACE_KEYS = H561_STRATEGY_DECISION_TRACE_KEYS
-DEPTH_TRACE_PROFILES = {H561_STRATEGY_PROFILE, H578_STRATEGY_PROFILE}
+H600_STRATEGY_DECISION_TRACE_KEYS = H561_STRATEGY_DECISION_TRACE_KEYS | {"favorite_ask_price"}
+DEPTH_TRACE_PROFILES = {H561_STRATEGY_PROFILE, H578_STRATEGY_PROFILE, H600_STRATEGY_PROFILE}
+FAVORITE_DEPTH_TRACE_PROFILES = {H600_STRATEGY_PROFILE}
 STRATEGY_SIZE_TOLERANCE = Decimal("0.000001")
+FAVORITE_PRICE_FLOOR = Decimal("0.50")
 
 
 def _strategy_profile(
@@ -212,6 +238,7 @@ def _strategy_profile(
         H549_STRATEGY_PROFILE: (H549_STRATEGY_ID, H549_STRATEGY_VERSION, H549_STRATEGY_CONFIG),
         H561_STRATEGY_PROFILE: (H561_STRATEGY_ID, H561_STRATEGY_VERSION, H561_STRATEGY_CONFIG),
         H578_STRATEGY_PROFILE: (H578_STRATEGY_ID, H578_STRATEGY_VERSION, H578_STRATEGY_CONFIG),
+        H600_STRATEGY_PROFILE: (H600_STRATEGY_ID, H600_STRATEGY_VERSION, H600_STRATEGY_CONFIG),
     }
     try:
         return profiles[profile]
@@ -236,6 +263,9 @@ H561_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
 ).hexdigest()
 H578_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
     json.dumps(H578_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+H600_STRATEGY_CONFIG_SHA256 = hashlib.sha256(
+    json.dumps(H600_STRATEGY_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
 ).hexdigest()
 
 
@@ -443,7 +473,7 @@ def _depth_snapshots(
             "available_shares": available_shares,
             "ask_price": ask_price,
         }
-        # H561/H578 additionally bind the side-specific sell depth used by
+        # H561/H578/H600 additionally bind the side-specific sell depth used by
         # their online sizing rules.  Keep these fields optional here so
         # legacy profiles retain their existing depth contract; both depth
         # profiles fail closed if either field is absent or malformed during
@@ -807,7 +837,9 @@ def _validate_strategy_decision_trace(
     if not isinstance(raw_trace, list) or len(raw_trace) != len(events):
         return "strategy_decision_trace_required"
     trace_keys = (
-        H561_STRATEGY_DECISION_TRACE_KEYS
+        H600_STRATEGY_DECISION_TRACE_KEYS
+        if strategy_profile in FAVORITE_DEPTH_TRACE_PROFILES
+        else H561_STRATEGY_DECISION_TRACE_KEYS
         if strategy_profile in DEPTH_TRACE_PROFILES
         else STRATEGY_DECISION_TRACE_KEYS
     )
@@ -833,6 +865,11 @@ def _validate_strategy_decision_trace(
                 )
                 if entry_sell_depth < 0 or capacity_ratio < 0:
                     return "strategy_trace_depth_negative"
+                favorite_ask = None
+                if strategy_profile in FAVORITE_DEPTH_TRACE_PROFILES:
+                    favorite_ask = _decimal(raw.get("favorite_ask_price"), "strategy_trace_favorite_ask_price")
+                    if favorite_ask < FAVORITE_PRICE_FLOOR or favorite_ask >= Decimal("1"):
+                        return "strategy_trace_favorite_ask_below_floor"
                 profit_count = None
             else:
                 profit_count = raw.get("profitable_released_exits_before")
@@ -853,6 +890,8 @@ def _validate_strategy_decision_trace(
                 "entry_sell_depth_shares": str(raw["entry_sell_depth_shares"]),
                 "depth_capacity_ratio": str(raw["depth_capacity_ratio"]),
             })
+            if strategy_profile in FAVORITE_DEPTH_TRACE_PROFILES:
+                trace_row["favorite_ask_price"] = str(raw["favorite_ask_price"])
         else:
             trace_row["profitable_released_exits_before"] = profit_count
         by_ref[ref] = trace_row
@@ -891,6 +930,12 @@ def _validate_strategy_decision_trace(
             trace_sell_depth = _decimal(trace["entry_sell_depth_shares"], "strategy_trace_entry_sell_depth_shares")
             if trace_sell_depth != sell_depth:
                 return "strategy_trace_sell_depth_mismatch"
+            if strategy_profile in FAVORITE_DEPTH_TRACE_PROFILES:
+                favorite_ask = _decimal(trace["favorite_ask_price"], "strategy_trace_favorite_ask_price")
+                if favorite_ask < FAVORITE_PRICE_FLOOR:
+                    return "strategy_trace_favorite_ask_below_floor"
+                if abs(favorite_ask - depth["ask_price"]) > STRATEGY_SIZE_TOLERANCE:
+                    return "strategy_trace_favorite_ask_mismatch"
             try:
                 balance_before = _decimal(row.get("balance_before"), "balance_before")
                 price = _decimal(row.get("price"), "price")
@@ -1122,7 +1167,7 @@ def main() -> int:
     parser.add_argument("--required-fills", type=int, default=10)
     parser.add_argument(
         "--strategy-profile",
-        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, H561_STRATEGY_PROFILE, H578_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
+        choices=(DEFAULT_STRATEGY_PROFILE, H530_STRATEGY_PROFILE, H546_STRATEGY_PROFILE, H549_STRATEGY_PROFILE, H561_STRATEGY_PROFILE, H578_STRATEGY_PROFILE, H600_STRATEGY_PROFILE, PRIVATE_STRATEGY_PROFILE),
         default=DEFAULT_STRATEGY_PROFILE,
     )
     parser.add_argument("--private-strategy-config", type=Path)
