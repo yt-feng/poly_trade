@@ -1,0 +1,169 @@
+name: scoped-saved-input-verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_sha256:
+        description: Digest of the registered private input verification configuration
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: offline-policy-audit
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        id: code
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install envelope and test dependencies
+        id: dependencies
+        run: python -m pip install -r requirements-vault.txt pytest
+      - name: Verify synthetic saved-input contracts
+        id: contracts
+        run: python -m pytest -q tests/test_scoped_research_dataset.py tests/test_verify_saved_research_input.py
+      - name: Materialize separate private configuration and dataset capability
+        id: configuration
+        env:
+          AUDIT_CONFIG_B64: ${{ secrets.SCOPED_SAVED_INPUT_CONFIG_B64 }}
+          INPUT_CAPABILITY_B64: ${{ secrets.SCOPED_RESEARCH_DATA_CAPABILITY_B64 }}
+          EXPECTED_SHA256: ${{ inputs.request_sha256 }}
+        run: |
+          python - <<'PY'
+          import base64, hashlib, lzma, os, re, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault as vault
+          private = Path(os.environ['RUNNER_TEMP']) / 'scoped-saved-input'
+          bootstrap = Path(os.environ['RUNNER_TEMP']) / 'scoped-saved-input-bootstrap'
+          private.mkdir(mode=0o700)
+          bootstrap.mkdir(mode=0o700)
+          try:
+              assert 0 < len(os.environ['AUDIT_CONFIG_B64']) <= 45000
+              packed = base64.b64decode(os.environ['AUDIT_CONFIG_B64'], validate=True)
+              assert 0 < len(packed) <= 49152
+              decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=67108864)
+              raw = decoder.decompress(packed, max_length=262145)
+              assert 0 < len(raw) <= 262144 and decoder.eof and not decoder.unused_data
+              assert re.fullmatch(r'[0-9a-f]{64}', os.environ['EXPECTED_SHA256'])
+              assert hashlib.sha256(raw).hexdigest() == os.environ['EXPECTED_SHA256']
+              config = vault.load_json_bytes(raw, 262144)
+              assert 0 < len(os.environ['INPUT_CAPABILITY_B64']) <= 45000
+              cap_raw = base64.b64decode(os.environ['INPUT_CAPABILITY_B64'], validate=True)
+              capability = vault.load_json_bytes(cap_raw, 32768)
+              descriptor = {k: v for k, v in capability.items() if k != 'content_key_b64'}
+              assert hashlib.sha256(vault.canonical(descriptor)).hexdigest() == config['descriptor_sha256']
+              vault.write_new(bootstrap / 'capability.json', cap_raw)
+              vault.write_new(private / 'config.json', raw)
+          except Exception:
+              raise SystemExit('Private saved-input configuration missing or invalid') from None
+          PY
+      - name: Verify immutable saved input without model or replay
+        id: evaluate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/verify_saved_research_input.py \
+            --config "$RUNNER_TEMP/scoped-saved-input/config.json" \
+            --capability "$RUNNER_TEMP/scoped-saved-input-bootstrap/capability.json" \
+            --restored "$RUNNER_TEMP/scoped-saved-input-bootstrap/dataset" \
+            --output "$RUNNER_TEMP/scoped-saved-input/results" \
+            > "$RUNNER_TEMP/scoped-saved-input/analysis-output.txt" 2>&1
+      - name: Remove input capability and decoded dataset before sealing
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          bootstrap = Path(os.environ['RUNNER_TEMP']) / 'scoped-saved-input-bootstrap'
+          if bootstrap.exists(): shutil.rmtree(bootstrap)
+          PY
+      - name: Seal outcome including verification failures
+        id: seal
+        if: always() && steps.code.outcome == 'success'
+        env:
+          EVALUATION_OUTCOME: ${{ steps.evaluate.outcome }}
+          SETUP_OUTCOMES: ${{ toJSON(steps) }}
+          REQUEST_SHA256: ${{ inputs.request_sha256 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          python - <<'PY'
+          import json, os, shutil, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault as vault
+          import run_quality_first_research as bundle
+          private = Path(os.environ['RUNNER_TEMP']) / 'scoped-saved-input'
+          private.mkdir(mode=0o700, parents=True, exist_ok=True)
+          recipient = vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          recipient_id = os.environ['QUALITY_FIRST_RECIPIENT_ID']
+          vault.validate_recipient(recipient, recipient_id)
+          if (private / 'config.json').is_file():
+              shutil.copyfile(private / 'config.json', private / 'frozen_input.json')
+              (private / 'frozen_input.json').chmod(0o600)
+          try:
+              summary = json.loads((private / 'results/summary.json').read_text())
+          except (OSError, ValueError, TypeError):
+              summary = {}
+          def counter(field):
+              value = summary.get(field) if isinstance(summary, dict) else None
+              if type(value) is int and value >= 0: return value
+              return 0 if os.environ['EVALUATION_OUTCOME'] in ('skipped', '') else None
+          counters = {key: counter(key) for key in ('actual_model_fit_calls', 'actual_model_predict_calls', 'replayed_cells')}
+          input_verified = (os.environ['EVALUATION_OUTCOME'] == 'success'
+              and isinstance(summary, dict) and summary.get('status') == 'complete'
+              and summary.get('input_verified') is True and summary.get('strategy_evaluated') is False
+              and all(type(v) is int and v == 0 for v in counters.values()))
+          metadata = {'format': 'scoped-saved-input-sealed-v1',
+              'workflow': {k: os.environ.get(k) for k in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'EVALUATION_OUTCOME', 'REQUEST_SHA256', 'SETUP_OUTCOMES')},
+              'input_verified': input_verified, 'strategy_evaluated': False, 'new_data_collected': False,
+              'actual_fills': 0, 'verified_canary_fills': 0, 'live_orders_enabled': False,
+              'model_refit': counters['actual_model_fit_calls'] > 0 if counters['actual_model_fit_calls'] is not None else None,
+              'allowed_model_fit_calls': 0, 'allowed_model_predict_calls': 0, 'allowed_replay_cells': 0, **counters}
+          vault.write_new(private / 'run.json', vault.canonical(metadata))
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          count = bundle.deliver_bundle(bundle.make_bundle(private), delivery, recipient, recipient_id)
+          vault.write_new(delivery / 'status.json', vault.canonical({'version': 1, 'status': 'complete',
+              'stage': 'sealed_delivery', 'strategy_evaluated': False, 'live_orders_enabled': False,
+              'plaintext_published': False, 'sealed_parts': count}) + b'\n', 0o644)
+          PY
+      - name: Retain ciphertext for idempotent recovery
+        if: always() && steps.seal.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sealed-scoped-saved-input-verification
+          path: sealed-delivery/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Persist encrypted outcome
+        if: always() && steps.seal.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RECIPIENT_ID"
+      - name: Remove runner-local plaintext
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'scoped-saved-input', Path(os.environ['RUNNER_TEMP']) / 'scoped-saved-input-bootstrap', Path('sealed-delivery')):
+              if path.exists(): shutil.rmtree(path)
+          PY
