@@ -146,5 +146,22 @@ class DeliveryContracts(unittest.TestCase):
             with mock.patch.object(sealer.delivery, 'seal_outcomes', side_effect=inspect_bundle):
                 sealer.seal(private, Path(folder) / 'sealed', {}, 'fixture', {'INPUT_OUTCOME': 'failure'})
 
+    def test_decoded_private_metadata_is_masked_before_later_steps(self):
+        result = {'source_commit': 'a' * 40, 'reader_sha256': 'b' * 64}
+        with tempfile.TemporaryDirectory() as folder:
+            env_file = Path(folder) / 'environment'
+            environment = dict.fromkeys(('AUDIT_CONFIG_B64', 'CANDIDATE_INPUT_B64',
+                'PRIVATE_AUDIT_B64', 'EXPECTED_SHA256', 'GITHUB_SHA'), 'fixture')
+            environment['GITHUB_ENV'] = str(env_file)
+            args = SimpleNamespace(private=Path(folder) / 'private', bootstrap=Path(folder) / 'bootstrap')
+            output = io.StringIO()
+            with mock.patch.object(prepare.argparse.ArgumentParser, 'parse_args', return_value=args), \
+                    mock.patch.object(prepare, 'materialize', return_value=result), \
+                    mock.patch.dict(prepare.os.environ, environment), mock.patch('sys.stdout', output):
+                prepare.main()
+            for value in (result['source_commit'], result['source_commit'][:7], result['reader_sha256']):
+                self.assertIn('::add-mask::' + value + '\n', output.getvalue())
+            self.assertIn('AUDIT_SOURCE_COMMIT=' + result['source_commit'], env_file.read_text())
+
 
 if __name__ == '__main__': unittest.main()

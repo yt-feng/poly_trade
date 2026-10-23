@@ -115,6 +115,10 @@ def main() -> None:
         result = materialize(os.environ["AUDIT_CONFIG_B64"], os.environ["CANDIDATE_INPUT_B64"],
                              os.environ["PRIVATE_AUDIT_B64"], os.environ["EXPECTED_SHA256"],
                              os.environ["GITHUB_SHA"], args.private, args.bootstrap)
+        # Values restored from an encoded secret are not automatically masked
+        # when later steps print their environment or checkout metadata.
+        for value in (result["source_commit"], result["source_commit"][:7], result["reader_sha256"]):
+            print("::add-mask::" + value, flush=True)
         with open(os.environ["GITHUB_ENV"], "a") as handle:
             handle.write("AUDIT_SOURCE_COMMIT=" + result["source_commit"] + "\n")
             handle.write("PRIVATE_AUDIT_SHA=" + result["reader_sha256"] + "\n")
