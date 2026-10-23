@@ -101,6 +101,21 @@ jobs:
           for path in sorted(private.rglob('*')):
               if path.is_file():
                   files[str(path.relative_to(private))] = path.read_text()
+          try:
+              summary = json.loads(files.get('results/summary.json', '{}'))
+          except (ValueError, TypeError):
+              summary = {}
+          fit_records = summary.get('fit_records') if isinstance(summary, dict) else None
+          strategy_evaluated = (
+              os.environ['EVALUATION_OUTCOME'] == 'success'
+              and isinstance(summary, dict)
+              and summary.get('strategy_evaluated') is True
+              and summary.get('evaluation_status') == 'evaluated'
+              and isinstance(fit_records, list)
+              and any(isinstance(record, dict) and record.get('status') == 'fit_with_prior_available_labels'
+                      and type(record.get('scored_rows')) is int and record['scored_rows'] > 0
+                      for record in fit_records)
+          )
           payload = {
               'format': 'offline-policy-audit-sealed-v1',
               'workflow': {key: os.environ.get(key) for key in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'EVALUATION_OUTCOME', 'REQUEST_SHA256', 'SETUP_OUTCOMES')},
@@ -108,11 +123,12 @@ jobs:
               'live_orders_enabled': False,
               'actual_fills': 0,
               'verified_canary_fills': 0,
+              'strategy_evaluated': strategy_evaluated,
           }
           delivery = Path('sealed-delivery')
           delivery.mkdir(mode=0o700)
           research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
-          status = {'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': os.environ['EVALUATION_OUTCOME'] == 'success', 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}
+          status = {'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': strategy_evaluated, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}
           research_vault.write_new(delivery / 'status.json', research_vault.canonical(status) + b'\n', 0o644)
           PY
       - name: Retain ciphertext for idempotent recovery

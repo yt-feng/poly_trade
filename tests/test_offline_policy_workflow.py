@@ -151,6 +151,50 @@ class OfflinePolicyWorkflowTests(unittest.TestCase):
             self.assertFalse(status["strategy_evaluated"])
             self.assertFalse(status["plaintext_published"])
 
+    def test_process_success_does_not_invent_strategy_evaluation(self):
+        from tools import research_vault
+
+        script = inline_python(step_with(self.workflow, "id: seal"))
+        scored = {"status": "fit_with_prior_available_labels", "scored_rows": 3}
+        complete = {"strategy_evaluated": True, "evaluation_status": "evaluated", "fit_records": [scored]}
+        cases = [
+            ("success", {}, False),
+            ("success", {**complete, "fit_records": []}, False),
+            ("success", {**complete, "fit_records": [{**scored, "scored_rows": 0}]}, False),
+            ("success", {**complete, "fit_records": 1}, False),
+            ("success", {**complete, "evaluation_status": "not_evaluated_empty_quality_dataset"}, False),
+            ("success", complete, True),
+            ("failure", complete, False),
+        ]
+        for outcome, summary, expected in cases:
+            with self.subTest(outcome=outcome, summary=summary), tempfile.TemporaryDirectory() as directory:
+                workdir = Path(directory)
+                (workdir / "tools").mkdir()
+                shutil.copyfile(ROOT / "tools/research_vault.py", workdir / "tools/research_vault.py")
+                key = research_vault.X25519PrivateKey.generate()
+                recipient = research_vault.recipient_for(key)
+                (workdir / "research_vault").mkdir()
+                (workdir / "research_vault/recipient.json").write_text(json.dumps(recipient))
+                private = workdir / "runner-temp/offline-policy-audit/results"
+                private.mkdir(parents=True)
+                (private / "summary.json").write_text(json.dumps(summary))
+                result = subprocess.run(
+                    [sys.executable, "-c", script], capture_output=True, text=True, cwd=directory,
+                    env={**os.environ, "RUNNER_TEMP": str(workdir / "runner-temp"),
+                         "QUALITY_FIRST_RECIPIENT_ID": recipient["recipient_id"],
+                         "EVALUATION_OUTCOME": outcome, "SETUP_OUTCOMES": "{}",
+                         "REQUEST_SHA256": "0" * 64, "GITHUB_RUN_ID": "1",
+                         "GITHUB_RUN_ATTEMPT": "1", "GITHUB_SHA": "a" * 40},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "")
+                delivery = workdir / "sealed-delivery"
+                status = json.loads((delivery / "status.json").read_text())
+                payload = json.loads(research_vault.unseal((delivery / "part-0000.vault").read_bytes(), key))
+                self.assertIs(status["strategy_evaluated"], expected)
+                self.assertIs(payload["strategy_evaluated"], expected)
+                self.assertFalse(payload["live_orders_enabled"])
+
     def test_ciphertext_is_retained_before_publisher_and_alone_in_artifacts(self):
         steps = workflow_steps(self.workflow)
         uploads = [block for block in steps if "actions/upload-artifact@" in block]

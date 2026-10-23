@@ -6,6 +6,27 @@ from analysis import offline_policy_audit as audit
 
 
 class OfflinePolicyAuditTests(unittest.TestCase):
+    def test_unavailable_registered_fields_are_diagnosed_without_imputation(self):
+        values = {name: 1.0 for name in audit.source.LOGIT_FEATURES}
+        values.update(prefix_quality_passed=True, trade_count_sum_first2m=float("nan"),
+                      trade_volume_sum_first2m=float("nan"), gate_target_visible_before_decision=True)
+        frame = pd.DataFrame([values])
+        allowed = [name for name in audit.source.LOGIT_FEATURES if audit.feature_available_seconds(name) <= 120]
+        rejected, report = audit.admit_feature_rows(frame, allowed)
+        self.assertTrue(rejected.empty)
+        self.assertEqual(report["prefix_quality_passed_rows"], 1)
+        self.assertEqual(report["prefix_pass_but_missing_registered_inputs_rows"], 1)
+        self.assertEqual(report["nonfinite_rows_by_required_field"]["trade_count_sum_first2m"], 1)
+        revised = [name for name in allowed if name not in ("trade_count_sum_first2m", "trade_volume_sum_first2m")]
+        admitted, _ = audit.admit_feature_rows(frame, revised)
+        self.assertEqual(len(admitted), 1)
+        self.assertTrue(pd.isna(admitted.iloc[0]["trade_count_sum_first2m"]))
+
+    def test_empty_dataset_and_unfitted_run_are_not_evaluations(self):
+        self.assertEqual(audit.evaluation_status(0, 0), ("not_evaluated_empty_quality_dataset", False))
+        self.assertEqual(audit.evaluation_status(50, 0), ("not_evaluated_insufficient_training_data", False))
+        self.assertEqual(audit.evaluation_status(200, 1), ("evaluated", True))
+
     def _entry_fixture(self, outcome=float("nan")):
         start = pd.Timestamp("2026-01-01T00:00:00Z")
         row = {"market_id": "a::market", "run_name": "a", "slug": "market", "side": "up",
