@@ -56,3 +56,15 @@ are deleted before sealing. Public artifacts contain only recipient-encrypted
 evidence. Verification includes saved-data integrity and recorded simulation
 arithmetic; it does not independently establish raw-feed ordering, cloud
 execution traces, real fills, settlement or spendable cash.
+
+Result delivery explicitly permits individual derived files up to 256 MiB,
+with total source bytes capped at 512 MiB and the compressed bundle at 128 MiB.
+Ciphertext is staged and published only after every expected part is complete.
+If a known size limit prevents full delivery, an isolated compact package keeps
+the run metadata, frozen input, available summary and independent diagnostics,
+plus a manifest of original file sizes and hashes. It excludes large tables and
+models, marks strategy and comparison validity false, and records that complete
+evidence was not retained. Artifact retention and encrypted journal persistence
+still run for this compact evidence; the final workflow gate fails until full
+evidence has been retained. Original plaintext stays available through sealing
+and fallback and is then removed by unconditional cleanup.

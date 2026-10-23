@@ -4,6 +4,7 @@ import base64
 import contextlib
 import copy
 import hashlib
+import gzip
 import io
 import json
 from pathlib import Path
@@ -315,6 +316,126 @@ class QualityFirstRunnerTests(unittest.TestCase):
             with tarfile.open(fileobj=io.BytesIO(bundle), mode='r:gz') as archive:
                 self.assertIn(marker, archive.extractfile('results/model.json').read().decode())
             self.assertTrue(all(p.suffix == '.vault' for p in output.iterdir()))
+
+    def test_bundle_member_opt_in_preserves_legacy_default_without_large_compression(self):
+        self.assertEqual(runner.make_bundle.__kwdefaults__["max_member_bytes"], 128 * 1024**2)
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory)
+            target = private / "run.json"
+            with target.open("wb") as handle:
+                handle.truncate(128 * 1024**2 + 1)  # Sparse metadata only: rejected before compression.
+            with patch.object(runner.tarfile, "open", side_effect=AssertionError("must precheck")):
+                with self.assertRaisesRegex(ValueError, "RESULT_SIZE_LIMIT"):
+                    runner.make_bundle(private)
+            target.write_bytes(b"x" * 96)
+            with patch.dict(runner.make_bundle.__kwdefaults__, {"max_member_bytes": 64, "max_expanded_bytes": 16384}), \
+                    patch.object(runner, "MAX_MEMBER_BYTES", 128), patch.object(runner, "MAX_EXPANDED_BYTES", 16384), \
+                    patch.object(runner, "MAX_BUNDLE_BYTES", 4096):
+                with self.assertRaisesRegex(ValueError, "RESULT_SIZE_LIMIT"):
+                    runner.make_bundle(private)
+                value = runner.make_bundle(private, max_member_bytes=128)
+            with tarfile.open(fileobj=io.BytesIO(value), mode="r:gz") as archive:
+                self.assertEqual(archive.extractfile("run.json").read(), b"x" * 96)
+
+    def test_bundle_budget_types_and_hard_bounds_reject_before_source_read(self):
+        invalid = [dict(max_member_bytes=value) for value in (True, False, 0, -1, 1.5, runner.MAX_MEMBER_BYTES + 1)]
+        invalid += [dict(max_expanded_bytes=value) for value in (True, 0, -1, 1.5, runner.MAX_EXPANDED_BYTES + 1)]
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "_bundle_open", side_effect=AssertionError("no source read")):
+            for kwargs in invalid:
+                with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, "BUNDLE_BUDGET"):
+                    runner.make_bundle(Path(directory), **kwargs)
+
+    def test_bundle_aggregate_precheck_and_compressed_budget_are_separate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory)
+            (private / "run.json").write_bytes(b"a" * 64)
+            (private / "diagnostics.txt").write_bytes(b"b" * 64)
+            with patch.object(runner.tarfile, "open", side_effect=AssertionError("must precheck")):
+                with self.assertRaisesRegex(ValueError, "BUNDLE_EXPANDED_SIZE_LIMIT"):
+                    runner.make_bundle(private, max_member_bytes=64, max_expanded_bytes=127)
+            with patch.object(runner, "MAX_BUNDLE_BYTES", 32):
+                with self.assertRaisesRegex(ValueError, "BUNDLE_SIZE_LIMIT"):
+                    runner.make_bundle(private)
+
+    def test_bundle_expanded_tar_budget_includes_pax_headers_and_record_padding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory)
+            target = private / "run.json"; target.write_bytes(b"x")
+            runner.os.utime(target, ns=(1_700_000_000_123456789, 1_700_000_000_123456789))
+            value = runner.make_bundle(private, max_expanded_bytes=tarfile.RECORDSIZE)
+            self.assertEqual(len(gzip.decompress(value)), tarfile.RECORDSIZE)
+            with self.assertRaisesRegex(ValueError, "BUNDLE_EXPANDED_SIZE_LIMIT"):
+                runner.make_bundle(private, max_expanded_bytes=tarfile.RECORDSIZE - 1)
+            results = private / "results"; results.mkdir()
+            for index in range(6):
+                path = results / (str(index) + ".json"); path.write_bytes(b"x")
+                runner.os.utime(path, ns=(1_700_000_000_123456789, 1_700_000_000_123456789))
+            with self.assertRaisesRegex(ValueError, "BUNDLE_EXPANDED_SIZE_LIMIT"):
+                runner.make_bundle(private, max_expanded_bytes=tarfile.RECORDSIZE)
+            full = runner.make_bundle(private, max_expanded_bytes=2 * tarfile.RECORDSIZE)
+            self.assertEqual(len(gzip.decompress(full)), 2 * tarfile.RECORDSIZE)
+
+    def test_bundle_symlink_and_nonregular_members_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private, outside = root / "private", root / "outside"
+            private.mkdir(); outside.mkdir(); (outside / "data").write_bytes(b"outside")
+            (private / "run.json").symlink_to(outside / "data")
+            with self.assertRaisesRegex(ValueError, "RESULT_SYMLINK"):
+                runner.make_bundle(private)
+            (private / "run.json").unlink()
+            (private / "results").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "RESULT_SYMLINK"):
+                runner.make_bundle(private)
+            (private / "results").unlink()
+            runner.os.mkfifo(private / "run.json")
+            with self.assertRaisesRegex(ValueError, "RESULT_NOT_REGULAR"):
+                runner.make_bundle(private)
+
+    def test_bundle_rejects_source_changes_during_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory)
+            target = private / "run.json"; target.write_bytes(b"AAAA")
+            original = runner.tarfile.TarFile.addfile
+            def changed(archive, info, handle):
+                target.write_bytes(b"BBBB")
+                return original(archive, info, handle)
+            with patch.object(runner.tarfile.TarFile, "addfile", autospec=True, side_effect=changed):
+                with self.assertRaisesRegex(ValueError, "RESULT_CHANGED"):
+                    runner.make_bundle(private)
+
+    def test_bundle_rejects_replacement_between_precheck_and_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory)
+            target = private / "run.json"; target.write_bytes(b"AAAA")
+            original = runner._bundle_open; count = 0
+            def changed(root_fd, relative):
+                nonlocal count
+                count += 1
+                if count == 2:
+                    target.unlink(); target.write_bytes(b"AAAA")
+                return original(root_fd, relative)
+            with patch.object(runner, "_bundle_open", side_effect=changed):
+                with self.assertRaisesRegex(ValueError, "RESULT_CHANGED"):
+                    runner.make_bundle(private)
+
+    def test_bundle_parent_directory_swap_cannot_follow_outside_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); private = root / "private"; private.mkdir()
+            results = private / "results"; results.mkdir(); (results / "data").write_bytes(b"inside")
+            outside = root / "outside"; outside.mkdir(); (outside / "data").write_bytes(b"outside")
+            original = runner._bundle_open; file_opens = 0
+            def changed(root_fd, relative):
+                nonlocal file_opens
+                if str(relative) == "results/data":
+                    file_opens += 1
+                    if file_opens == 2:
+                        results.rename(private / "original-results")
+                        results.symlink_to(outside, target_is_directory=True)
+                return original(root_fd, relative)
+            with patch.object(runner, "_bundle_open", side_effect=changed):
+                with self.assertRaisesRegex(ValueError, "RESULT_CHANGED"):
+                    runner.make_bundle(private)
 
     def test_research_errors_are_sealed_and_generic_status_is_public(self):
         with tempfile.TemporaryDirectory() as directory:
