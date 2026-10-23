@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 import sys
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -21,6 +21,10 @@ if str(CURRENT_DIR) not in sys.path:
 import offline_bid_residual_audit as base
 import offline_side_interaction_audit as parent_audit
 import timed_quote_execution as reference
+try:
+    from .scheduled_exit_retry import ExitRequest, ExitResolution
+except ImportError:  # Standalone analysis CLI import.
+    from scheduled_exit_retry import ExitRequest, ExitResolution
 
 INITIAL_CASH = reference.INITIAL_CASH
 MINIMUM_ORDER_USD = reference.MINIMUM_ORDER_USD
@@ -214,6 +218,7 @@ def regenerate_control(cohort: pd.DataFrame, control_predictions: pd.DataFrame,
 def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
                          quote_source: CachedQuoteSource, *,
                          capacity_cap_by_id: Mapping[str, float] | None = None,
+                         exit_resolver: Callable[..., ExitResolution] | None = None,
                          hold_seconds: float = 30.,
                         entry_delay_seconds: float = 4., latency_seconds: float = 8.,
                         max_quote_delay_seconds: float = 3., edge_floor: float = .02,
@@ -224,10 +229,10 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
                         minimum_order_usd: float = MINIMUM_ORDER_USD,
                         minimum_order_shares: float = MINIMUM_ORDER_SHARES,
                         required_fills: int = REQUIRED_FILLS) -> dict[str, Any]:
-    """Replay saved selector outputs, optionally imposing a decision-frozen cap.
+    """Replay saved selector outputs with optional cap or exit resolution.
 
-    With no cap this retains every arithmetic operation and result field of the
-    reference ledger. A cap never changes quote selection or minimum cash stops.
+    With neither option this retains every arithmetic operation and result field
+    of the reference ledger. A cap never changes selection or minimum cash stops.
     """
     hold, entry_delay, latency, tolerance, release_delay = map(_number, (
         hold_seconds, entry_delay_seconds, latency_seconds, max_quote_delay_seconds,
@@ -243,6 +248,8 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
         raise ValueError("frozen_ledger_contract_mismatch")
     if len(set(run_names)) != len(run_names):
         raise ValueError("duplicate_run_scope")
+    if exit_resolver is not None and not callable(exit_resolver):
+        raise ValueError("invalid_exit_resolver")
     caps = _validated_caps(candidates, capacity_cap_by_id)
     cash = float(initial_cash)
     chain: list[dict[str, Any]] = []
@@ -358,6 +365,16 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
         chain.append(event)
         exit_quote, reason = quote_source.select(str(row.market_id), exit_target, close, side=side, kind="exit",
                                               max_quote_delay_seconds=tolerance)
+        if exit_resolver is not None:
+            resolution = exit_resolver(ExitRequest(market_id=str(row.market_id), side=side,
+                original_exit_target_ts=exit_target, market_close_ts=close, held_shares=shares,
+                slippage=slip, depth_haircut=haircut, max_quote_delay_seconds=tolerance,
+                order_latency_seconds=latency), exit_quote, reason, quote_source)
+            if not isinstance(resolution, ExitResolution):
+                raise ValueError("invalid_exit_resolution")
+            exit_quote, reason = resolution.quote, resolution.reason
+            if resolution.trace:
+                event["exit_retry"] = resolution.to_evidence()
         if exit_quote is None:
             locked_shares = shares
             failure = "exit_quote_unavailable"
