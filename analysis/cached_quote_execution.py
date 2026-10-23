@@ -7,6 +7,7 @@ the caller as a value frozen before the entry request.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import math
 from pathlib import Path
 import sys
@@ -215,6 +216,31 @@ def regenerate_control(cohort: pd.DataFrame, control_predictions: pd.DataFrame,
     return candidates, decisions
 
 
+def _finalized_result(cash, pending, available_ts, chain, attempts, locked_shares,
+                      failure, initial_cash, required_fills, caps, candidate_input_empty):
+    """Virtually settle the final pending payout without changing live state."""
+    if pending is not None:
+        cash += pending[1]
+        available_ts = pending[0]
+    resolved = sum(event["status"] == "timed_quote_exit" for event in chain)
+    complete = len(chain) == required_fills and resolved == required_fills and locked_shares == 0
+    passed = complete and cash > initial_cash + 1e-9
+    if failure is None and not passed:
+        failure = "no_candidates" if candidate_input_empty else "sequence_or_net_growth_gate_not_met"
+    return {"fills": len(chain), "resolved_fills": resolved, "ending_cash": cash,
+            "first_ten_fills": len(chain), "first_ten_resolved_fills": resolved,
+            "first_ten_ending_cash": cash, "first_ten_passed": bool(passed),
+            "strict_net_growth_ten": bool(passed), "ten_resolved_sequence_complete": bool(complete),
+            "failure_reason": failure, "locked_shares": locked_shares,
+            "ending_cash_available_ts": available_ts.isoformat() if available_ts is not None else None,
+            "chain": chain, "attempts": attempts,
+            "execution_class": "fixed_horizon_quote_simulation_not_authenticated_fill",
+            "cash_release_basis": "assumed_close_plus_declared_delay_or_later_exit",
+            "sizing_basis": ("frozen_legacy_depth_ratio_mapping_not_kelly_optimum" if caps is None else
+                "frozen_legacy_depth_ratio_mapping_with_decision_frozen_capacity_cap_not_kelly_optimum"),
+            "actual_fills": 0, "verified_canary_fills": 0, "live_orders_enabled": False}
+
+
 def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
                          quote_source: CachedQuoteSource, *,
                          capacity_cap_by_id: Mapping[str, float] | None = None,
@@ -228,11 +254,18 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
                         initial_cash: float = INITIAL_CASH,
                         minimum_order_usd: float = MINIMUM_ORDER_USD,
                         minimum_order_shares: float = MINIMUM_ORDER_SHARES,
-                        required_fills: int = REQUIRED_FILLS) -> dict[str, Any]:
+                        required_fills: int = REQUIRED_FILLS,
+                        continue_after_required_fills: bool = False,
+                        required_prefix_observer: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """Replay saved selector outputs with optional cap or exit resolution.
 
     With neither option this retains every arithmetic operation and result field
     of the reference ledger. A cap never changes selection or minimum cash stops.
+
+    Opt-in continuation observes a deep-copied, virtually finalized required
+    prefix before the next candidate starts. Live pending funds stay reserved.
+    Processed candidates count every in-scope loop begun, including rejections;
+    stream exhaustion does not imply all entered positions could be resolved.
     """
     hold, entry_delay, latency, tolerance, release_delay = map(_number, (
         hold_seconds, entry_delay_seconds, latency_seconds, max_quote_delay_seconds,
@@ -250,6 +283,10 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
         raise ValueError("duplicate_run_scope")
     if exit_resolver is not None and not callable(exit_resolver):
         raise ValueError("invalid_exit_resolver")
+    if (type(continue_after_required_fills) is not bool
+            or (continue_after_required_fills and not callable(required_prefix_observer))
+            or (not continue_after_required_fills and required_prefix_observer is not None)):
+        raise ValueError("invalid_continuation_or_prefix_observer")
     caps = _validated_caps(candidates, capacity_cap_by_id)
     cash = float(initial_cash)
     chain: list[dict[str, Any]] = []
@@ -258,6 +295,9 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
     available_ts = None
     locked_shares = 0.0
     failure = None
+    required_prefix_result = None
+    required_prefix_processed_candidate_count = None
+    processed_candidate_count = 0
     required = {"market_id", "run_name", "slug", "side", "decision_ts", "market_close_ts",
                 "decision_ask_price", "decision_sell_size", "predicted_exit_bid_price"}
     if not candidates.empty and not required.issubset(candidates.columns):
@@ -267,6 +307,7 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
         ordered["decision_ts"] = ordered["decision_ts"].map(_time)
         ordered = ordered.sort_values(["decision_ts", "slug", "side"], kind="mergesort")
     for row in ordered.itertuples(index=False):
+        processed_candidate_count += 1
         decision, close = _time(row.decision_ts), _time(row.market_close_ts)
         side = str(row.side)
         decision_ask, decision_depth, prediction = map(_number, (
@@ -404,28 +445,32 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
         event.update(status="timed_quote_exit", exit_ts=exit_ts.isoformat(), exit_fill_price=sell_price,
                      exit_gross_proceeds=exit_gross, exit_fee=exit_fee, payout=payout,
                      realized_pnl=payout - cost - entry_fee, cash_release_ts=release.isoformat())
-        if len(chain) >= required_fills:
-            break
-    if pending is not None:
-        cash += pending[1]
-        available_ts = pending[0]
-    resolved = sum(event["status"] == "timed_quote_exit" for event in chain)
-    complete = len(chain) == required_fills and resolved == required_fills and locked_shares == 0
-    passed = complete and cash > initial_cash + 1e-9
-    if failure is None and not passed:
-        failure = "no_candidates" if candidates.empty else "sequence_or_net_growth_gate_not_met"
-    return {"fills": len(chain), "resolved_fills": resolved, "ending_cash": cash,
-            "first_ten_fills": len(chain), "first_ten_resolved_fills": resolved,
-            "first_ten_ending_cash": cash, "first_ten_passed": bool(passed),
-            "strict_net_growth_ten": bool(passed), "ten_resolved_sequence_complete": bool(complete),
-            "failure_reason": failure, "locked_shares": locked_shares,
-            "ending_cash_available_ts": available_ts.isoformat() if available_ts is not None else None,
-            "chain": chain, "attempts": attempts,
-            "execution_class": "fixed_horizon_quote_simulation_not_authenticated_fill",
-            "cash_release_basis": "assumed_close_plus_declared_delay_or_later_exit",
-            "sizing_basis": ("frozen_legacy_depth_ratio_mapping_not_kelly_optimum" if caps is None else
-                "frozen_legacy_depth_ratio_mapping_with_decision_frozen_capacity_cap_not_kelly_optimum"),
-            "actual_fills": 0, "verified_canary_fills": 0, "live_orders_enabled": False}
+        if len(chain) == required_fills:
+            if not continue_after_required_fills:
+                break
+            required_prefix_result = deepcopy(_finalized_result(cash, pending, available_ts,
+                chain, attempts, locked_shares, failure, initial_cash, required_fills, caps, candidates.empty))
+            required_prefix_processed_candidate_count = processed_candidate_count
+            required_prefix_observer(deepcopy(required_prefix_result))
+    result = _finalized_result(cash, pending, available_ts, chain, attempts, locked_shares,
+        failure, initial_cash, required_fills, caps, candidates.empty)
+    if not continue_after_required_fills:
+        return result
+    prefix = required_prefix_result if required_prefix_result is not None else result
+    for field in ("first_ten_fills", "first_ten_resolved_fills", "first_ten_ending_cash",
+                  "first_ten_passed", "strict_net_growth_ten", "ten_resolved_sequence_complete"):
+        result[field] = prefix[field]
+    exhausted = processed_candidate_count == len(ordered)
+    fully_resolved = bool(chain) and exhausted and failure is None and result["resolved_fills"] == len(chain) and locked_shares == 0
+    result.update(continuation_mode="continue_original_candidate_stream",
+        required_prefix_result=required_prefix_result,
+        processed_candidate_count=processed_candidate_count,
+        required_prefix_processed_candidate_count=required_prefix_processed_candidate_count,
+        candidate_stream_count=len(ordered), candidate_stream_exhausted=exhausted,
+        continuation_failure_reason=failure, failure_reason=failure,
+        full_sequence_resolved=bool(fully_resolved),
+        full_sequence_net_growth=bool(fully_resolved and result["ending_cash"] > initial_cash + 1e-9))
+    return result
 
 
 def replay_arm(candidates: pd.DataFrame, source: CachedQuoteSource, parent: Mapping[str, Any], *,

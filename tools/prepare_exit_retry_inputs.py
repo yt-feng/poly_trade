@@ -55,14 +55,19 @@ def verify_code_bindings(config: dict, root: Path, expected_commit: str) -> None
 
 def materialize(config_encoded: str, candidate_encoded: str, audit_encoded: str,
                 request_sha: str, expected_commit: str, private: Path,
-                bootstrap: Path, root: Path = ROOT) -> dict:
+                bootstrap: Path, root: Path = ROOT, *,
+                evaluation_mode: str = "offline_exit_retry") -> dict:
+    formats = {"offline_exit_retry": "exit-retry-private-audit-v1",
+               "offline_exit_continuation": "exit-continuation-private-audit-v1"}
+    if evaluation_mode not in formats:
+        raise ValueError("unsupported offline comparison mode")
     if not re.fullmatch(r"[0-9a-f]{64}", request_sha):
         raise ValueError("invalid request digest")
     raw_config = decode_xz(config_encoded, 262144)
     if hashlib.sha256(raw_config).hexdigest() != request_sha:
         raise ValueError("configuration digest mismatch")
     config = vault.load_json_bytes(raw_config, 262144)
-    if config.get("evaluation_mode") != "offline_exit_retry" or config.get("live_orders_enabled") is not False:
+    if config.get("evaluation_mode") != evaluation_mode or config.get("live_orders_enabled") is not False:
         raise ValueError("offline configuration required")
     if config.get("source_repository") != "yt-feng/poly" or not re.fullmatch(r"[0-9a-f]{40}", config.get("source_commit", "")):
         raise ValueError("invalid immutable source")
@@ -72,7 +77,7 @@ def materialize(config_encoded: str, candidate_encoded: str, audit_encoded: str,
     from offline_exit_retry_audit import decode_candidate_packet
     candidates = decode_candidate_packet(candidate_encoded, config["candidate_binding"])
     audit = vault.load_json_bytes(decode_xz(audit_encoded, 524288), 524288)
-    if set(audit) != {"format", "script_utf8", "registration"} or audit["format"] != "exit-retry-private-audit-v1":
+    if set(audit) != {"format", "script_utf8", "registration"} or audit["format"] != formats[evaluation_mode]:
         raise ValueError("invalid independent audit envelope")
     if not isinstance(audit["script_utf8"], str):
         raise ValueError("invalid reader source")
@@ -94,7 +99,8 @@ def materialize(config_encoded: str, candidate_encoded: str, audit_encoded: str,
                         (bootstrap / "reader.py", script),
                         (bootstrap / "registration.json", registration)]:
         vault.write_new(target, raw, 0o600)
-    receipt = {"format": "exit-retry-input-receipt-v1", "status": "complete",
+    receipt = {"format": ("exit-continuation-input-receipt-v1" if evaluation_mode == "offline_exit_continuation"
+                           else "exit-retry-input-receipt-v1"), "status": "complete",
                "configuration_sha256": request_sha, "expected_code_commit": expected_commit,
                "candidate_bytes": len(candidates), "candidate_sha256": hashlib.sha256(candidates).hexdigest(),
                "independent_reader_sha256": reader_sha,
@@ -110,11 +116,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--private", type=Path, required=True)
     parser.add_argument("--bootstrap", type=Path, required=True)
+    parser.add_argument("--evaluation-mode", choices=("offline_exit_retry", "offline_exit_continuation"),
+                        default="offline_exit_retry")
     args = parser.parse_args()
     try:
         result = materialize(os.environ["AUDIT_CONFIG_B64"], os.environ["CANDIDATE_INPUT_B64"],
                              os.environ["PRIVATE_AUDIT_B64"], os.environ["EXPECTED_SHA256"],
-                             os.environ["GITHUB_SHA"], args.private, args.bootstrap)
+                             os.environ["GITHUB_SHA"], args.private, args.bootstrap,
+                             evaluation_mode=args.evaluation_mode)
         # Values restored from an encoded secret are not automatically masked
         # when later steps print their environment or checkout metadata.
         for value in (result["source_commit"], result["source_commit"][:7], result["reader_sha256"]):

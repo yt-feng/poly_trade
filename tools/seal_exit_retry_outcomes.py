@@ -28,12 +28,26 @@ def evaluation_state(config: dict, summary: dict, independent: dict, inputs: dic
         counters[key] = value if type(value) is int and value >= 0 else (0 if evaluation_outcome in ("", "skipped") else None)
     input_verified = input_outcome == "success" and inputs.get("status") == "complete"
     audited = independent_outcome == "success" and independent.get("passed") is True
-    count = config.get("expected_control_candidate_count")
-    arms = summary.get("arms")
+    continuation = config.get("evaluation_mode") == "offline_exit_continuation"
+    parent = config.get("parent_strategy_config")
+    count = ((parent.get("expected_control_candidate_count") if isinstance(parent, dict) else None)
+             if continuation else config.get("expected_control_candidate_count"))
+    def pooled(value):
+        return (isinstance(value, dict) and value.get("scope") == "pooled_single_ledger"
+                and type(value.get("block_index")) is int and value["block_index"] == 0)
+    if continuation:
+        structure_verified = (summary.get("prefix_control_reproduced") is True
+                              and pooled(summary.get("prefix_ledger"))
+                              and pooled(summary.get("full_ledger")))
+    else:
+        arms = summary.get("arms")
+        structure_verified = (summary.get("control_execution_reproduced") is True
+                              and isinstance(arms, dict) and set(arms) == {"C_original", "C_scheduled_retry"}
+                              and all(pooled(arm) for arm in arms.values()))
     evaluated = bool(evaluation_outcome == "success" and input_verified and audited
                      and summary.get("strategy_evaluated") is True
                      and summary.get("comparison_valid") is True
-                     and summary.get("control_execution_reproduced") is True
+                     and structure_verified
                      and summary.get("evaluation_status") == "evaluated"
                      and summary.get("live_orders_enabled") is False
                      and all(type(summary.get(key)) is int and summary[key] == 0
@@ -41,11 +55,9 @@ def evaluation_state(config: dict, summary: dict, independent: dict, inputs: dic
                      and type(count) is int and count > 0
                      and type(summary.get("candidate_rows")) is int and summary["candidate_rows"] == count
                      and counters["actual_model_fit_calls"] == 0 and counters["actual_model_predict_calls"] == 0
-                     and counters["replayed_cells"] == 2
-                     and isinstance(arms, dict) and set(arms) == {"C_original", "C_scheduled_retry"}
-                     and all(isinstance(arm, dict) and arm.get("scope") == "pooled_single_ledger"
-                             and type(arm.get("block_index")) is int and arm["block_index"] == 0
-                             for arm in arms.values()))
+                     and counters["replayed_cells"] == (1 if continuation else 2)
+                     and (not continuation or type(summary.get("producer_replay_completions")) is int
+                          and summary["producer_replay_completions"] == 1))
     return {"strategy_evaluated": evaluated, "comparison_valid": evaluated,
             "input_verified": input_verified, "independent_audit_passed": audited, **counters}
 
@@ -72,7 +84,9 @@ def seal(private: Path, output: Path, recipient: dict, recipient_id: str, env: d
                              env.get("EVALUATION_OUTCOME", ""), env.get("INDEPENDENT_OUTCOME", ""),
                              env.get("INPUT_OUTCOME", ""))
     diagnostic = private / "diagnostics.txt"
-    metadata = {"format": "offline-exit-retry-sealed-v1", **state,
+    mode = config.get("evaluation_mode", env.get("EVALUATION_MODE", "offline_exit_retry"))
+    metadata = {"format": ("offline-exit-continuation-sealed-v1" if mode == "offline_exit_continuation"
+                           else "offline-exit-retry-sealed-v1"), **state,
                 "workflow": {key: env.get(key) for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA",
                     "EVALUATION_OUTCOME", "INDEPENDENT_OUTCOME", "INPUT_OUTCOME", "REQUEST_SHA256", "SETUP_OUTCOMES")},
                 "independent_audit_helper_sha256": env.get("PRIVATE_AUDIT_SHA"),
