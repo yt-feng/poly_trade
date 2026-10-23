@@ -252,7 +252,9 @@ def replay_policy(candidates: pd.DataFrame, run_names: list[str], quotes: dict[s
         if pending is not None:
             if intended <= pending[0]:
                 attempts.append({"market_id": str(row.market_id), "status": "prior_cash_not_released"}); continue
-            cash += pending[1]; pending = None
+            cash += pending[1]
+            available_ts = pending[0]
+            pending = None
         book = quotes.get(str(row.market_id))
         if book is None or book.empty:
             attempts.append({"market_id": str(row.market_id), "status": "no_retained_source_book"}); continue

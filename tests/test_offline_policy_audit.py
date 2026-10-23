@@ -57,6 +57,25 @@ class OfflinePolicyAuditTests(unittest.TestCase):
         self.assertFalse(result["first_ten_passed"])
         self.assertTrue(result["ending_cash_available_ts"].endswith("00:20:00+00:00"))
 
+    def test_released_cash_clock_survives_next_minimum_order_failure(self):
+        candidates, quotes = self._entry_fixture(outcome=0)
+        following = candidates.iloc[0].copy()
+        following["market_id"] = "a::following"
+        following["slug"] = "following"
+        following["entry_ts"] += pd.Timedelta(seconds=1300)
+        following["market_close_ts"] += pd.Timedelta(seconds=1300)
+        following["label_observed_ts"] += pd.Timedelta(seconds=1300)
+        candidates = pd.concat([candidates, following.to_frame().T], ignore_index=True)
+        quotes["a::following"] = quotes["a::market"].copy()
+        quotes["a::following"]["ts_utc"] += pd.Timedelta(seconds=1300)
+        result = audit.replay_policy(candidates, ["a"], quotes, latency_seconds=0,
+            depth_haircut=1, thresholds=(3, 5, 7))
+        self.assertEqual(result["fills"], 1)
+        self.assertEqual(result["failure_reason"], "cash_fraction_cannot_fit_minimum_order")
+        self.assertAlmostEqual(result["ending_cash"], 0)
+        self.assertEqual(result["ending_cash_available_ts"], result["chain"][0]["cash_release_ts"])
+        self.assertNotEqual(result["ending_cash_available_ts"], result["chain"][0]["entry_ts"])
+
     def test_latency_uses_delayed_entry_price_and_depth(self):
         candidates, quotes = self._entry_fixture()
         result = audit.replay_policy(candidates, ["a"], quotes, latency_seconds=4,
