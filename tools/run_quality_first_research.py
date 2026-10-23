@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import tarfile
@@ -30,6 +31,8 @@ DAY_NAME = re.compile(r'^snapshots-(\d{4}-\d{2}-\d{2})-\d{6}\.jsonl\.gz$')
 CACHE_NAME = re.compile(r'^[0-9a-f]{64}\.blob$')
 PART_BYTES = 8 * 1024 * 1024
 MAX_BUNDLE_BYTES = 128 * 1024 * 1024
+MAX_MEMBER_BYTES = 256 * 1024 * 1024
+MAX_EXPANDED_BYTES = 512 * 1024 * 1024
 
 
 def spread_order(items):
@@ -249,31 +252,112 @@ def load_recipient(encoded, expected_id):
     return recipient
 
 
-def make_bundle(private_dir):
-    """Include results and provenance, never the raw tape/cache or identity."""
+def _bundle_stat(metadata):
+    return tuple(getattr(metadata, key) for key in ('st_dev', 'st_ino', 'st_mode', 'st_size',
+        'st_mtime_ns', 'st_ctime_ns', 'st_nlink'))
+
+
+def _bundle_open(root_fd, relative):
+    """Resolve every directory through non-following descriptors, not a raced path."""
+    descriptor = os.dup(root_fd)
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    try:
+        for component in relative.parts[:-1]:
+            child = os.open(component, flags | os.O_DIRECTORY, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return os.open(relative.parts[-1], flags, dir_fd=descriptor)
+    except OSError as exc:
+        raise ValueError('RESULT_CHANGED') from exc
+    finally:
+        os.close(descriptor)
+
+
+class _BundleBuffer(io.BytesIO):
+    def write(self, value):
+        if self.tell() + len(value) > MAX_BUNDLE_BYTES:
+            raise ValueError('BUNDLE_SIZE_LIMIT')
+        return super().write(value)
+
+
+def make_bundle(private_dir, *, max_member_bytes=MAX_BUNDLE_BYTES, max_expanded_bytes=MAX_EXPANDED_BYTES):
+    """Bundle allowlisted evidence with separately bounded source and gzip sizes.
+
+    Existing callers retain the 128 MiB member limit. An explicit opt-in permits
+    members up to 256 MiB; source files and the full expanded tar (including
+    metadata and record padding) remain at most 512 MiB. Gzip remains at most
+    128 MiB. Source-file totals are checked before compression.
+    """
+    if (type(max_member_bytes) is not int or not 0 < max_member_bytes <= MAX_MEMBER_BYTES
+            or type(max_expanded_bytes) is not int or not 0 < max_expanded_bytes <= MAX_EXPANDED_BYTES):
+        raise ValueError('BUNDLE_BUDGET')
     private_dir = Path(private_dir)
+    if private_dir.is_symlink():
+        raise ValueError('RESULT_SYMLINK')
+    root_fd = os.open(private_dir, os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_NOFOLLOW', 0))
     members = [private_dir / name for name in ('run.json', 'frozen_input.json', 'diagnostics.txt', 'analysis-output.txt', 'results')]
     members += [private_dir / 'acquisition' / name for name in ('acquisition_manifest.json', 'acquisition_plan.json')]
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
+    planned, directories, expanded = [], {}, 0
+    try:
         for member in members:
+            if member.is_symlink():
+                raise ValueError('RESULT_SYMLINK')
             if not member.exists():
                 continue
-            paths = sorted(member.rglob('*')) if member.is_dir() else [member]
+            paths = [member, *sorted(member.rglob('*'))] if member.is_dir() else [member]
             for path in paths:
                 if path.is_symlink():
                     raise ValueError('RESULT_SYMLINK')
-                if not path.is_file():
+                relative = path.relative_to(private_dir)
+                descriptor = _bundle_open(root_fd, relative)
+                try:
+                    metadata = os.fstat(descriptor)
+                finally:
+                    os.close(descriptor)
+                if stat.S_ISDIR(metadata.st_mode):
+                    directories[relative] = _bundle_stat(metadata)
                     continue
-                if path.stat().st_size > MAX_BUNDLE_BYTES:
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                    raise ValueError('RESULT_NOT_REGULAR')
+                if metadata.st_size > max_member_bytes:
                     raise ValueError('RESULT_SIZE_LIMIT')
-                archive.add(path, arcname=str(path.relative_to(private_dir)), recursive=False)
-                if buffer.tell() > MAX_BUNDLE_BYTES:
-                    raise ValueError('BUNDLE_SIZE_LIMIT')
-    value = buffer.getvalue()
-    if len(value) > MAX_BUNDLE_BYTES:
-        raise ValueError('BUNDLE_SIZE_LIMIT')
-    return value
+                expanded += metadata.st_size
+                if expanded > max_expanded_bytes:
+                    raise ValueError('BUNDLE_EXPANDED_SIZE_LIMIT')
+                planned.append((relative, _bundle_stat(metadata)))
+        buffer = _BundleBuffer()
+        with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
+            def check_tar_expanded_size():
+                # TarFile.offset includes PAX headers and padded file contents.
+                # close() appends two zero blocks and pads to RECORDSIZE.
+                final_size = ((archive.offset + 2 * tarfile.BLOCKSIZE + tarfile.RECORDSIZE - 1)
+                    // tarfile.RECORDSIZE) * tarfile.RECORDSIZE
+                if final_size > max_expanded_bytes:
+                    raise ValueError('BUNDLE_EXPANDED_SIZE_LIMIT')
+            check_tar_expanded_size()
+            for relative, expected in planned:
+                descriptor = _bundle_open(root_fd, relative)
+                with os.fdopen(descriptor, 'rb') as handle:
+                    metadata = os.fstat(handle.fileno())
+                    if _bundle_stat(metadata) != expected:
+                        raise ValueError('RESULT_CHANGED')
+                    info = tarfile.TarInfo(str(relative))
+                    info.size, info.mode, info.mtime = metadata.st_size, stat.S_IMODE(metadata.st_mode), metadata.st_mtime
+                    info.uid, info.gid = metadata.st_uid, metadata.st_gid
+                    archive.addfile(info, handle)
+                    check_tar_expanded_size()
+                    if handle.tell() != metadata.st_size or _bundle_stat(os.fstat(handle.fileno())) != expected:
+                        raise ValueError('RESULT_CHANGED')
+        for relative, expected in directories.items():
+            descriptor = _bundle_open(root_fd, relative)
+            try:
+                if _bundle_stat(os.fstat(descriptor)) != expected:
+                    raise ValueError('RESULT_CHANGED')
+            finally:
+                os.close(descriptor)
+        return buffer.getvalue()
+    finally:
+        os.close(root_fd)
 
 
 def deliver_bundle(bundle, output, recipient, expected_id):

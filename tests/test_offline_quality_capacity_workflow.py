@@ -39,7 +39,13 @@ def padded_json(document, total):
 
 class QualityCapacityWorkflowTests(unittest.TestCase):
     private_directory = 'quality-capacity-audit'
-    _run_sealing = shared.PairedWorkflowTests._run_sealing
+
+    def _run_sealing(self, workdir, *args, **kwargs):
+        tools = workdir / 'tools'
+        tools.mkdir(exist_ok=True)
+        shutil.copyfile(ROOT / 'tools/seal_research_outcomes.py', tools / 'seal_research_outcomes.py')
+        with mock.patch.dict(os.environ, {'GITHUB_OUTPUT': str(workdir / 'github-output')}):
+            return shared.PairedWorkflowTests._run_sealing(self, workdir, *args, **kwargs)
 
     @classmethod
     def setUpClass(cls):
@@ -309,6 +315,52 @@ class QualityCapacityWorkflowTests(unittest.TestCase):
         self.assertIn("'quality-capacity-bootstrap'", cleanup)
         self.assertIn("'quality-capacity-audit'", cleanup)
         self.assertNotIn('SCOPED_RESEARCH', shared.step(self.workflow, 'id: seal'))
+        for block in (upload, publish):
+            self.assertIn("steps.seal.outputs.delivery_complete == 'true'", block)
+            self.assertNotIn("steps.seal.outcome == 'success'", block)
+        gate = shared.step(self.workflow, 'id: delivery_gate')
+        self.assertLess(self.workflow.index(publish), self.workflow.index(gate))
+        self.assertLess(self.workflow.index(gate), self.workflow.index(cleanup))
+        self.assertIn("os.environ['FULL_EVIDENCE'] != 'true'", gate)
+        self.assertIn('max_member_bytes=256 * 1024 ** 2', shared.step(self.workflow, 'id: seal'))
+        self.assertIn('test_seal_research_outcomes.py',
+            (ROOT / '.github/workflows/compound-readiness-contract.yml').read_text())
+
+    def test_known_size_failure_retains_compact_ciphertext_but_final_gate_fails(self):
+        original_script = shared.script
+        def scripted(block):
+            source = original_script(block)
+            if 'id: seal' not in block:
+                return source
+            return ("import sys\nsys.path.insert(0, 'tools')\n"
+                "import run_quality_first_research as injected_bundle\n"
+                "original_pack = injected_bundle.make_bundle\npack_calls = 0\n"
+                "def first_size_failure(*args, **kwargs):\n"
+                "    global pack_calls\n    pack_calls += 1\n"
+                "    if pack_calls == 1: raise ValueError('RESULT_SIZE_LIMIT')\n"
+                "    return original_pack(*args, **kwargs)\n"
+                "injected_bundle.make_bundle = first_size_failure\n" + source)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(shared, 'script', side_effect=scripted):
+                status, metadata, files = self.seal(root, self.complete_summary(),
+                    independent={'passed': True}, inputs={'status': 'complete'})
+            self.assertFalse(status['strategy_evaluated'])
+            self.assertFalse(metadata['strategy_evaluated']); self.assertFalse(metadata['comparison_valid'])
+            self.assertFalse(metadata['full_evidence_retained'])
+            self.assertEqual(metadata['analysis_step_outcome'], 'success')
+            self.assertEqual(metadata['independent_step_outcome'], 'success')
+            self.assertIn('results/summary.json', files); self.assertIn('diagnostics.txt', files)
+            self.assertIn('results/delivery-failure.json', files)
+            outputs = (root / 'github-output').read_text()
+            self.assertEqual(outputs, 'delivery_complete=true\nfull_evidence=false\n')
+            gate = original_script(shared.step(self.workflow, 'id: delivery_gate'))
+            result = subprocess.run([sys.executable, '-c', gate], capture_output=True, text=True,
+                env={**os.environ, 'DELIVERY_COMPLETE': 'true', 'FULL_EVIDENCE': 'false',
+                     'RETENTION_OUTCOME': 'success', 'PERSISTENCE_OUTCOME': 'success'})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, '')
+            self.assertIn('Complete research evidence was not retained', result.stderr)
 
 
 if __name__ == '__main__':
