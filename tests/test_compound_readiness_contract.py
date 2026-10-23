@@ -34,6 +34,8 @@ def _paper(*, stable: bool) -> dict:
 
 def _state(*, stable: bool, binding: bool, receipts: bool = False) -> dict:
     return {
+        "paper_causality_verified": True,
+        "paper_split_integrity_verified": True,
         "actual_fills": 10 if binding else 0,
         "same_ledger_compounding_rows": 10 if binding else 0,
         "live_orders_enabled": False,
@@ -63,6 +65,24 @@ def _state(*, stable: bool, binding: bool, receipts: bool = False) -> dict:
 
 
 class CompoundReadinessContractTest(unittest.TestCase):
+    def test_research_preparation_does_not_require_completed_trades(self):
+        report = build_report({
+            "paper_causality_verified": True,
+            "paper_split_integrity_verified": True,
+        }, _paper(stable=True))
+        lifecycle = report["lifecycle"]
+        self.assertTrue(lifecycle["offline_research_allowed"])
+        self.assertTrue(lifecycle["paper_candidate_ready_for_execution_preparation"])
+        self.assertEqual(lifecycle["preparation_blockers"], [])
+        self.assertFalse(lifecycle["completed_canary_evidence_verified"])
+        self.assertFalse(lifecycle["canary_launch_authorized"])
+
+    def test_completed_evidence_is_not_execution_authorization(self):
+        report = build_report(_state(stable=True, binding=True, receipts=True), _paper(stable=True))
+        self.assertTrue(report["lifecycle"]["completed_canary_evidence_verified"])
+        self.assertFalse(report["lifecycle"]["canary_launch_authorized"])
+        self.assertFalse(report["live_orders_enabled"])
+
     def test_all_gates_are_required(self):
         report = build_report(_state(stable=True, binding=True, receipts=True), _paper(stable=True))
         self.assertTrue(report["settlement_evidence"]["ready"])

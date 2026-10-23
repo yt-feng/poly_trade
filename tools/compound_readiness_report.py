@@ -1,9 +1,11 @@
-"""Build a deterministic ten-fill compound readiness report.
+"""Report research preparation and completed ten-fill evidence separately.
 
 The report consumes existing state and paper artifacts only.  It never fetches
 market data, accesses an account, submits an order, or infers a fill.  It
 keeps the bounded paper prefix, contiguous-block diagnostics, and
-settlement-grounded Canary evidence as separate gates.
+settlement-grounded Canary evidence as separate gates. Completed trades are an
+outcome of a Canary, never a prerequisite for offline research or preparation.
+This report cannot authorize execution, even when every evidence gate passes.
 """
 from __future__ import annotations
 
@@ -63,8 +65,8 @@ def _h508_paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
                 "holdout_min_fills": cell.get("holdout_min_fills"),
                 "holdout_min_cash": cell.get("holdout_min_cash"),
             })
-    selection_stable = not selection_failures
-    holdout_stable = not holdout_failures
+    selection_stable = bool(cells) and not selection_failures
+    holdout_stable = bool(cells) and not holdout_failures
     is_h534 = str(paper.get("format", "")).startswith("old-clean-h534-")
     fixed_policy = paper.get("dense_fixed_fraction_policy") if is_h534 else paper.get("fixed_fraction_policy")
     expected_fraction = 0.55 if is_h534 else 0.5
@@ -146,7 +148,7 @@ def _paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
         candidates[candidate] = {
             "pooled_exact_ten": pooled,
             "block_stress_failures": failures,
-            "block_stable": not failures,
+            "block_stable": bool(blocks) and not failures,
         }
     return {
         "protocol_consistent": protocol_ok,
@@ -156,7 +158,7 @@ def _paper_frontier(paper: dict[str, Any]) -> dict[str, Any]:
             row["pooled_exact_ten"] for row in candidates.values()
         ),
         "block_stress_failures": block_failures,
-        "block_stress_stable": not block_failures,
+        "block_stress_stable": all(row["block_stable"] for row in candidates.values()),
     }
 
 
@@ -290,20 +292,26 @@ def _orderfilled_frontier(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]:
-    receipt = state.get("receipt_boundary_status")
+    # A first research report has no execution receipts. Absence is valid and
+    # means zero completed evidence; explicit malformed evidence still fails.
+    receipt = state.get("receipt_boundary_status", {})
     if not isinstance(receipt, dict):
         raise ValueError("RECEIPT_BOUNDARY_STATUS_REQUIRED")
     frontier = _h600_state_frontier(state) or _paper_frontier(paper)
     orderfilled = _orderfilled_frontier(state)
     owner_bundle = receipt.get("authenticated_owner_scoped_bundle_available") is True
     btc_bundle = receipt.get("btc_five_minute_bundle_available") is True
-    verified = receipt.get("verified_canary_fills")
-    actual = state.get("actual_fills")
+    verified = receipt.get("verified_canary_fills", 0)
+    actual = state.get("actual_fills", 0)
     if type(verified) is not int or type(actual) is not int:
         raise ValueError("FILL_COUNTS_MUST_BE_INTEGERS")
-    ledger_rows = state.get("same_ledger_compounding_rows")
+    if verified < 0 or actual < 0:
+        raise ValueError("FILL_COUNTS_MUST_BE_NONNEGATIVE")
+    ledger_rows = state.get("same_ledger_compounding_rows", 0)
     if type(ledger_rows) is not int:
         raise ValueError("SAME_LEDGER_COMPOUNDING_ROWS_MUST_BE_INTEGER")
+    if ledger_rows < 0:
+        raise ValueError("SAME_LEDGER_COMPOUNDING_ROWS_MUST_BE_NONNEGATIVE")
     same_ledger_ready = ledger_rows == 10
     evidence_counts = {
         "settlement": receipt.get("owner_scoped_settlement_rows", 0),
@@ -312,6 +320,8 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
     }
     if any(type(value) is not int for value in evidence_counts.values()):
         raise ValueError("RECEIPT_EVIDENCE_COUNTS_MUST_BE_INTEGERS")
+    if any(value < 0 for value in evidence_counts.values()):
+        raise ValueError("RECEIPT_EVIDENCE_COUNTS_MUST_BE_NONNEGATIVE")
     evidence_flags = {
         "settlement": receipt.get("settlement_evidence_verified") is True,
         "cash_release": receipt.get("cash_release_evidence_verified") is True,
@@ -322,6 +332,11 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
         for key in evidence_counts
     }
     all_evidence_ready = all(evidence_ready.values())
+    paper_validity = {
+        "causality_verified": state.get("paper_causality_verified") is True,
+        "split_integrity_verified": state.get("paper_split_integrity_verified") is True,
+        "evidence_scope": "supplied_checkpoint_claims",
+    }
     settlement_evidence_ready = (
         owner_bundle
         and btc_bundle
@@ -331,36 +346,50 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
         and same_ledger_ready
         and all_evidence_ready
     )
-    # A pooled prefix can hide a contiguous time block that cannot produce ten
-    # fills or loses cash.  Real receipts do not repair that paper instability;
-    # the frozen candidate must pass both pooled and block-stress gates.
-    canary_ready = (
+    # The paper gate prepares a candidate for execution engineering. It does
+    # not need future fills, and real receipts cannot repair paper instability.
+    paper_preparation_ready = (
         frontier["pooled_frontier_consistent"]
         and frontier["block_stress_stable"]
         and frontier.get("selection_cells_stable", True)
         and frontier.get("fixed_fraction_policy_ready", True)
-        and settlement_evidence_ready
+        and paper_validity["causality_verified"]
+        and paper_validity["split_integrity_verified"]
     )
-    hard_blockers = []
+    completion_blockers = []
     if not owner_bundle or not btc_bundle:
-        hard_blockers.append("authenticated_owner_scoped_btc_five_minute_bundle_missing")
+        completion_blockers.append("authenticated_owner_scoped_btc_five_minute_bundle_missing")
     if verified < 10 or actual < 10:
-        hard_blockers.append("ten_verified_same_ledger_fills_missing")
+        completion_blockers.append("ten_verified_same_ledger_fills_missing")
     if not same_ledger_ready:
-        hard_blockers.append("same_ledger_compounding_rows_missing_or_not_exactly_ten")
+        completion_blockers.append("same_ledger_compounding_rows_missing_or_not_exactly_ten")
     if not orderfilled["ready"]:
-        hard_blockers.append("onchain_orderfilled_binding_missing_or_unverified")
+        completion_blockers.append("onchain_orderfilled_binding_missing_or_unverified")
+    preparation_blockers = []
+    if not paper_validity["causality_verified"]:
+        preparation_blockers.append("paper_causality_missing_or_failed")
+    if not paper_validity["split_integrity_verified"]:
+        preparation_blockers.append("paper_split_integrity_missing_or_failed")
+    if not frontier["protocol_consistent"]:
+        preparation_blockers.append("paper_protocol_inconsistent")
+    if not frontier["pooled_frontier_consistent"]:
+        preparation_blockers.append("paper_pooled_frontier_inconsistent")
     if not frontier["block_stress_stable"]:
-        hard_blockers.append("paper_block_stress_unstable")
+        preparation_blockers.append("paper_block_stress_unstable")
     if not frontier.get("selection_cells_stable", True):
-        hard_blockers.append("paper_selection_cells_unstable")
+        preparation_blockers.append("paper_selection_cells_unstable")
     if not frontier.get("fixed_fraction_policy_ready", True):
-        hard_blockers.append("paper_executable_fraction_policy_missing_or_failed")
+        preparation_blockers.append("paper_executable_fraction_policy_missing_or_failed")
     for key, ready in evidence_ready.items():
         if not ready:
-            hard_blockers.append(f"{key}_receipts_missing_or_unverified")
+            completion_blockers.append(f"{key}_receipts_missing_or_unverified")
+    next_stage = (
+        "completed_evidence_review" if settlement_evidence_ready
+        else "execution_preparation" if paper_preparation_ready
+        else "offline_research"
+    )
     return {
-        "format": "compound-readiness-report-v1",
+        "format": "compound-readiness-report-v2",
         "source_scope": "existing_state_and_paper_artifact_only",
         "required_fills": 10,
         "same_ledger_contract": "one chronological evolving cash ledger; no reset or concatenation",
@@ -370,6 +399,7 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
             "ready": same_ledger_ready,
         },
         "paper_frontier": frontier,
+        "paper_validity": paper_validity,
         "orderfilled_binding": orderfilled,
         "settlement_evidence": {
             "owner_scoped_bundle": owner_bundle,
@@ -381,9 +411,35 @@ def build_report(state: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]
             "evidence_ready": evidence_ready,
             "ready": settlement_evidence_ready,
         },
-        "canary_ready": canary_ready,
-        "hard_blockers": hard_blockers,
-        "live_orders_enabled": state.get("live_orders_enabled") is True,
+        "lifecycle": {
+            "offline_research_allowed": True,
+            "paper_candidate_ready_for_execution_preparation": paper_preparation_ready,
+            "completed_canary_evidence_verified": settlement_evidence_ready,
+            "completed_evidence_scope": "supplied_checkpoint_claims_not_independent_receipt_authentication",
+            "canary_launch_authorized": False,
+            "next_stage": next_stage,
+            "next_actions": (
+                ["review_completed_chain_and_candidate_evidence"]
+                if settlement_evidence_ready else
+                ["prepare_frozen_candidate_execution_and_incremental_receipt_capture",
+                 "continue_separately_registered_offline_research"]
+                if paper_preparation_ready else
+                ["continue_clean_historical_training_and_validation"]
+            ),
+            "preparation_blockers": preparation_blockers,
+            "completion_evidence_blockers": completion_blockers,
+            "execution_authorization_boundary": "requires_separate_explicit_authorization_and_execution_preflight",
+            "future_fills_required_for_research_or_preparation": False,
+        },
+        # Kept for older readers, with an explicit retrospective meaning.
+        # New orchestration must use lifecycle instead of treating this as a
+        # prerequisite to starting research or the first Canary trade.
+        "canary_ready": paper_preparation_ready and settlement_evidence_ready,
+        "canary_ready_semantics": "legacy_completed_evidence_and_paper_gate_not_launch_permission",
+        "hard_blockers": preparation_blockers + completion_blockers,
+        "hard_blockers_scope": "legacy_combined_completed_evidence_report_only",
+        "reported_live_orders_enabled": state.get("live_orders_enabled") is True,
+        "live_orders_enabled": False,
         "new_data_collected": False,
         "model_refit": False,
     }

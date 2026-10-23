@@ -57,17 +57,23 @@ def _canonical_hash(value: Mapping[str, Any]) -> str:
 
 
 ORDERFILLED_TOLERANCE = Decimal("0.000001")
+EVIDENCE_COLLECTIONS = (
+    "market_windows", "source_events", "depth_snapshots",
+    "settlement_receipts", "cash_release_receipts",
+)
 
 
-def _orderfilled_index(records: Any) -> dict[str, dict[str, Any]]:
+def _orderfilled_index(records: Any, *, complete: bool = True) -> dict[str, dict[str, Any]]:
     """Index the canonical records used by the streaming H600 buffer.
 
     The final v2 validator repeats the full structural check.  This smaller
-    index is intentionally run before the first row is accepted so a capture
-    cannot accumulate nine rows around an unknown or malformed event id.
+    index validates each supplied record before its row is accepted. A
+    progressive capture may start empty; only the final bundle needs ten.
     """
-    if not isinstance(records, list) or len(records) != REQUIRED_FILLS:
-        raise ValueError("exactly_ten_orderfilled_records_required")
+    if not isinstance(records, list) or (complete and len(records) != REQUIRED_FILLS):
+        raise ValueError("exactly_ten_orderfilled_records_required" if complete else "orderfilled_records_must_be_list")
+    if len(records) > REQUIRED_FILLS:
+        raise ValueError("at_most_ten_orderfilled_records_allowed")
     out: dict[str, dict[str, Any]] = {}
     for record in records:
         if not isinstance(record, Mapping):
@@ -105,6 +111,39 @@ def _orderfilled_index(records: Any) -> dict[str, dict[str, Any]]:
             "cash_amount": cash_amount,
         }
     return out
+
+
+def _capture_evidence(header: Mapping[str, Any], additions: Mapping[str, Any]) -> dict[str, Any]:
+    """Stage evidence without changing the buffer; full verification is final."""
+    if not isinstance(additions, Mapping) or set(additions) - set(EVIDENCE_COLLECTIONS):
+        raise ValueError("capture_evidence_collections_invalid")
+    staged = deepcopy(dict(header))
+    for field in EVIDENCE_COLLECTIONS:
+        incoming = additions.get(field, [])
+        existing = staged.get(field, [])
+        if not isinstance(existing, list) or not isinstance(incoming, list):
+            raise ValueError(f"{field}_must_be_list_of_objects")
+        staged[field] = [*existing, *deepcopy(incoming)]
+        seen: set[tuple[Any, ...]] = set()
+        for item in staged[field]:
+            if not isinstance(item, Mapping):
+                raise ValueError(f"{field}_must_be_list_of_objects")
+            if field == "market_windows":
+                identity = (_text(item.get("market_id"), "market_id"),)
+            elif field == "source_events":
+                identity = (_text(item.get("market_id"), "market_id"), _text(item.get("capture_id"), "capture_id"), _required(item, "seq"))
+            elif field == "depth_snapshots":
+                identity = (_text(item.get("snapshot_id"), "snapshot_id"),)
+            else:
+                identity = (_text(item.get("receipt_id"), "receipt_id"),)
+            try:
+                duplicate = identity in seen
+                seen.add(identity)
+            except TypeError as exc:
+                raise ValueError(f"{field}_identity_invalid") from exc
+            if duplicate:
+                raise ValueError(f"{field}_identity_reused")
+    return staged
 
 
 def _check_capture_orderfilled_binding(
@@ -248,22 +287,23 @@ class H600CompoundCapture:
     chain.  Each row must point at the immediately preceding balance
     checkpoint, and evidence identities may not be reused.  This is an
     offline capture buffer; it never reads a wallet or submits an order.
+
+    Start with opening identity and cash only, then attach evidence as rows
+    arrive. Closing evidence is required by build(), not by construction.
+    Neither accepting a partial row chain nor building a consistent document
+    independently authenticates receipts or authorizes live trading.
     """
 
     def __init__(self, header: Mapping[str, Any]):
         if not isinstance(header, Mapping):
             raise ValueError("capture_header_must_be_object")
-        required = (
-            "owner", "ledger_id", "chain_id", "starting_checkpoint_id",
-            "closing_balance_checkpoint_id", "initial_cash", "closing_balance",
-            "market_windows", "source_events", "depth_snapshots",
-            "settlement_receipts", "cash_release_receipts", "orderfilled_records",
-        )
+        required = ("owner", "ledger_id", "chain_id", "starting_checkpoint_id", "initial_cash")
         for field in required:
             _required(header, field)
-        self._header = deepcopy(dict(header))
+        self._header = _capture_evidence(header, {})
         self._header.pop("rows", None)
-        self._orderfilled_by_id = _orderfilled_index(self._header["orderfilled_records"])
+        self._header.setdefault("orderfilled_records", [])
+        self._orderfilled_by_id = _orderfilled_index(self._header["orderfilled_records"], complete=False)
         self._rows: list[dict[str, Any]] = []
         self._seen: dict[str, set[str]] = {
             "order_id": set(),
@@ -273,17 +313,43 @@ class H600CompoundCapture:
             "source_ref": set(),
             "depth_ref": set(),
             "strategy_decision_ref": set(),
+            "balance_checkpoint_id": {str(self._header["starting_checkpoint_id"])},
+            "settlement_receipt_id": set(),
+            "cash_release_receipt_id": set(),
         }
 
     @property
     def rows(self) -> tuple[dict[str, Any], ...]:
         return tuple(deepcopy(self._rows))
 
-    def append(self, row: Mapping[str, Any]) -> None:
+    @property
+    def orderfilled_records(self) -> tuple[dict[str, Any], ...]:
+        return tuple(deepcopy(self._header["orderfilled_records"]))
+
+    def attach_evidence(self, evidence: Mapping[str, Any]) -> None:
+        """Attach delayed evidence without reopening or changing captured rows.
+
+        Receipt arrival may lag the tenth captured row. Finalization still
+        requires the complete validator; this operation only stages allowed
+        evidence collections and rejects malformed or duplicate identities.
+        """
+        self._header = _capture_evidence(self._header, evidence)
+
+    def append(
+        self,
+        row: Mapping[str, Any],
+        *,
+        orderfilled_record: Mapping[str, Any] | None = None,
+        evidence: Mapping[str, Any] | None = None,
+    ) -> None:
         if len(self._rows) >= REQUIRED_FILLS:
             raise ValueError("capture_already_complete")
         if not isinstance(row, Mapping):
             raise ValueError("capture_row_must_be_object")
+        staged_header = _capture_evidence(self._header, {} if evidence is None else evidence)
+        if orderfilled_record is not None:
+            staged_header["orderfilled_records"].append(deepcopy(orderfilled_record))
+        staged_orderfilled = _orderfilled_index(staged_header["orderfilled_records"], complete=False)
         candidate = deepcopy(dict(row))
         expected_sequence = len(self._rows) + 1
         if candidate.get("sequence_no") != expected_sequence:
@@ -303,6 +369,9 @@ class H600CompoundCapture:
             "shares", "price", "entry_cost",
         ):
             _required(candidate, field)
+        trace = _strategy_trace(candidate)
+        if trace["sequence_no"] != expected_sequence or trace["decision_ref"] != candidate["strategy_decision_ref"]:
+            raise ValueError("strategy_decision_identity_mismatch")
         try:
             entry_ts_ms = int(str(candidate["entry_ts_ms"]))
             cash_available_ts_ms = int(str(candidate["cash_available_ts_ms"]))
@@ -315,13 +384,16 @@ class H600CompoundCapture:
                 raise ValueError(f"{field}_mismatch")
         _check_capture_orderfilled_binding(
             candidate,
-            self._orderfilled_by_id.get(str(candidate["orderfilled_event_id"]).strip()),
+            staged_orderfilled.get(str(candidate["orderfilled_event_id"]).strip()),
             owner=_text(self._header["owner"], "owner"),
         )
+        if orderfilled_record is not None and orderfilled_record.get("event_id") != candidate["orderfilled_event_id"]:
+            raise ValueError("new_orderfilled_record_must_match_row")
         previous = self._header["starting_checkpoint_id"] if expected_sequence == 1 else self._rows[-1].get("balance_checkpoint_id")
         if candidate.get("previous_checkpoint_id") != previous:
             raise ValueError("previous_checkpoint_link_mismatch")
-        for field in self._seen:
+        staged_seen = deepcopy(self._seen)
+        for field in staged_seen:
             if field == "source_ref":
                 ref = candidate.get(field)
                 if not isinstance(ref, Mapping):
@@ -334,21 +406,40 @@ class H600CompoundCapture:
                 key = json.dumps(ref, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
             else:
                 key = str(candidate.get(field) or "").strip()
-            if not key or key in self._seen[field]:
+            if not key or key in staged_seen[field]:
                 raise ValueError(f"{field}_reused_or_missing")
-            self._seen[field].add(key)
+            staged_seen[field].add(key)
         if self._rows:
             try:
                 if entry_ts_ms <= int(str(self._rows[-1]["entry_ts_ms"])):
                     raise ValueError("entry_timestamps_must_increase")
+                if entry_ts_ms <= int(str(self._rows[-1]["cash_available_ts_ms"])):
+                    raise ValueError("cash_release_timestamp_must_precede_next_entry")
             except KeyError as exc:
                 raise ValueError("entry_ts_ms_required") from exc
+        self._header = staged_header
+        self._orderfilled_by_id = staged_orderfilled
+        self._seen = staged_seen
         self._rows.append(candidate)
 
-    def build(self) -> dict[str, Any]:
+    def build(
+        self,
+        *,
+        closing_balance: Any = None,
+        closing_balance_checkpoint_id: str | None = None,
+    ) -> dict[str, Any]:
         if len(self._rows) != REQUIRED_FILLS:
             raise ValueError("exactly_ten_rows_required")
-        return build_h600_bundle({**deepcopy(self._header), "rows": list(self.rows)})
+        capture = {**deepcopy(self._header), "rows": list(self.rows)}
+        if closing_balance is not None:
+            capture["closing_balance"] = closing_balance
+        if closing_balance_checkpoint_id is not None:
+            capture["closing_balance_checkpoint_id"] = closing_balance_checkpoint_id
+        document = build_h600_bundle(capture)
+        result = validate_bundle_document(document, strategy_profile=H600_STRATEGY_PROFILE)
+        if result.get("offline_consistency_passed") is not True:
+            raise ValueError(str(result.get("failure_reason") or "offline_consistency_failed"))
+        return document
 
 
 __all__ = ["build_h600_bundle", "validate_built_h600_bundle", "H600CompoundCapture"]

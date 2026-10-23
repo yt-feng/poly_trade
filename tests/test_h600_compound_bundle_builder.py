@@ -48,6 +48,21 @@ def capture_fixture():
     }
 
 
+def opening_header(capture):
+    return {key: copy.deepcopy(capture[key]) for key in (
+        "owner", "ledger_id", "chain_id", "starting_checkpoint_id", "initial_cash", "strategy",
+    )}
+
+
+def evidence_for_row(capture, index):
+    return {
+        "market_windows": copy.deepcopy(capture["market_windows"]) if index == 0 else [],
+        **{key: [copy.deepcopy(capture[key][index])] for key in (
+            "source_events", "depth_snapshots", "settlement_receipts", "cash_release_receipts",
+        )},
+    }
+
+
 class H600CompoundBundleBuilderTests(unittest.TestCase):
     def test_builder_preserves_favorite_ask_in_hashed_trace(self):
         capture = capture_fixture()
@@ -139,3 +154,178 @@ class H600CompoundBundleBuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "orderfilled_event_not_in_bundle"):
             buffer.append(unknown)
         self.assertEqual(buffer.rows, ())
+
+    def test_empty_capture_progresses_one_to_ten_without_future_evidence(self):
+        capture = capture_fixture()
+        buffer = H600CompoundCapture(opening_header(capture))
+        self.assertEqual(buffer.rows, ())
+        self.assertEqual(buffer.orderfilled_records, ())
+        with self.assertRaisesRegex(ValueError, "exactly_ten_rows_required"):
+            buffer.build()
+        for index, row in enumerate(capture["rows"]):
+            buffer.append(row, orderfilled_record=capture["orderfilled_records"][index],
+                          evidence=evidence_for_row(capture, index))
+            self.assertEqual(len(buffer.rows), index + 1)
+            self.assertEqual(len(buffer.orderfilled_records), index + 1)
+            if index < 9:
+                with self.assertRaisesRegex(ValueError, "exactly_ten_rows_required"):
+                    buffer.build()
+        with self.assertRaisesRegex(ValueError, "closing_balance_checkpoint_id_required"):
+            buffer.build()
+        document = buffer.build(closing_balance=capture["closing_balance"],
+                                closing_balance_checkpoint_id=capture["closing_balance_checkpoint_id"])
+        result = validate_bundle_document(document, strategy_profile=_fixture_module.H600_STRATEGY_PROFILE)
+        self.assertTrue(result["offline_consistency_passed"])
+        self.assertFalse(result["gate_passed"])
+        self.assertFalse(result["receipt_authenticity_verified"])
+        self.assertEqual(result["actual_fills"], 0)
+        self.assertEqual(document, build_h600_bundle(capture))
+        with self.assertRaisesRegex(ValueError, "capture_already_complete"):
+            buffer.append(capture["rows"][0], orderfilled_record=capture["orderfilled_records"][0])
+        self.assertEqual(len(buffer.rows), 10)
+        self.assertEqual(len(buffer.orderfilled_records), 10)
+
+    def test_capture_rejects_malformed_new_record_without_mutating_evidence(self):
+        capture = capture_fixture()
+        buffer = H600CompoundCapture(opening_header(capture))
+        bad_record = copy.deepcopy(capture["orderfilled_records"][0])
+        bad_record["cash_amount"] = "0.01"
+        with self.assertRaisesRegex(ValueError, "orderfilled_cash_amount_mismatch"):
+            buffer.append(capture["rows"][0], orderfilled_record=bad_record,
+                          evidence=evidence_for_row(capture, 0))
+        self.assertEqual(buffer.rows, ())
+        self.assertEqual(buffer.orderfilled_records, ())
+        # Same identities and evidence can be retried: the rejected append
+        # must not reserve an event, source, checkpoint, or receipt identity.
+        buffer.append(capture["rows"][0], orderfilled_record=capture["orderfilled_records"][0],
+                      evidence=evidence_for_row(capture, 0))
+        self.assertEqual(len(buffer.rows), 1)
+        self.assertEqual(len(buffer.orderfilled_records), 1)
+
+    def test_late_chronology_failure_does_not_poison_valid_retry(self):
+        capture = capture_fixture()
+        buffer = H600CompoundCapture(opening_header(capture))
+        buffer.append(capture["rows"][0], orderfilled_record=capture["orderfilled_records"][0],
+                      evidence=evidence_for_row(capture, 0))
+        for timestamp, error in (
+            (capture["rows"][0]["entry_ts_ms"], "entry_timestamps_must_increase"),
+            (capture["rows"][0]["cash_available_ts_ms"], "cash_release_timestamp_must_precede_next_entry"),
+        ):
+            invalid = copy.deepcopy(capture["rows"][1])
+            invalid["entry_ts_ms"] = timestamp
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                buffer.append(invalid, orderfilled_record=capture["orderfilled_records"][1],
+                              evidence=evidence_for_row(capture, 1))
+            self.assertEqual(len(buffer.rows), 1)
+            self.assertEqual(len(buffer.orderfilled_records), 1)
+        buffer.append(capture["rows"][1], orderfilled_record=capture["orderfilled_records"][1],
+                      evidence=evidence_for_row(capture, 1))
+        self.assertEqual(len(buffer.rows), 2)
+
+    def test_incremental_capture_preserves_owner_ledger_and_identity_guards(self):
+        capture = capture_fixture()
+        for field in ("owner", "ledger_id", "chain_id"):
+            buffer = H600CompoundCapture(opening_header(capture))
+            row = copy.deepcopy(capture["rows"][0])
+            row[field] = "different"
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, f"{field}_mismatch"):
+                buffer.append(row, orderfilled_record=capture["orderfilled_records"][0])
+            self.assertEqual(buffer.orderfilled_records, ())
+            buffer.append(capture["rows"][0], orderfilled_record=capture["orderfilled_records"][0])
+            with self.assertRaisesRegex(ValueError, "duplicate_orderfilled_event_id"):
+                buffer.append(capture["rows"][1], orderfilled_record=capture["orderfilled_records"][0])
+            self.assertEqual(len(buffer.rows), 1)
+
+    def test_incremental_evidence_and_trace_rejection_is_atomic(self):
+        capture = capture_fixture()
+        buffer = H600CompoundCapture(opening_header(capture))
+        invalid = copy.deepcopy(capture["rows"][0])
+        invalid["strategy_decision"]["sequence_no"] = 2
+        with self.assertRaisesRegex(ValueError, "strategy_decision_identity_mismatch"):
+            buffer.append(invalid, orderfilled_record=capture["orderfilled_records"][0],
+                          evidence=evidence_for_row(capture, 0))
+        malformed = evidence_for_row(capture, 0)
+        malformed["cash_release_receipts"].append(copy.deepcopy(malformed["cash_release_receipts"][0]))
+        with self.assertRaisesRegex(ValueError, "cash_release_receipts_identity_reused"):
+            buffer.append(capture["rows"][0], orderfilled_record=capture["orderfilled_records"][0], evidence=malformed)
+        self.assertEqual(buffer.rows, ())
+        self.assertEqual(buffer.orderfilled_records, ())
+        buffer.append(capture["rows"][0], orderfilled_record=capture["orderfilled_records"][0],
+                      evidence=evidence_for_row(capture, 0))
+
+    def test_final_build_validates_supplied_closing_balance_and_full_evidence(self):
+        capture = capture_fixture()
+        buffer = H600CompoundCapture(capture)
+        for row in capture["rows"]:
+            buffer.append(row)
+        with self.assertRaisesRegex(ValueError, "closing_balance"):
+            buffer.build(closing_balance="999")
+        # A rejected finalization must not overwrite the captured closing data.
+        self.assertEqual(buffer.build(), build_h600_bundle(capture))
+        missing = copy.deepcopy(capture)
+        missing["settlement_receipts"] = missing["settlement_receipts"][:9]
+        incomplete = H600CompoundCapture(missing)
+        for row in missing["rows"]:
+            incomplete.append(row)
+        with self.assertRaisesRegex(ValueError, "exactly_ten_settlement_receipts_required"):
+            incomplete.build()
+
+    def test_final_builder_still_requires_ten_canonical_records(self):
+        capture = capture_fixture()
+        for count in (0, 1, 9):
+            incomplete = copy.deepcopy(capture)
+            incomplete["orderfilled_records"] = incomplete["orderfilled_records"][:count]
+            with self.subTest(count=count), self.assertRaisesRegex(ValueError, "exactly_ten_orderfilled_records_required"):
+                build_h600_bundle(incomplete)
+
+    def test_incremental_capture_rejects_more_than_ten_records(self):
+        capture = capture_fixture()
+        capture["orderfilled_records"].append(copy.deepcopy(capture["orderfilled_records"][0]))
+        with self.assertRaisesRegex(ValueError, "at_most_ten_orderfilled_records_allowed"):
+            H600CompoundCapture(capture)
+
+    def test_delayed_evidence_can_finalize_ten_rows_without_recapturing(self):
+        capture = capture_fixture()
+        buffer = H600CompoundCapture(opening_header(capture))
+        for index, row in enumerate(capture["rows"]):
+            buffer.append(row, orderfilled_record=capture["orderfilled_records"][index])
+        before_rows = buffer.rows
+        before_records = buffer.orderfilled_records
+        closing = {
+            "closing_balance": capture["closing_balance"],
+            "closing_balance_checkpoint_id": capture["closing_balance_checkpoint_id"],
+        }
+        with self.assertRaises(ValueError):
+            buffer.build(**closing)
+        evidence = {key: copy.deepcopy(capture[key]) for key in (
+            "market_windows", "source_events", "depth_snapshots", "settlement_receipts", "cash_release_receipts",
+        )}
+        delayed_receipt = evidence["cash_release_receipts"].pop()
+        buffer.attach_evidence(evidence)
+        with self.assertRaisesRegex(ValueError, "exactly_ten_cash_release_receipts_required"):
+            buffer.build(**closing)
+        buffer.attach_evidence({"cash_release_receipts": [delayed_receipt]})
+        self.assertEqual(buffer.build(**closing), build_h600_bundle(capture))
+        self.assertEqual(buffer.rows, before_rows)
+        self.assertEqual(buffer.orderfilled_records, before_records)
+
+    def test_delayed_evidence_rejection_is_atomic_and_cannot_change_rows(self):
+        capture = capture_fixture()
+        buffer = H600CompoundCapture(capture)
+        for row in capture["rows"]:
+            buffer.append(row)
+        baseline = buffer.build()
+        # The valid first collection must not persist if a later collection
+        # fails. A valid document after each rejection proves full rollback.
+        extra_window = copy.deepcopy(capture["market_windows"][0])
+        extra_window["market_id"] = "extra-market"
+        for invalid, expected in (
+            ({"market_windows": [extra_window], "cash_release_receipts": [None]}, "must_be_list_of_objects"),
+            ({"market_windows": [extra_window], "cash_release_receipts": [capture["cash_release_receipts"][0]]}, "identity_reused"),
+            ({"rows": []}, "capture_evidence_collections_invalid"),
+            ({"orderfilled_records": []}, "capture_evidence_collections_invalid"),
+            ({"closing_balance": "999"}, "capture_evidence_collections_invalid"),
+        ):
+            with self.subTest(expected=expected), self.assertRaisesRegex(ValueError, expected):
+                buffer.attach_evidence(invalid)
+            self.assertEqual(buffer.build(), baseline)
