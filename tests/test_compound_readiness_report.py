@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from tools.compound_readiness_report import build_report
 
 
@@ -78,6 +80,8 @@ def h534_paper_artifact(*, holdout_failure: bool = False) -> dict:
 
 def state(*, bundle: bool = False, fills: int = 0, binding: bool = False, receipts: bool = False) -> dict:
     return {
+        "paper_causality_verified": True,
+        "paper_split_integrity_verified": True,
         "actual_fills": fills,
         "same_ledger_compounding_rows": 10 if binding else 0,
         "live_orders_enabled": False,
@@ -229,3 +233,109 @@ def test_incomplete_h600_checkpoint_does_not_override_paper_artifact():
     assert "h30_move_uncertainty" in report["paper_frontier"]["candidates"]
     assert report["paper_frontier"]["block_stress_stable"] is False
     assert "paper_block_stress_unstable" in report["hard_blockers"]
+
+
+def test_first_offline_candidate_needs_no_future_receipts_or_fill_counters():
+    report = build_report({
+        "paper_causality_verified": True,
+        "paper_split_integrity_verified": True,
+    }, paper_artifact(block_failure=False))
+    lifecycle = report["lifecycle"]
+    assert lifecycle["offline_research_allowed"] is True
+    assert lifecycle["paper_candidate_ready_for_execution_preparation"] is True
+    assert lifecycle["preparation_blockers"] == []
+    assert lifecycle["next_stage"] == "execution_preparation"
+    assert lifecycle["future_fills_required_for_research_or_preparation"] is False
+    assert lifecycle["completed_canary_evidence_verified"] is False
+    assert "ten_verified_same_ledger_fills_missing" in lifecycle["completion_evidence_blockers"]
+    assert lifecycle["canary_launch_authorized"] is False
+    assert report["settlement_evidence"]["actual_fills"] == 0
+
+
+def test_failed_paper_candidate_keeps_offline_work_available():
+    report = build_report({}, paper_artifact(block_failure=True))
+    lifecycle = report["lifecycle"]
+    assert lifecycle["offline_research_allowed"] is True
+    assert lifecycle["paper_candidate_ready_for_execution_preparation"] is False
+    assert lifecycle["next_stage"] == "offline_research"
+    assert "paper_block_stress_unstable" in lifecycle["preparation_blockers"]
+    assert "ten_verified_same_ledger_fills_missing" not in lifecycle["preparation_blockers"]
+
+
+def test_completed_evidence_is_separate_from_paper_quality_and_launch_permission():
+    fixture = state(bundle=True, fills=10, binding=True, receipts=True)
+    fixture["live_orders_enabled"] = True
+    report = build_report(fixture, paper_artifact(block_failure=True))
+    lifecycle = report["lifecycle"]
+    assert lifecycle["completed_canary_evidence_verified"] is True
+    assert lifecycle["completion_evidence_blockers"] == []
+    assert lifecycle["paper_candidate_ready_for_execution_preparation"] is False
+    assert lifecycle["canary_launch_authorized"] is False
+    assert report["reported_live_orders_enabled"] is True
+    assert report["live_orders_enabled"] is False
+    assert report["canary_ready"] is False
+
+
+def test_passing_every_evidence_gate_still_cannot_authorize_trading():
+    report = build_report(
+        state(bundle=True, fills=10, binding=True, receipts=True),
+        paper_artifact(block_failure=False),
+    )
+    assert report["lifecycle"]["completed_canary_evidence_verified"] is True
+    assert report["lifecycle"]["canary_launch_authorized"] is False
+    assert report["live_orders_enabled"] is False
+
+
+def test_nine_completed_rows_do_not_block_preparation_or_complete_the_canary():
+    fixture = state(bundle=True, fills=10, binding=True, receipts=True)
+    fixture["same_ledger_compounding_rows"] = 9
+    report = build_report(fixture, paper_artifact(block_failure=False))
+    lifecycle = report["lifecycle"]
+    assert lifecycle["paper_candidate_ready_for_execution_preparation"] is True
+    assert lifecycle["completed_canary_evidence_verified"] is False
+    assert lifecycle["preparation_blockers"] == []
+    assert "same_ledger_compounding_rows_missing_or_not_exactly_ten" in lifecycle["completion_evidence_blockers"]
+
+
+@pytest.mark.parametrize("schema", ["legacy", "cash_fraction"])
+def test_missing_stress_observations_cannot_qualify_preparation(schema):
+    artifact = paper_artifact(block_failure=False) if schema == "legacy" else h508_paper_artifact()
+    if schema == "legacy":
+        for row in artifact["gates"].values():
+            row["holdout_block_stress"] = []
+    else:
+        artifact["cell_summaries"] = []
+    report = build_report({}, artifact)
+    assert report["lifecycle"]["paper_candidate_ready_for_execution_preparation"] is False
+    assert "paper_block_stress_unstable" in report["lifecycle"]["preparation_blockers"]
+
+
+@pytest.mark.parametrize("validity", [{}, {
+    "paper_causality_verified": False,
+    "paper_split_integrity_verified": True,
+}, {
+    "paper_causality_verified": True,
+    "paper_split_integrity_verified": False,
+}])
+def test_stable_paper_counts_do_not_substitute_for_causal_and_split_audit(validity):
+    fixture = h600_state()
+    fixture.pop("paper_causality_verified")
+    fixture.pop("paper_split_integrity_verified")
+    fixture.update(validity)
+    report = build_report(fixture, paper_artifact(block_failure=False))
+    assert report["paper_frontier"]["pooled_frontier_consistent"] is True
+    assert report["lifecycle"]["paper_candidate_ready_for_execution_preparation"] is False
+    assert report["lifecycle"]["offline_research_allowed"] is True
+    assert report["lifecycle"]["next_stage"] == "offline_research"
+
+
+@pytest.mark.parametrize("bad_state", [
+    {"receipt_boundary_status": None},
+    {"actual_fills": True},
+    {"actual_fills": -1},
+    {"same_ledger_compounding_rows": -1},
+    {"receipt_boundary_status": {"owner_scoped_settlement_rows": -1}},
+])
+def test_absent_evidence_is_allowed_but_malformed_evidence_is_not(bad_state):
+    with pytest.raises(ValueError):
+        build_report(bad_state, paper_artifact(block_failure=False))
