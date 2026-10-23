@@ -106,6 +106,65 @@ class OfflinePolicyAuditTests(unittest.TestCase):
         self.assertFalse(result["first_ten_passed"])
         self.assertTrue(result["ending_cash_available_ts"].endswith("00:20:00+00:00"))
 
+    def test_entry_and_terminal_evidence_do_not_change_replay_decisions(self):
+        candidates, quotes = self._entry_fixture(outcome=0)
+        baseline = audit.replay_policy(candidates, ["a"], quotes, latency_seconds=4,
+            depth_haircut=.5, thresholds=(3, 5, 7))
+        start = pd.Timestamp("2026-01-01T00:00:00Z")
+        candidates["q_side"] = .85
+        candidates["decision_ts"] = start + pd.Timedelta(seconds=120)
+        candidates["terminal_proxy_observed_ts"] = start + pd.Timedelta(seconds=299)
+        candidates["terminal_proxy_gap_seconds"] = -1
+        reported = audit.replay_policy(candidates, ["a"], quotes, latency_seconds=4,
+            depth_haircut=.5, thresholds=(3, 5, 7))
+        for key in ("fills", "ending_cash", "first_ten_passed", "failure_reason", "ending_cash_available_ts"):
+            self.assertEqual(reported[key], baseline[key])
+        event = reported["chain"][0]
+        for key in ("entry_ts", "entry_fill_price", "shares", "entry_cost", "entry_fee", "cash_after_entry", "status", "payout", "cash_release_ts"):
+            self.assertEqual(event[key], baseline["chain"][0][key])
+        self.assertEqual(event["side"], "up")
+        self.assertEqual(event["q_side"], .85)
+        self.assertEqual(event["decision_ts"], "2026-01-01T00:02:00+00:00")
+        entry = event["entry_quote_evidence"]
+        self.assertEqual(entry["observed_ts"], event["entry_ts"])
+        self.assertAlmostEqual(entry["ask_price"] + entry["slippage"], event["entry_fill_price"])
+        self.assertEqual(entry["effective_available_shares"], entry["available_shares"] * entry["depth_haircut"])
+        self.assertGreaterEqual(entry["effective_available_shares"], event["shares"])
+        terminal = event["terminal_proxy_evidence"]
+        self.assertEqual(terminal["gap_seconds"], -1)
+        self.assertEqual(pd.Timestamp(terminal["observed_ts"]) - pd.Timestamp(terminal["market_close_ts"]), pd.Timedelta(seconds=-1))
+        self.assertEqual(terminal["label_available_ts"], terminal["market_close_ts"])
+        self.assertIsNone(baseline["chain"][0]["q_side"])
+        self.assertIsNone(baseline["chain"][0]["decision_ts"])
+
+    def test_delayed_exit_evidence_verifies_trigger_limit_depth_and_cash(self):
+        candidates, quotes = self._entry_fixture()
+        start = pd.Timestamp("2026-01-01T00:00:00Z")
+        quotes["a::market"] = pd.DataFrame({
+            "ts_utc": [start + pd.Timedelta(seconds=s) for s in (128, 140, 144, 150, 154)],
+            "buy_up_cents": [60] * 5, "buy_up_size": [1000] * 5,
+            "sell_up_cents": [20, 80, 40, 80, 75], "sell_up_size": [1000] * 5,
+        })
+        result = audit.replay_policy(candidates, ["a"], quotes, latency_seconds=4,
+            depth_haircut=.5, thresholds=(3, 5, 7))
+        event = result["chain"][0]
+        evidence = event["exit_quote_evidence"]
+        self.assertEqual(event["status"], "quote_exit")
+        # The first trigger's delayed book misses the limit. The recorded
+        # trigger belongs to the later successful attempt, not that cancellation.
+        self.assertEqual(evidence["trigger_observed_ts"], "2026-01-01T00:02:30+00:00")
+        self.assertEqual(evidence["arrival_observed_ts"], "2026-01-01T00:02:34+00:00")
+        self.assertEqual(pd.Timestamp(evidence["intended_arrival_ts"]) - pd.Timestamp(evidence["trigger_observed_ts"]), pd.Timedelta(seconds=4))
+        self.assertGreaterEqual(pd.Timestamp(evidence["arrival_observed_ts"]), pd.Timestamp(evidence["intended_arrival_ts"]))
+        self.assertEqual(evidence["arrival_observed_ts"], event["exit_ts"])
+        for prefix in ("trigger", "arrival"):
+            self.assertGreaterEqual(evidence[prefix + "_effective_available_shares"], event["shares"])
+            self.assertGreaterEqual(evidence[prefix + "_net_proceeds"], evidence["minimum_net_proceeds"])
+        self.assertAlmostEqual(evidence["arrival_bid_price"] - evidence["slippage"], event["exit_fill_price"])
+        self.assertAlmostEqual(evidence["minimum_net_proceeds"], event["entry_cost"] + event["entry_fee"])
+        self.assertEqual(evidence["arrival_net_proceeds"], event["payout"])
+        self.assertAlmostEqual(result["ending_cash"], event["cash_after_entry"] + event["payout"])
+
     def test_released_cash_clock_survives_next_minimum_order_failure(self):
         candidates, quotes = self._entry_fixture(outcome=0)
         following = candidates.iloc[0].copy()

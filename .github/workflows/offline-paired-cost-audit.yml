@@ -1,0 +1,161 @@
+name: offline-paired-cost-audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_sha256:
+        description: Digest of the registered private audit configuration
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: offline-policy-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        id: code
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install sealing dependency before private setup
+        id: vault_dependencies
+        run: python -m pip install -r requirements-vault.txt
+      - name: Materialize registered private configuration
+        id: configuration
+        env:
+          AUDIT_CONFIG_B64: ${{ secrets.OFFLINE_PAIRED_COST_CONFIG_B64 }}
+          EXPECTED_SHA256: ${{ inputs.request_sha256 }}
+        run: |
+          python - <<'PY'
+          import base64, hashlib, json, os, re
+          from pathlib import Path
+          private = Path(os.environ['RUNNER_TEMP']) / 'offline-paired-cost-audit'
+          private.mkdir(mode=0o700)
+          try:
+              raw = base64.b64decode(os.environ['AUDIT_CONFIG_B64'], validate=True)
+              assert 0 < len(raw) <= 32768
+              assert re.fullmatch(r'[0-9a-f]{64}', os.environ['EXPECTED_SHA256'])
+              assert hashlib.sha256(raw).hexdigest() == os.environ['EXPECTED_SHA256']
+              config = json.loads(raw)
+              assert re.fullmatch(r'[0-9a-f]{40}', config['source_commit'])
+              fd = os.open(private / 'config.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+              with os.fdopen(fd, 'wb') as handle:
+                  handle.write(raw)
+              with open(os.environ['GITHUB_ENV'], 'a') as handle:
+                  handle.write('AUDIT_SOURCE_COMMIT=' + config['source_commit'] + '\n')
+          except Exception:
+              raise SystemExit('Private audit configuration missing or invalid') from None
+          PY
+      - name: Checkout immutable source archive
+        id: source
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          ref: ${{ env.AUDIT_SOURCE_COMMIT }}
+          path: source_poly
+          persist-credentials: false
+      - name: Install offline dependencies
+        id: dependencies
+        run: python -m pip install -r requirements.txt pandas numpy scikit-learn pytest pycryptodome
+      - name: Verify offline audit contracts
+        id: contracts
+        run: python -m pytest -q tests/test_offline_policy_audit.py tests/test_offline_paired_cost_audit.py
+      - name: Evaluate registered offline policy
+        id: evaluate
+        run: |
+          python analysis/offline_paired_cost_audit.py \
+            --config "$RUNNER_TEMP/offline-paired-cost-audit/config.json" \
+            --source-root source_poly/data/monthly_runs \
+            --output "$RUNNER_TEMP/offline-paired-cost-audit/results" \
+            > "$RUNNER_TEMP/offline-paired-cost-audit/analysis-output.txt" 2>&1
+      - name: Seal outcome including evaluation failures
+        id: seal
+        if: always() && steps.code.outcome == 'success'
+        env:
+          EVALUATION_OUTCOME: ${{ steps.evaluate.outcome }}
+          SETUP_OUTCOMES: ${{ toJSON(steps) }}
+          REQUEST_SHA256: ${{ inputs.request_sha256 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          python - <<'PY'
+          import json, os, shutil, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          import run_quality_first_research as bundle
+          private = Path(os.environ['RUNNER_TEMP']) / 'offline-paired-cost-audit'
+          private.mkdir(mode=0o700, parents=True, exist_ok=True)
+          recipient = research_vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          recipient_id = os.environ['QUALITY_FIRST_RECIPIENT_ID']
+          research_vault.validate_recipient(recipient, recipient_id)
+          if (private / 'config.json').is_file():
+              shutil.copyfile(private / 'config.json', private / 'frozen_input.json')
+              (private / 'frozen_input.json').chmod(0o600)
+          try:
+              summary = json.loads((private / 'results/summary.json').read_text())
+          except (OSError, ValueError, TypeError):
+              summary = {}
+          fit_records = summary.get('fit_records') if isinstance(summary, dict) else None
+          strategy_evaluated = (
+              os.environ['EVALUATION_OUTCOME'] == 'success'
+              and isinstance(summary, dict)
+              and summary.get('strategy_evaluated') is True
+              and summary.get('evaluation_status') in ('evaluated', 'evaluated_control_mismatch')
+              and isinstance(fit_records, list)
+              and any(isinstance(record, dict) and record.get('status') == 'fit_with_prior_available_labels'
+                      and type(record.get('scored_rows')) is int and record['scored_rows'] > 0
+                      for record in fit_records)
+          )
+          metadata = {
+              'format': 'offline-paired-cost-audit-sealed-v1',
+              'workflow': {key: os.environ.get(key) for key in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'EVALUATION_OUTCOME', 'REQUEST_SHA256', 'SETUP_OUTCOMES')},
+              'live_orders_enabled': False, 'actual_fills': 0, 'verified_canary_fills': 0,
+              'strategy_evaluated': strategy_evaluated,
+              'causal_comparison_valid': bool(strategy_evaluated and summary.get('causal_comparison_valid') is True
+                                             and summary.get('evaluation_status') == 'evaluated'),
+          }
+          research_vault.write_new(private / 'run.json', research_vault.canonical(metadata), 0o600)
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          part_count = bundle.deliver_bundle(bundle.make_bundle(private), delivery, recipient, recipient_id)
+          status = {'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': strategy_evaluated, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': part_count}
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical(status) + b'\n', 0o644)
+          PY
+      - name: Retain ciphertext for idempotent recovery
+        if: always() && steps.seal.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sealed-offline-paired-cost-audit
+          path: sealed-delivery/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Persist encrypted outcome
+        if: always() && steps.seal.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RECIPIENT_ID"
+      - name: Remove runner-local plaintext
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'offline-paired-cost-audit', Path('sealed-delivery')):
+              if path.exists(): shutil.rmtree(path)
+          PY
