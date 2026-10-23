@@ -247,10 +247,30 @@ def prepare_archive(source_root: Path, config: dict[str, Any]) -> tuple[pd.DataF
         "terminal_proxy_max_gap_seconds": float(config["terminal_proxy_max_gap_seconds"])}, quote_index
 
 
+def decision_entry_price_limit(probability: float, edge_floor: float, fee_rate: float) -> float:
+    """Maximum continuous buy price under a frozen probability and fee budget.
+
+    The price solves p + fee_rate * p * (1 - p) <= probability - edge_floor.
+    This economic bound does not establish a venue tick size or signed order.
+    """
+    values = np.asarray([probability, edge_floor, fee_rate], dtype=float)
+    if not np.isfinite(values).all() or not 0 <= probability <= 1 or not 0 <= edge_floor < 1 or not 0 <= fee_rate <= 1:
+        raise ValueError("invalid_entry_cost_limit")
+    budget = max(0.0, float(probability) - float(edge_floor))
+    if fee_rate == 0:
+        return budget
+    # Use the stable form of the smaller quadratic root.
+    linear = 1.0 + float(fee_rate)
+    return 2.0 * budget / (linear + np.sqrt(linear * linear - 4.0 * fee_rate * budget))
+
+
 def replay_policy(candidates: pd.DataFrame, run_names: list[str], quotes: dict[str, pd.DataFrame], *,
                   latency_seconds: float, depth_haircut: float, thresholds: tuple[float, ...],
-                  cash_release_delay_after_close_seconds: float = 900.0) -> dict[str, Any]:
+                  cash_release_delay_after_close_seconds: float = 900.0,
+                  entry_edge_floor: float | None = None) -> dict[str, Any]:
     """Debit a selected entry before inspecting its subsequent execution path."""
+    if entry_edge_floor is not None:
+        decision_entry_price_limit(0.5, entry_edge_floor, signal.TAKER_FEE_RATE)
     cash = float(signal.INITIAL_CASH)
     chain: list[dict[str, Any]] = []
     attempts: list[dict[str, Any]] = []
@@ -286,6 +306,20 @@ def replay_policy(candidates: pd.DataFrame, run_names: list[str], quotes: dict[s
         size = float(entry_quote[f"buy_{side}_size"])
         if not np.isfinite([price, size]).all() or not 0 < price < 1:
             attempts.append({"market_id": str(row.market_id), "status": "invalid_delayed_entry_quote"}); continue
+        entry_limit_evidence = None
+        if entry_edge_floor is not None:
+            probability = float(getattr(row, "q_side", np.nan))
+            limit = decision_entry_price_limit(probability, entry_edge_floor, signal.TAKER_FEE_RATE)
+            arrival_edge = probability - price - signal.TAKER_FEE_RATE * price * (1 - price)
+            entry_limit_evidence = {"decision_probability": probability,
+                "edge_floor": float(entry_edge_floor), "fee_rate": signal.TAKER_FEE_RATE,
+                "maximum_continuous_price": float(limit), "arrival_net_edge": float(arrival_edge),
+                "basis": "frozen_decision_probability_no_tick_size_claim"}
+            if price > limit + 1e-12:
+                attempts.append({"market_id": str(row.market_id), "status": "entry_cost_limit_exceeded",
+                    "entry_cost_limit_evidence": entry_limit_evidence,
+                    "arrival_fill_price": price, "cash_unchanged": cash})
+                continue
         fraction, ratio = execution.depth_proxy_fraction(row, cash, thresholds)
         fee_per_share = signal.TAKER_FEE_RATE * price * (1 - price)
         gross_target = max(signal.MINIMUM_ORDER_USD, cash * fraction)
@@ -332,6 +366,8 @@ def replay_policy(candidates: pd.DataFrame, run_names: list[str], quotes: dict[s
                      "gap_seconds": float(proxy_gap) if pd.notna(proxy_gap) else None,
                  }}
         chain.append(event)
+        if entry_limit_evidence is not None:
+            event["entry_cost_limit_evidence"] = entry_limit_evidence
         next_attempt = entry_ts
         exit_ts = None
         payout = None

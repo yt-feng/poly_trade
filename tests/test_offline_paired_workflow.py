@@ -69,7 +69,7 @@ class PairedWorkflowTests(unittest.TestCase):
         recipient = research_vault.recipient_for(key)
         (workdir / 'research_vault').mkdir()
         (workdir / 'research_vault/recipient.json').write_text(json.dumps(recipient))
-        private = workdir / 'runner-temp/offline-paired-cost-audit'
+        private = workdir / 'runner-temp' / getattr(self, 'private_directory', 'offline-paired-cost-audit')
         if summary is not None:
             (private / 'results').mkdir(parents=True)
             (private / 'results/summary.json').write_text(json.dumps(summary))
