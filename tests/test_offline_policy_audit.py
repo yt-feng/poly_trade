@@ -6,6 +6,27 @@ from analysis import offline_policy_audit as audit
 
 
 class OfflinePolicyAuditTests(unittest.TestCase):
+    def test_unavailable_registered_fields_are_diagnosed_without_imputation(self):
+        values = {name: 1.0 for name in audit.source.LOGIT_FEATURES}
+        values.update(prefix_quality_passed=True, trade_count_sum_first2m=float("nan"),
+                      trade_volume_sum_first2m=float("nan"), gate_target_visible_before_decision=True)
+        frame = pd.DataFrame([values])
+        allowed = [name for name in audit.source.LOGIT_FEATURES if audit.feature_available_seconds(name) <= 120]
+        rejected, report = audit.admit_feature_rows(frame, allowed)
+        self.assertTrue(rejected.empty)
+        self.assertEqual(report["prefix_quality_passed_rows"], 1)
+        self.assertEqual(report["prefix_pass_but_missing_registered_inputs_rows"], 1)
+        self.assertEqual(report["nonfinite_rows_by_required_field"]["trade_count_sum_first2m"], 1)
+        revised = [name for name in allowed if name not in ("trade_count_sum_first2m", "trade_volume_sum_first2m")]
+        admitted, _ = audit.admit_feature_rows(frame, revised)
+        self.assertEqual(len(admitted), 1)
+        self.assertTrue(pd.isna(admitted.iloc[0]["trade_count_sum_first2m"]))
+
+    def test_empty_dataset_and_unfitted_run_are_not_evaluations(self):
+        self.assertEqual(audit.evaluation_status(0, 0), ("not_evaluated_empty_quality_dataset", False))
+        self.assertEqual(audit.evaluation_status(50, 0), ("not_evaluated_insufficient_training_data", False))
+        self.assertEqual(audit.evaluation_status(200, 1), ("evaluated", True))
+
     def _entry_fixture(self, outcome=float("nan")):
         start = pd.Timestamp("2026-01-01T00:00:00Z")
         row = {"market_id": "a::market", "run_name": "a", "slug": "market", "side": "up",
@@ -35,6 +56,25 @@ class OfflinePolicyAuditTests(unittest.TestCase):
         self.assertEqual(result["chain"][0]["payout"], 0)
         self.assertFalse(result["first_ten_passed"])
         self.assertTrue(result["ending_cash_available_ts"].endswith("00:20:00+00:00"))
+
+    def test_released_cash_clock_survives_next_minimum_order_failure(self):
+        candidates, quotes = self._entry_fixture(outcome=0)
+        following = candidates.iloc[0].copy()
+        following["market_id"] = "a::following"
+        following["slug"] = "following"
+        following["entry_ts"] += pd.Timedelta(seconds=1300)
+        following["market_close_ts"] += pd.Timedelta(seconds=1300)
+        following["label_observed_ts"] += pd.Timedelta(seconds=1300)
+        candidates = pd.concat([candidates, following.to_frame().T], ignore_index=True)
+        quotes["a::following"] = quotes["a::market"].copy()
+        quotes["a::following"]["ts_utc"] += pd.Timedelta(seconds=1300)
+        result = audit.replay_policy(candidates, ["a"], quotes, latency_seconds=0,
+            depth_haircut=1, thresholds=(3, 5, 7))
+        self.assertEqual(result["fills"], 1)
+        self.assertEqual(result["failure_reason"], "cash_fraction_cannot_fit_minimum_order")
+        self.assertAlmostEqual(result["ending_cash"], 0)
+        self.assertEqual(result["ending_cash_available_ts"], result["chain"][0]["cash_release_ts"])
+        self.assertNotEqual(result["ending_cash_available_ts"], result["chain"][0]["entry_ts"])
 
     def test_latency_uses_delayed_entry_price_and_depth(self):
         candidates, quotes = self._entry_fixture()

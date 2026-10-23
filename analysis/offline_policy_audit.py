@@ -84,16 +84,16 @@ def prefix_quality(quotes: pd.DataFrame, maximum_age: float, terminal_gap_second
         group = group.sort_values("ts_utc")
         cutoff = group["ts_utc"].min() + pd.Timedelta(seconds=120)
         prefix = group[group["ts_utc"] <= cutoff]
-        valid = bool(not prefix["target_price"].dropna().empty)
+        gates = {"target_visible_before_decision": bool(not prefix["target_price"].dropna().empty)}
         for minute in (1, 2):
             row, age = source.snapshot_row_with_age(prefix, minute)
-            valid = valid and row is not None and age <= maximum_age and source._strict_snapshot_complete(row)
-        valid = valid and int(prefix["final_price"].notna().sum()) >= 3
+            gates[f"snapshot_{minute}m_complete_and_recent"] = bool(row is not None and age <= maximum_age and source._strict_snapshot_complete(row))
+        gates["three_prefix_price_observations"] = int(prefix["final_price"].notna().sum()) >= 3
         path = pd.to_numeric(prefix["final_price"], errors="coerce").dropna()
-        valid = valid and float(path.diff().abs().sum()) > 0
+        gates["prefix_path_ratio_defined"] = float(path.diff().abs().sum()) > 0
         start_epoch = pd.to_numeric(str(group.iloc[0]["slug"]).rsplit("-", 1)[-1], errors="coerce")
         close = pd.to_datetime(start_epoch, unit="s", utc=True, errors="coerce") + pd.Timedelta(seconds=300)
-        valid = valid and pd.notna(close) and cutoff < close
+        gates["decision_before_market_close"] = bool(pd.notna(close) and cutoff < close)
         # The declared proxy is never available to training before market close.
         gaps = (group["ts_utc"] - close).dt.total_seconds()
         labels = group.loc[group["final_price"].notna() & gaps.abs().le(terminal_gap_seconds)].copy()
@@ -102,13 +102,41 @@ def prefix_quality(quotes: pd.DataFrame, maximum_age: float, terminal_gap_second
             labels = labels.assign(abs_gap=labels["terminal_gap"].abs()).sort_values(["abs_gap", "ts_utc"])
         target = source.first_non_null(prefix["target_price"])
         label = float(labels.iloc[0]["final_price"] > target) if not labels.empty and pd.notna(target) else np.nan
-        records.append({"market_id": market_id, "prefix_quality_passed": bool(valid),
+        records.append({"market_id": market_id, "prefix_quality_passed": all(gates.values()),
+                        **{"gate_" + key: value for key, value in gates.items()},
                         "market_close_ts": close,
                         "qualified_outcome_up": label,
                         "terminal_proxy_observed_ts": labels.iloc[0]["ts_utc"] if not labels.empty else pd.NaT,
                         "terminal_proxy_gap_seconds": float(labels.iloc[0]["terminal_gap"]) if not labels.empty else np.nan,
                         "label_observed_ts": max(labels.iloc[0]["ts_utc"], close) if not labels.empty else pd.NaT})
     return pd.DataFrame(records)
+
+
+def admit_feature_rows(features: pd.DataFrame, feature_names: list[str]) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Reject missing registered inputs explicitly; never choose a new schema."""
+    required = sorted(set(feature_names + ["buy_up_price_2m", "buy_down_price_2m", "buy_up_size_2m", "buy_down_size_2m",
+        "sell_up_size_2m", "sell_down_size_2m", "spread_up_median_first2m", "spread_down_median_first2m", "overround_median_first2m"]))
+    numeric = features[required].apply(pd.to_numeric, errors="coerce")
+    finite_matrix = np.isfinite(numeric.to_numpy())
+    finite = finite_matrix.all(axis=1)
+    prefix_pass = features["prefix_quality_passed"].astype(bool).to_numpy()
+    admitted = features.loc[prefix_pass & finite].copy()
+    diagnostics = {"rows_before_quality": len(features), "prefix_quality_passed_rows": int(prefix_pass.sum()),
+        "all_registered_inputs_finite_rows": int(finite.sum()), "prefix_and_inputs_passed_rows": len(admitted),
+        "prefix_pass_but_missing_registered_inputs_rows": int((prefix_pass & ~finite).sum()),
+        "nonfinite_rows_by_required_field": {name: int((~finite_matrix[:, index]).sum()) for index, name in enumerate(required)},
+        "prefix_pass_nonfinite_rows_by_required_field": {name: int((prefix_pass & ~finite_matrix[:, index]).sum()) for index, name in enumerate(required)},
+        "prefix_gate_rejected_rows": {name.removeprefix("gate_"): int((~features[name].astype(bool)).sum()) for name in features if name.startswith("gate_")},
+        "missing_feature_policy": "reject_row_no_imputation_no_automatic_feature_dropping"}
+    return admitted, diagnostics
+
+
+def evaluation_status(feature_rows: int, fitted_scored_runs: int) -> tuple[str, bool]:
+    if feature_rows == 0:
+        return "not_evaluated_empty_quality_dataset", False
+    if fitted_scored_runs == 0:
+        return "not_evaluated_insufficient_training_data", False
+    return "evaluated", True
 
 
 def causal_training_rows(features: pd.DataFrame, previous_runs: list[str], current: pd.DataFrame) -> pd.DataFrame:
@@ -158,11 +186,7 @@ def prepare_archive(source_root: Path, config: dict[str, Any]) -> tuple[pd.DataF
     # Prefix eligibility is evaluated separately, without requiring a later snapshot.
     features = source.build_features(quotes, strict_quality=False).merge(quality, on="market_id", validate="one_to_one")
     before = len(features)
-    required = list(config["features"]) + ["buy_up_price_2m", "buy_down_price_2m", "buy_up_size_2m", "buy_down_size_2m",
-        "sell_up_size_2m", "sell_down_size_2m", "spread_up_median_first2m", "spread_down_median_first2m", "overround_median_first2m"]
-    numeric = features[sorted(set(required))].apply(pd.to_numeric, errors="coerce")
-    finite = np.isfinite(numeric.to_numpy()).all(axis=1)
-    features = features.loc[features["prefix_quality_passed"] & finite].copy()
+    features, admission = admit_feature_rows(features, list(config["features"]))
     features["outcome_up"] = features["qualified_outcome_up"]
     features = features.sort_values(["first_quote_ts", "run_name", "slug"], kind="mergesort")
     duplicate_count = int(features.duplicated("slug").sum())
@@ -192,6 +216,7 @@ def prepare_archive(source_root: Path, config: dict[str, Any]) -> tuple[pd.DataF
             continue
         quote_index[str(market_id)] = frame.reset_index(drop=True)
     return features, retained, {"complete_archive_runs": len(complete), "feature_rows_before_quality": before,
+        "quality_admission": admission,
         "retained_feature_rows": len(features), "duplicate_market_rows_removed": duplicate_count,
         "qualified_terminal_labels": int(features["outcome_up"].notna().sum()),
         "strict_at_or_after_close_terminal_labels": int((features["outcome_up"].notna() & features["terminal_proxy_gap_seconds"].ge(0)).sum()),
@@ -227,7 +252,9 @@ def replay_policy(candidates: pd.DataFrame, run_names: list[str], quotes: dict[s
         if pending is not None:
             if intended <= pending[0]:
                 attempts.append({"market_id": str(row.market_id), "status": "prior_cash_not_released"}); continue
-            cash += pending[1]; pending = None
+            cash += pending[1]
+            available_ts = pending[0]
+            pending = None
         book = quotes.get(str(row.market_id))
         if book is None or book.empty:
             attempts.append({"market_id": str(row.market_id), "status": "no_retained_source_book"}); continue
@@ -359,7 +386,9 @@ def evaluate(source_root: Path, config: dict[str, Any], output: Path) -> dict[st
     test_runs = runs[warmup:]
     blocks = disjoint_blocks(test_runs, int(config["evaluation_block_runs"]))
     rows = []
-    for slippage, frame in candidates.items():
+    fitted_scored_runs = sum(record["status"] == "fit_with_prior_available_labels" for record in fit_records)
+    status, strategy_evaluated = evaluation_status(len(features), fitted_scored_runs)
+    for slippage, frame in (candidates.items() if strategy_evaluated else []):
         for latency in config["latencies_seconds"]:
             for haircut in config["depth_haircuts"]:
                 for index, block in enumerate([test_runs] + blocks):
@@ -370,6 +399,10 @@ def evaluate(source_root: Path, config: dict[str, Any], output: Path) -> dict[st
                         "block_index": index, "runs": block, "slippage": slippage, "latency_seconds": latency,
                         "depth_haircut": haircut, **replay})
     report = {"format": "offline-policy-audit-v1", "protocol": config,
+        "evaluation_status": status, "strategy_evaluated": strategy_evaluated,
+        "fitted_scored_runs": fitted_scored_runs,
+        "model_scored_rows": sum(record["scored_rows"] for record in fit_records if record["status"] == "fit_with_prior_available_labels"),
+        "candidate_rows_by_slippage": {str(s): len(frame) for s, frame in candidates.items()},
         "protocol_sha256": hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
         "source_commit": observed, "coverage": coverage, "run_order": runs, "fit_records": fit_records,
         "evaluation_blocks": blocks, "results": rows,
