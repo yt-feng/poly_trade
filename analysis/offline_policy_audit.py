@@ -304,12 +304,33 @@ def replay_policy(candidates: pd.DataFrame, run_names: list[str], quotes: dict[s
         cash -= reserved  # Every entered position remains on the ledger, including failures.
         entry_ts = pd.Timestamp(entry_quote["ts_utc"])
         available_ts = entry_ts
+        decision_time = getattr(row, "decision_ts", pd.NaT)
+        decision_probability = getattr(row, "q_side", np.nan)
+        label_time_reported = getattr(row, "label_observed_ts", pd.NaT)
+        proxy_time = getattr(row, "terminal_proxy_observed_ts", pd.NaT)
+        proxy_gap = getattr(row, "terminal_proxy_gap_seconds", np.nan)
         event = {"market_id": str(row.market_id), "run_name": str(row.run_name), "slug": str(row.slug),
                  "entry_ts": entry_ts.isoformat(), "cash_before_entry": before, "cash_after_entry": cash,
                  "shares": shares, "entry_fill_price": price, "entry_cost": cost, "entry_fee": fee,
                  "intended_arrival_ts": intended.isoformat(), "entry_quote_gap_seconds": (entry_ts - intended).total_seconds(),
                  "effective_entry_latency_seconds": (entry_ts - pd.Timestamp(getattr(row, "decision_ts", row.entry_ts))).total_seconds(),
-                 "fraction": fraction, "depth_capacity_ratio": ratio, "status": "open"}
+                 "fraction": fraction, "depth_capacity_ratio": ratio, "status": "open",
+                 "side": side,
+                 "q_side": float(decision_probability) if pd.notna(decision_probability) else None,
+                 "decision_ts": pd.Timestamp(decision_time).isoformat() if pd.notna(decision_time) else None,
+                 "entry_quote_evidence": {
+                     "observed_ts": entry_ts.isoformat(),
+                     "ask_price": float(entry_quote[f"buy_{side}_cents"]) / 100.0,
+                     "available_shares": size, "depth_haircut": float(depth_haircut),
+                     "effective_available_shares": size * float(depth_haircut),
+                     "slippage": float(row.slippage),
+                 },
+                 "terminal_proxy_evidence": {
+                     "market_close_ts": close.isoformat(),
+                     "label_available_ts": pd.Timestamp(label_time_reported).isoformat() if pd.notna(label_time_reported) else None,
+                     "observed_ts": pd.Timestamp(proxy_time).isoformat() if pd.notna(proxy_time) else None,
+                     "gap_seconds": float(proxy_gap) if pd.notna(proxy_gap) else None,
+                 }}
         chain.append(event)
         next_attempt = entry_ts
         exit_ts = None
@@ -340,7 +361,24 @@ def replay_policy(candidates: pd.DataFrame, run_names: list[str], quotes: dict[s
             # A marketable limit order cancels when the arrival book misses its limit.
             if net >= reserved and sell_size * depth_haircut >= shares:
                 exit_ts, payout = pd.Timestamp(observed["ts_utc"]), float(net)
-                event.update(status="quote_exit", exit_ts=exit_ts.isoformat(), exit_fill_price=sell_price)
+                event.update(status="quote_exit", exit_ts=exit_ts.isoformat(), exit_fill_price=sell_price,
+                             exit_quote_evidence={
+                                 "trigger_observed_ts": trigger_ts.isoformat(),
+                                 "trigger_bid_price": float(trigger[f"sell_{side}_cents"]) / 100.0,
+                                 "trigger_available_shares": trigger_size,
+                                 "trigger_effective_available_shares": trigger_size * float(depth_haircut),
+                                 "trigger_net_proceeds": trigger_net,
+                                 "intended_arrival_ts": arrival.isoformat(),
+                                 "arrival_observed_ts": exit_ts.isoformat(),
+                                 "arrival_bid_price": float(observed[f"sell_{side}_cents"]) / 100.0,
+                                 "arrival_available_shares": sell_size,
+                                 "arrival_effective_available_shares": sell_size * float(depth_haircut),
+                                 "arrival_net_proceeds": float(net),
+                                 "minimum_net_proceeds": reserved,
+                                 "latency_seconds": float(latency_seconds),
+                                 "depth_haircut": float(depth_haircut),
+                                 "slippage": float(row.slippage),
+                             })
                 break
         if payout is None:
             outcome = getattr(row, "outcome_up", np.nan)
