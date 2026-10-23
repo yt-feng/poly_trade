@@ -167,6 +167,25 @@ def isolated_signal_contract(features: list[str], entry_seconds: float):
         signal.FEATURES, signal.ENTRY_SECONDS_AFTER_START = old_features, old_entry
 
 
+def cost_checked_candidate_frame(model: Any, medians: pd.Series, current: pd.DataFrame,
+                                 slippage: float) -> pd.DataFrame:
+    """Apply the net-edge gate to the simulated fill price, including slippage.
+
+    For nonnegative slippage this can only remove candidates from the legacy
+    signal gate. Other signal filters remain unchanged; frozen legacy reports
+    retain their original semantics.
+    """
+    if not np.isfinite(float(slippage)) or float(slippage) < 0:
+        raise ValueError("invalid_nonnegative_slippage")
+    frame = signal._candidate_frame(model, medians, current, slippage)
+    if frame.empty:
+        return frame
+    fee_per_share = signal.TAKER_FEE_RATE * frame["fill_price"] * (1 - frame["fill_price"])
+    frame = frame.copy()
+    frame["edge"] = frame["q_side"] - frame["fill_price"] - fee_per_share
+    return frame.loc[frame["edge"].ge(signal.EDGE_THRESHOLD)].copy()
+
+
 def prepare_archive(source_root: Path, config: dict[str, Any]) -> tuple[pd.DataFrame, list[str], dict[str, Any], dict[str, pd.DataFrame]]:
     raw, coverage = source.read_all_monthly_runs(source_root)
     maximum = int(coverage["file_count"].max())
@@ -376,7 +395,7 @@ def evaluate(source_root: Path, config: dict[str, Any], output: Path) -> dict[st
             model = ExtraTreesClassifier(**config["model_params"])
             model.fit(train[config["features"]], train["outcome_up"].astype(int))
             for slippage in frames:
-                frame = signal._candidate_frame(model, pd.Series(dtype=float), current, slippage)
+                frame = cost_checked_candidate_frame(model, pd.Series(dtype=float), current, slippage)
                 if not frame.empty:
                     frame = frame[frame["q_side"].ge(float(config["confidence_floor"])) & frame["price"].ge(float(config["favorite_price_floor"]))].copy()
                     frames[slippage].append(frame)
@@ -399,6 +418,8 @@ def evaluate(source_root: Path, config: dict[str, Any], output: Path) -> dict[st
                         "block_index": index, "runs": block, "slippage": slippage, "latency_seconds": latency,
                         "depth_haircut": haircut, **replay})
     report = {"format": "offline-policy-audit-v1", "protocol": config,
+        "selection_edge_basis": "q_side_minus_fill_price_including_slippage_minus_taker_fee_per_share",
+        "cost_gate_version": "fill_price_net_edge_v1",
         "evaluation_status": status, "strategy_evaluated": strategy_evaluated,
         "fitted_scored_runs": fitted_scored_runs,
         "model_scored_rows": sum(record["scored_rows"] for record in fit_records if record["status"] == "fit_with_prior_available_labels"),

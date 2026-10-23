@@ -1,11 +1,60 @@
 import unittest
 
+import numpy as np
 import pandas as pd
 
 from analysis import offline_policy_audit as audit
 
 
 class OfflinePolicyAuditTests(unittest.TestCase):
+    def _signal_fixture(self, probability):
+        class FixedProbability:
+            def predict_proba(self, frame):
+                return np.tile([1 - probability, probability], (len(frame), 1))
+
+        row = {name: 0.0 for name in audit.signal.FEATURES}
+        row.update(buy_up_price_2m=.79, buy_down_price_2m=.21,
+                   buy_up_size_2m=1000, buy_down_size_2m=1000,
+                   spread_up_median_first2m=.02, spread_down_median_first2m=.02,
+                   overround_median_first2m=0,
+                   first_quote_ts=pd.Timestamp("2026-01-01T00:00:00Z"),
+                   slug="btc-updown-5m-1767225600")
+        return FixedProbability(), pd.DataFrame([row])
+
+    def test_fill_cost_gate_rejects_edge_that_only_passes_without_slippage(self):
+        model, frame = self._signal_fixture(.8213)
+        legacy = audit.signal._candidate_frame(model, pd.Series(dtype=float), frame, .01)
+        self.assertEqual(len(legacy), 1)
+        self.assertAlmostEqual(legacy.iloc[0]["edge"], .0201)
+        checked = audit.cost_checked_candidate_frame(model, pd.Series(dtype=float), frame, .01)
+        self.assertTrue(checked.empty)
+
+    def test_larger_slippage_cannot_improve_net_edge_or_restore_rejected_candidate(self):
+        model, frame = self._signal_fixture(.83)
+        selected = []
+        previous_edge = float("inf")
+        for slippage in (0, .005, .01, .015):
+            checked = audit.cost_checked_candidate_frame(model, pd.Series(dtype=float), frame, slippage)
+            selected.append(len(checked))
+            if not checked.empty:
+                self.assertLess(checked.iloc[0]["edge"], previous_edge)
+                previous_edge = checked.iloc[0]["edge"]
+            legacy = audit.signal._candidate_frame(model, pd.Series(dtype=float), frame, slippage)
+            self.assertTrue(set(checked["slug"]).issubset(set(legacy["slug"])))
+        self.assertEqual(selected, [1, 1, 0, 0])
+
+    def test_zero_slippage_preserves_legacy_candidate_frame(self):
+        model, frame = self._signal_fixture(.83)
+        legacy = audit.signal._candidate_frame(model, pd.Series(dtype=float), frame, 0)
+        checked = audit.cost_checked_candidate_frame(model, pd.Series(dtype=float), frame, 0)
+        pd.testing.assert_frame_equal(checked, legacy)
+
+    def test_cost_gate_rejects_negative_or_nonfinite_slippage(self):
+        model, frame = self._signal_fixture(.83)
+        for slippage in (-.001, float("nan"), float("inf")):
+            with self.subTest(slippage=slippage), self.assertRaisesRegex(ValueError, "invalid_nonnegative_slippage"):
+                audit.cost_checked_candidate_frame(model, pd.Series(dtype=float), frame, slippage)
+
     def test_unavailable_registered_fields_are_diagnosed_without_imputation(self):
         values = {name: 1.0 for name in audit.source.LOGIT_FEATURES}
         values.update(prefix_quality_passed=True, trade_count_sum_first2m=float("nan"),
