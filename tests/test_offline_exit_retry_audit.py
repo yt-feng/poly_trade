@@ -8,10 +8,17 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
 from analysis import offline_exit_retry_audit as audit
+
+ORIGINAL_RUNTIME_PROBE=audit.probe_runtime_environment
+
+def runtime_fixture():
+    versions={name:'0.0.0' for name in audit.RUNTIME_MODULES}
+    return {'python_major_minor':'3.11','packages':versions,'loaded_module_versions':versions.copy()}
 
 START=pd.Timestamp('2026-01-01T00:00:00Z')
 
@@ -43,6 +50,8 @@ def write_csv(path,rows,fields):
 
 class ExitRetryAuditTests(unittest.TestCase):
     def setUp(self):
+        runtime=patch.object(audit,'probe_runtime_environment',return_value=runtime_fixture())
+        self.runtime_probe=runtime.start();self.addCleanup(runtime.stop)
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
         self.parent=protocol();self.row=candidate();self.candidate_path=self.root/'candidate.csv'
         self.binding=write_csv(self.candidate_path,[{**self.row,'future_ignored':'NaN/unavailable'}],[*audit.CANDIDATE_FIELDS,'future_ignored'])
@@ -50,7 +59,7 @@ class ExitRetryAuditTests(unittest.TestCase):
         self.quote_path=self.source/'run'/'part-btc-updown-5m_quotes.csv'
         self.raw=[quote(self.row['slug'],132),quote(self.row['slug'],170,size=0),quote(self.row['slug'],182,bid=40)]
         self.write_quotes()
-        self.config={'evaluation_mode':'offline_exit_retry','source_commit':'a'*40,'expected_code_commit':'c'*40,'source_repository':'synthetic/archive',
+        self.config={'environment':{'python_major_minor':'3.11','packages':runtime_fixture()['packages']},'evaluation_mode':'offline_exit_retry','source_commit':'a'*40,'expected_code_commit':'c'*40,'source_repository':'synthetic/archive',
             'base_protocol':self.parent,'base_protocol_sha256':audit.digest(audit.canonical(self.parent)),
             'candidate_binding':self.binding,'frozen_control_candidate_fields':list(audit.CANDIDATE_FIELDS),'frozen_control_candidates':[self.row],
             'frozen_control_candidate_rows_sha256':audit.digest(audit.canonical([self.row])),'expected_control_candidate_count':1,
@@ -151,6 +160,7 @@ class ExitRetryAuditTests(unittest.TestCase):
                 patch.object(audit.book_base,'prepare_archive',side_effect=AssertionError('no feature regeneration')):
             result=audit.evaluate(self.source,self.candidate_path,self.config,self.root/'out')
         self.assertEqual(calls.call_count,2);self.assertNotIn('exit_resolver',calls.call_args_list[0].kwargs)
+        self.assertEqual(result['runtime_environment'],runtime_fixture())
         self.assertEqual(result['arms']['C_original'],expected);self.assertTrue(result['strategy_evaluated']);self.assertTrue(result['comparison_valid'])
         retry=result['arms']['C_scheduled_retry'];self.assertEqual(retry['chain'][0]['exit_ts'],(START+pd.Timedelta(seconds=182)).isoformat())
         self.assertLess(retry['chain'][0]['realized_pnl'],0);self.assertEqual(result['actual_model_fit_calls'],0);self.assertEqual(result['replayed_cells'],2)
@@ -203,6 +213,60 @@ class ExitRetryAuditTests(unittest.TestCase):
         with self.assertRaises(ValueError):audit.validate_config(wrong)
         wrong=copy.deepcopy(self.config);wrong['raw_budget']['max_quote_rows']=audit.HARD_RAW['max_quote_rows']+1
         with self.assertRaises(ValueError):audit.validate_config(wrong)
+    def test_runtime_missing_or_malformed_binding_fails_before_source(self):
+        for environment in (None,{}, {'python_major_minor':'3.11','packages':{'pandas':'0.0.0'}},
+                {'python_major_minor':'3','packages':runtime_fixture()['packages']}):
+            with self.subTest(environment=environment),tempfile.TemporaryDirectory() as folder:
+                config=copy.deepcopy(self.config);config['environment']=environment
+                with patch.object(audit,'verified_code_source',side_effect=AssertionError('no git/source read')) as verified, \
+                        patch.object(audit,'load_frozen_candidates',side_effect=AssertionError('no candidate read')) as candidates, \
+                        patch.object(audit,'load_candidate_quote_books',side_effect=AssertionError('no raw read')) as raw, \
+                        patch.object(audit.execution,'replay_cached_quotes',side_effect=AssertionError('no replay')) as replay:
+                    with self.assertRaisesRegex(ValueError,'evaluation_failed'):
+                        audit.evaluate(self.source,self.candidate_path,config,Path(folder)/'out')
+                self.assertEqual([verified.call_count,candidates.call_count,raw.call_count,replay.call_count],[0]*4)
+                result=json.loads((Path(folder)/'out/summary.json').read_text());self.assertEqual(result['failure']['stage'],'configuration')
+                self.assertIsNone(result['runtime_environment']);self.assertEqual(result['replayed_cells'],0)
+    def test_runtime_metadata_loaded_and_python_mismatch_stop_before_inputs(self):
+        for field in ('python_major_minor','packages','loaded_module_versions'):
+            with self.subTest(field=field),tempfile.TemporaryDirectory() as folder:
+                observed=runtime_fixture()
+                if field=='python_major_minor':observed[field]='3.12'
+                else:observed[field]['numpy']='9.9.9'
+                self.runtime_probe.return_value=observed
+                with patch.object(audit,'verified_code_source',side_effect=AssertionError('no git/source read')) as verified, \
+                        patch.object(audit,'load_frozen_candidates',side_effect=AssertionError('no candidate read')) as candidates, \
+                        patch.object(audit,'load_candidate_quote_books',side_effect=AssertionError('no raw read')) as raw, \
+                        patch.object(audit.execution,'replay_cached_quotes',side_effect=AssertionError('no replay')) as replay:
+                    with self.assertRaisesRegex(ValueError,'evaluation_failed'):
+                        audit.evaluate(self.source,self.candidate_path,self.config,Path(folder)/'out')
+                self.assertEqual([verified.call_count,candidates.call_count,raw.call_count,replay.call_count],[0]*4)
+                result=json.loads((Path(folder)/'out/summary.json').read_text())
+                self.assertEqual(result['runtime_environment'],observed);self.assertEqual(result['failure']['code'],'runtime_version_binding_mismatch')
+                self.assertEqual(result['replayed_cells'],0)
+    def test_missing_installed_distribution_stops_before_inputs_and_replay(self):
+        self.runtime_probe.side_effect=audit.importlib.metadata.PackageNotFoundError('synthetic-package')
+        with patch.object(audit,'verified_code_source',side_effect=AssertionError('no git/source read')) as verified, \
+                patch.object(audit,'load_frozen_candidates',side_effect=AssertionError('no candidate read')) as candidates, \
+                patch.object(audit,'load_candidate_quote_books',side_effect=AssertionError('no raw read')) as raw, \
+                patch.object(audit.execution,'replay_cached_quotes',side_effect=AssertionError('no replay')) as replay:
+            with self.assertRaisesRegex(ValueError,'evaluation_failed'):
+                audit.evaluate(self.source,self.candidate_path,self.config,self.root/'out')
+        self.assertEqual([verified.call_count,candidates.call_count,raw.call_count,replay.call_count],[0]*4)
+        report=json.loads((self.root/'out/summary.json').read_text())
+        self.assertEqual(report['failure']['stage'],'runtime_environment');self.assertEqual(report['failure']['type'],'PackageNotFoundError')
+        self.assertEqual(report['replayed_cells'],0)
+
+    def test_runtime_probe_reads_all_six_installed_and_loaded_versions(self):
+        with patch.object(audit.importlib.metadata,'version',return_value='0.0.0') as installed, \
+                patch.object(audit.importlib,'import_module',return_value=SimpleNamespace(__version__='0.0.0')) as loaded, \
+                patch.object(audit.sys,'version_info',SimpleNamespace(major=3,minor=11)):
+            actual=ORIGINAL_RUNTIME_PROBE()
+        self.assertEqual(actual,runtime_fixture());self.assertEqual(installed.call_count,6);self.assertEqual(loaded.call_count,6)
+        self.assertEqual({c.args[0] for c in installed.call_args_list},set(audit.RUNTIME_MODULES))
+        self.assertEqual({c.args[0] for c in loaded.call_args_list},set(audit.RUNTIME_MODULES.values()))
+        audit.assert_runtime_environment(self.config,actual)
+
     def test_cash_readout_complete_ten_and_missing_clocks_not_fast_claim(self):
         chain=[]
         for i in range(10):

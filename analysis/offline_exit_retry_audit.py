@@ -4,7 +4,7 @@ Only nine causal saved candidate fields reach execution. No model is constructed
 fitted or scored; quote outcomes remain historical simulation evidence.
 """
 from __future__ import annotations
-import argparse, base64, csv, hashlib, io, json, lzma, math, os, re, stat, subprocess, sys
+import argparse, base64, csv, hashlib, importlib, importlib.metadata, io, json, lzma, math, os, re, stat, subprocess, sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 import pandas as pd
@@ -15,6 +15,7 @@ import cached_quote_execution as execution
 import offline_bid_residual_audit as book_base
 import offline_side_interaction_audit as fingerprints
 
+RUNTIME_MODULES={'numpy':'numpy','scipy':'scipy','scikit-learn':'sklearn','pandas':'pandas','joblib':'joblib','threadpoolctl':'threadpoolctl'}
 CANDIDATE_FIELDS=tuple(fingerprints.CANDIDATE_FIELDS)
 ARMS=('C_original','C_scheduled_retry')
 HARD_RAW={'max_selected_runs':96,'max_quote_files':4096,'max_quote_rows':4000000,'max_quote_bytes':1073741824}
@@ -75,6 +76,12 @@ def validate_config(config: dict)->dict:
     require(config.get('evaluation_mode')=='offline_exit_retry','exit_retry_mode_required')
     for key in ('source_commit','expected_code_commit'):require(valid_hash(config.get(key),40),'commit_binding_required')
     require(isinstance(config.get('source_repository'),str) and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',config['source_repository']),'source_repository_required')
+    environment=config.get('environment')
+    require(isinstance(environment,dict) and isinstance(environment.get('packages'),dict)
+        and set(environment['packages'])==set(RUNTIME_MODULES)
+        and re.fullmatch(r'[0-9]+[.][0-9]+',str(environment.get('python_major_minor',''))) is not None
+        and all(isinstance(v,str) and re.fullmatch(r'[0-9]+[.][0-9]+[.][0-9]+',v) for v in environment['packages'].values()),
+        'complete_runtime_environment_required')
     parent=book_base.validate_config(config['base_protocol'])
     require(parent['source_commit']==config['source_commit'] and digest(canonical(parent))==config.get('base_protocol_sha256'),'base_protocol_binding_mismatch')
     require(config.get('actual_model_fit_calls')==0 and type(config['actual_model_fit_calls']) is int
@@ -103,6 +110,21 @@ def validate_config(config: dict)->dict:
     hashes=config.get('code_file_sha256')
     require(isinstance(hashes,dict) and REQUIRED_CODE_FILES.issubset(hashes) and all(isinstance(k,str) and not Path(k).is_absolute() and '..' not in Path(k).parts and valid_hash(v) for k,v in hashes.items()),'code_hash_bindings_required')
     return config
+
+def probe_runtime_environment()->dict:
+    """Measure installed and actually loaded library versions without a model."""
+    versions={distribution:importlib.metadata.version(distribution) for distribution in RUNTIME_MODULES}
+    loaded={distribution:str(importlib.import_module(module).__version__) for distribution,module in RUNTIME_MODULES.items()}
+    return {'python_major_minor':f'{sys.version_info.major}.{sys.version_info.minor}',
+        'packages':versions,'loaded_module_versions':loaded}
+
+
+def assert_runtime_environment(config: Mapping,observed: Mapping)->None:
+    expected=config['environment']
+    require(observed['python_major_minor']==expected['python_major_minor']
+        and observed['packages']==expected['packages'] and observed['loaded_module_versions']==expected['packages'],
+        'runtime_version_binding_mismatch')
+
 
 def load_frozen_candidates(path: Path,binding: Mapping,frozen_rows: Sequence[Mapping[str,str]])->pd.DataFrame:
     raw=read_bounded(path,MAX_CANDIDATE_BYTES)
@@ -304,11 +326,12 @@ def evaluate(source_root: Path,candidate_path: Path,config: dict,output: Path)->
     output=Path(output);output.mkdir(parents=True,exist_ok=True,mode=0o700)
     require(not output.is_symlink() and not any(output.iterdir()),'empty_private_output_required');output.chmod(0o700)
     summary={'format':'offline-exit-retry-audit-v1','evaluation_status':'failed','strategy_evaluated':False,'comparison_valid':False,'control_execution_reproduced':False,
-        'input_verified':False,'actual_model_fit_calls':0,'actual_model_predict_calls':0,'replayed_cells':0,'producer_replayed_cells':0,
+        'input_verified':False,'runtime_environment':None,'actual_model_fit_calls':0,'actual_model_predict_calls':0,'replayed_cells':0,'producer_replayed_cells':0,
         'producer_replay_completions':0,'candidate_rows':None,'actual_fills':0,'verified_canary_fills':0,'live_orders_enabled':False,'new_data_collected':False,'reconstruction_counters':{'model':0,'producer_ledger_replays':0,'independent_audit_reconstructions':None,'execution_evidence_original_projections':0}}
     stage='configuration';failure=None
     try:
         validate_config(config);summary['protocol_sha256']=digest(canonical(config));summary['protocol']=config
+        stage='runtime_environment';summary['runtime_environment']=probe_runtime_environment();assert_runtime_environment(config,summary['runtime_environment'])
         stage='immutable_inputs';summary.update(verified_code_source(Path(source_root),config))
         candidates=load_frozen_candidates(Path(candidate_path),config['candidate_binding'],config['frozen_control_candidates']);parent=config['base_protocol']
         summary['candidate_rows']=len(candidates);summary['candidate_clock_coverage']={'first_decision_ts':candidates['decision_ts'].min().isoformat(),'last_decision_ts':candidates['decision_ts'].max().isoformat(),
