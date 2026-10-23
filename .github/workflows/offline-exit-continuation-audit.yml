@@ -1,0 +1,180 @@
+name: offline-exit-continuation-audit
+on:
+  workflow_dispatch:
+    inputs:
+      request_sha256:
+        description: Digest of the registered private comparison configuration
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - analysis/cached_quote_execution.py
+      - analysis/scheduled_exit_retry.py
+      - analysis/offline_exit_retry_audit.py
+      - analysis/offline_exit_continuation_audit.py
+      - tools/prepare_exit_retry_inputs.py
+      - tools/seal_exit_retry_outcomes.py
+      - tests/test_scheduled_exit_retry.py
+      - tests/test_offline_exit_continuation_audit.py
+      - tests/test_offline_exit_retry_audit.py
+      - tests/test_exit_retry_delivery.py
+      - tests/test_exit_continuation_delivery.py
+      - tests/test_cached_quote_continuation.py
+      - .github/workflows/offline-exit-continuation-audit.yml
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'offline-policy-audit' || format('offline-exit-continuation-contracts-{0}', github.ref) }}
+  cancel-in-progress: false
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install fixed offline dependencies
+        run: python -m pip install -r requirements-vault.txt numpy==2.4.6 scipy==1.17.1 scikit-learn==1.9.1 pandas==3.1.0 joblib==1.6.0 threadpoolctl==3.7.0 pytest
+      - name: Synthetic execution and delivery contracts
+        run: python -m pytest -q tests/test_cached_quote_execution.py tests/test_scheduled_exit_retry.py tests/test_offline_exit_retry_audit.py tests/test_offline_exit_continuation_audit.py tests/test_exit_retry_delivery.py tests/test_exit_continuation_delivery.py tests/test_cached_quote_continuation.py
+  audit:
+    needs: contracts
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        id: code
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install sealing and fixed offline dependencies
+        id: dependencies
+        run: python -m pip install -r requirements-vault.txt numpy==2.4.6 scipy==1.17.1 scikit-learn==1.9.1 pandas==3.1.0 joblib==1.6.0 threadpoolctl==3.7.0
+      - name: Restore registered private inputs
+        id: inputs
+        env:
+          AUDIT_CONFIG_B64: ${{ secrets.EXIT_CONTINUATION_CONFIG_B64 }}
+          CANDIDATE_INPUT_B64: ${{ secrets.EXIT_CONTINUATION_CANDIDATES_B64 }}
+          PRIVATE_AUDIT_B64: ${{ secrets.EXIT_CONTINUATION_PRIVATE_AUDIT_B64 }}
+          EXPECTED_SHA256: ${{ inputs.request_sha256 }}
+        run: >-
+          python tools/prepare_exit_retry_inputs.py
+          --private "$RUNNER_TEMP/exit-continuation-audit"
+          --bootstrap "$RUNNER_TEMP/exit-continuation-bootstrap"
+          --evaluation-mode offline_exit_continuation
+      - name: Checkout immutable raw archive
+        id: source
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          ref: ${{ env.AUDIT_SOURCE_COMMIT }}
+          path: source_poly
+          persist-credentials: false
+      - name: Evaluate frozen policy through the complete saved candidate stream
+        id: evaluate
+        env:
+          OMP_NUM_THREADS: 1
+          OPENBLAS_NUM_THREADS: 1
+          MKL_NUM_THREADS: 1
+        run: |
+          python analysis/offline_exit_continuation_audit.py \
+            --source-root source_poly/data/monthly_runs \
+            --candidate-path "$RUNNER_TEMP/exit-continuation-bootstrap/candidates.csv" \
+            --config "$RUNNER_TEMP/exit-continuation-audit/config.json" \
+            --output "$RUNNER_TEMP/exit-continuation-audit/results" \
+            > "$RUNNER_TEMP/exit-continuation-audit/analysis-output.txt" 2>&1
+      - name: Run frozen independent reader
+        id: independent
+        if: always() && steps.evaluate.outcome == 'success'
+        env:
+          OMP_NUM_THREADS: 1
+          OPENBLAS_NUM_THREADS: 1
+          MKL_NUM_THREADS: 1
+        run: |
+          python "$RUNNER_TEMP/exit-continuation-bootstrap/reader.py" \
+            --source-root source_poly/data/monthly_runs \
+            --candidate-path "$RUNNER_TEMP/exit-continuation-bootstrap/candidates.csv" \
+            --config "$RUNNER_TEMP/exit-continuation-audit/config.json" \
+            --results "$RUNNER_TEMP/exit-continuation-audit/results" \
+            --registration "$RUNNER_TEMP/exit-continuation-bootstrap/registration.json" \
+            --expected-reader-sha "$PRIVATE_AUDIT_SHA" \
+            --output "$RUNNER_TEMP/exit-continuation-audit/diagnostics.txt" \
+            >> "$RUNNER_TEMP/exit-continuation-audit/analysis-output.txt" 2>&1
+      - name: Remove input bootstrap before sealing
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          path = Path(os.environ['RUNNER_TEMP']) / 'exit-continuation-bootstrap'
+          if path.exists(): shutil.rmtree(path)
+          PY
+      - name: Seal complete evidence including negative and failed comparisons
+        id: seal
+        if: always() && steps.code.outcome == 'success'
+        env:
+          EVALUATION_MODE: offline_exit_continuation
+          EVALUATION_OUTCOME: ${{ steps.evaluate.outcome }}
+          INDEPENDENT_OUTCOME: ${{ steps.independent.outcome }}
+          INPUT_OUTCOME: ${{ steps.inputs.outcome }}
+          SETUP_OUTCOMES: ${{ toJSON(steps) }}
+          REQUEST_SHA256: ${{ inputs.request_sha256 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: >-
+          python tools/seal_exit_retry_outcomes.py
+          --private "$RUNNER_TEMP/exit-continuation-audit"
+          --output sealed-delivery
+      - name: Retain ciphertext before publication
+        id: retain
+        if: always() && steps.seal.outputs.delivery_complete == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sealed-offline-exit-continuation-audit
+          path: sealed-delivery/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Persist encrypted outcomes
+        id: persist
+        if: always() && steps.seal.outputs.delivery_complete == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RECIPIENT_ID"
+      - name: Require full independently checked evidence after persistence
+        if: always() && steps.code.outcome == 'success'
+        env:
+          DELIVERY_COMPLETE: ${{ steps.seal.outputs.delivery_complete }}
+          FULL_EVIDENCE: ${{ steps.seal.outputs.full_evidence }}
+          COMPARISON_EVALUATED: ${{ steps.seal.outputs.comparison_evaluated }}
+          RETENTION_OUTCOME: ${{ steps.retain.outcome }}
+          PERSISTENCE_OUTCOME: ${{ steps.persist.outcome }}
+        run: |
+          python - <<'PY'
+          import os
+          if (any(os.environ[k] != 'true' for k in ('DELIVERY_COMPLETE', 'FULL_EVIDENCE', 'COMPARISON_EVALUATED'))
+                  or any(os.environ[k] != 'success' for k in ('RETENTION_OUTCOME', 'PERSISTENCE_OUTCOME'))):
+              raise SystemExit('Complete independently checked comparison evidence not retained')
+          PY
+      - name: Remove runner-local plaintext and temporary archive
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'exit-continuation-audit',
+                       Path(os.environ['RUNNER_TEMP']) / 'exit-continuation-bootstrap',
+                       Path('source_poly'), Path('sealed-delivery')):
+              if path.exists(): shutil.rmtree(path)
+          PY

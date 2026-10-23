@@ -153,7 +153,8 @@ class DeliveryContracts(unittest.TestCase):
             environment = dict.fromkeys(('AUDIT_CONFIG_B64', 'CANDIDATE_INPUT_B64',
                 'PRIVATE_AUDIT_B64', 'EXPECTED_SHA256', 'GITHUB_SHA'), 'fixture')
             environment['GITHUB_ENV'] = str(env_file)
-            args = SimpleNamespace(private=Path(folder) / 'private', bootstrap=Path(folder) / 'bootstrap')
+            args = SimpleNamespace(private=Path(folder) / 'private', bootstrap=Path(folder) / 'bootstrap',
+                                   evaluation_mode='offline_exit_retry')
             output = io.StringIO()
             with mock.patch.object(prepare.argparse.ArgumentParser, 'parse_args', return_value=args), \
                     mock.patch.object(prepare, 'materialize', return_value=result), \
