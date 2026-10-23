@@ -1,0 +1,241 @@
+name: offline-quality-capacity-audit
+on:
+  workflow_dispatch:
+    inputs:
+      request_sha256:
+        description: Digest of the registered private comparison configuration
+        type: string
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: offline-policy-audit
+  cancel-in-progress: false
+jobs:
+  audit:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        id: code
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install sealing and fixed offline dependencies
+        id: dependencies
+        run: python -m pip install -r requirements-vault.txt numpy==2.4.6 scipy==1.17.1 scikit-learn==1.9.1 pandas==3.1.0 joblib==1.6.0 threadpoolctl==3.7.0 pytest
+      - name: Verify synthetic cached comparison contracts
+        id: contracts
+        run: python -m pytest -q tests/test_cached_quote_execution.py tests/test_offline_quality_capacity_audit.py tests/test_restore_quality_capacity_inputs.py
+      - name: Materialize registered configuration and isolated bootstrap
+        id: configuration
+        env:
+          AUDIT_CONFIG_B64: ${{ secrets.QUALITY_CAPACITY_CONFIG_B64 }}
+          DATA_CAPABILITY_B64: ${{ secrets.SCOPED_RESEARCH_DATA_CAPABILITY_B64 }}
+          CONTROL_CAPABILITY_B64: ${{ secrets.SCOPED_RESEARCH_CONTROL_CAPABILITY_B64 }}
+          PRIVATE_AUDIT_B64: ${{ secrets.QUALITY_CAPACITY_PRIVATE_AUDIT_B64 }}
+          EXPECTED_SHA256: ${{ inputs.request_sha256 }}
+        run: |
+          python - <<'PY'
+          import base64, hashlib, lzma, os, re, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault as vault
+          import scoped_research_dataset as saved
+          private = Path(os.environ['RUNNER_TEMP']) / 'quality-capacity-audit'
+          bootstrap = Path(os.environ['RUNNER_TEMP']) / 'quality-capacity-bootstrap'
+          private.mkdir(mode=0o700)
+          bootstrap.mkdir(mode=0o700)
+          def decode_xz(name, maximum):
+              value = os.environ[name]
+              assert 0 < len(value) <= 45000
+              packed = base64.b64decode(value, validate=True)
+              assert 0 < len(packed) <= 49152
+              decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=67108864)
+              raw = decoder.decompress(packed, max_length=maximum + 1)
+              assert 0 < len(raw) <= maximum and decoder.eof and not decoder.unused_data
+              return raw
+          try:
+              raw = decode_xz('AUDIT_CONFIG_B64', 262144)
+              assert re.fullmatch(r'[0-9a-f]{64}', os.environ['EXPECTED_SHA256'])
+              assert hashlib.sha256(raw).hexdigest() == os.environ['EXPECTED_SHA256']
+              config = vault.load_json_bytes(raw, 262144)
+              for kind, name in [('dataset', 'DATA_CAPABILITY_B64'), ('control', 'CONTROL_CAPABILITY_B64')]:
+                  value = os.environ[name]
+                  assert 0 < len(value) <= 45000
+                  cap_raw = base64.b64decode(value, validate=True)
+                  cap = vault.load_json_bytes(cap_raw, 16384)
+                  saved.validate_capability(cap, config['private_inputs'][kind]['descriptor_sha256'])
+                  vault.write_new(bootstrap / (kind + '-capability.json'), cap_raw)
+              audit = vault.load_json_bytes(decode_xz('PRIVATE_AUDIT_B64', 524288), 524288)
+              assert set(audit) == {'format', 'script_utf8', 'registration'}
+              assert audit['format'] == 'quality-capacity-private-audit-v1'
+              assert type(audit['script_utf8']) is str
+              script = audit['script_utf8'].encode('utf-8')
+              assert 0 < len(script) <= 262144
+              helper_sha = hashlib.sha256(script).hexdigest()
+              assert helper_sha == config['independent_audit']['helper_sha256']
+              registration = vault.canonical(audit['registration'])
+              assert hashlib.sha256(registration).hexdigest() == config['independent_audit']['registration_canonical_sha256']
+              vault.write_new(bootstrap / 'reader.py', script)
+              vault.write_new(bootstrap / 'registration.json', registration)
+              vault.write_new(private / 'config.json', raw)
+              with open(os.environ['GITHUB_ENV'], 'a') as handle:
+                  handle.write('PRIVATE_AUDIT_SHA=' + helper_sha + '\n')
+          except Exception:
+              raise SystemExit('Private comparison configuration missing or invalid') from None
+          PY
+      - name: Restore two immutable scoped inputs
+        id: inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/restore_quality_capacity_inputs.py \
+            --config "$RUNNER_TEMP/quality-capacity-audit/config.json" \
+            --dataset-capability "$RUNNER_TEMP/quality-capacity-bootstrap/dataset-capability.json" \
+            --control-capability "$RUNNER_TEMP/quality-capacity-bootstrap/control-capability.json" \
+            --bootstrap "$RUNNER_TEMP/quality-capacity-bootstrap" \
+            --receipt "$RUNNER_TEMP/quality-capacity-audit/input-receipt.json" \
+            > "$RUNNER_TEMP/quality-capacity-audit/analysis-output.txt" 2>&1
+      - name: Remove capability files before models or independent audit
+        if: always()
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          bootstrap = Path(os.environ['RUNNER_TEMP']) / 'quality-capacity-bootstrap'
+          for name in ('dataset-capability.json', 'control-capability.json'):
+              path = bootstrap / name
+              if path.exists(): path.unlink()
+          PY
+      - name: Evaluate frozen quality and capacity comparisons
+        id: evaluate
+        env:
+          OMP_NUM_THREADS: 1
+          OPENBLAS_NUM_THREADS: 1
+          MKL_NUM_THREADS: 1
+        run: |
+          python analysis/offline_quality_capacity_audit.py \
+            --config "$RUNNER_TEMP/quality-capacity-audit/config.json" \
+            --dataset-root "$RUNNER_TEMP/quality-capacity-bootstrap/dataset" \
+            --control-root "$RUNNER_TEMP/quality-capacity-bootstrap/control" \
+            --output "$RUNNER_TEMP/quality-capacity-audit/results" \
+            >> "$RUNNER_TEMP/quality-capacity-audit/analysis-output.txt" 2>&1
+      - name: Run pre-frozen independent artifact reader in the same cloud job
+        id: independent
+        if: always() && steps.evaluate.outcome == 'success'
+        run: |
+          python "$RUNNER_TEMP/quality-capacity-bootstrap/reader.py" \
+            --config "$RUNNER_TEMP/quality-capacity-audit/config.json" \
+            --dataset-root "$RUNNER_TEMP/quality-capacity-bootstrap/dataset" \
+            --control-root "$RUNNER_TEMP/quality-capacity-bootstrap/control" \
+            --results "$RUNNER_TEMP/quality-capacity-audit/results" \
+            --registration "$RUNNER_TEMP/quality-capacity-bootstrap/registration.json" \
+            --expected-reader-sha "$PRIVATE_AUDIT_SHA" \
+            --output "$RUNNER_TEMP/quality-capacity-audit/diagnostics.txt" \
+            >> "$RUNNER_TEMP/quality-capacity-audit/analysis-output.txt" 2>&1
+      - name: Remove decoded input and private audit bootstrap before sealing
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          path = Path(os.environ['RUNNER_TEMP']) / 'quality-capacity-bootstrap'
+          if path.exists(): shutil.rmtree(path)
+          PY
+      - name: Seal complete outcomes including failed comparisons
+        id: seal
+        if: always() && steps.code.outcome == 'success'
+        env:
+          EVALUATION_OUTCOME: ${{ steps.evaluate.outcome }}
+          INDEPENDENT_OUTCOME: ${{ steps.independent.outcome }}
+          INPUT_OUTCOME: ${{ steps.inputs.outcome }}
+          SETUP_OUTCOMES: ${{ toJSON(steps) }}
+          REQUEST_SHA256: ${{ inputs.request_sha256 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, shutil, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault as vault
+          import run_quality_first_research as bundle
+          private = Path(os.environ['RUNNER_TEMP']) / 'quality-capacity-audit'
+          private.mkdir(mode=0o700, parents=True, exist_ok=True)
+          recipient = vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
+          recipient_id = os.environ['QUALITY_FIRST_RECIPIENT_ID']
+          vault.validate_recipient(recipient, recipient_id)
+          if (private / 'config.json').is_file():
+              shutil.copyfile(private / 'config.json', private / 'frozen_input.json')
+              (private / 'frozen_input.json').chmod(0o600)
+          def read(name):
+              try:
+                  value = json.loads((private / name).read_text())
+                  return value if isinstance(value, dict) else {}
+              except (OSError, ValueError, TypeError): return {}
+          summary, independent, inputs = read('results/summary.json'), read('diagnostics.txt'), read('input-receipt.json')
+          def counter(field):
+              value = summary.get(field)
+              if type(value) is int and value >= 0: return value
+              return 0 if os.environ['EVALUATION_OUTCOME'] in ('skipped', '') else None
+          counters = {name: counter(name) for name in ('actual_model_fit_calls', 'actual_model_predict_calls',
+              'price_model_fit_calls', 'capacity_model_fit_calls', 'replayed_cells', 'control_model_fit_calls', 'control_model_predict_calls')}
+          independent_passed = os.environ['INDEPENDENT_OUTCOME'] == 'success' and independent.get('passed') is True
+          input_verified = os.environ['INPUT_OUTCOME'] == 'success' and inputs.get('status') == 'complete'
+          evaluated = (os.environ['EVALUATION_OUTCOME'] == 'success' and independent_passed and input_verified
+              and summary.get('strategy_evaluated') is True and summary.get('comparison_valid') is True
+              and summary.get('control_execution_reproduced') is True and summary.get('evaluation_status') == 'evaluated'
+              and type(summary.get('model_scored_rows')) is int and summary['model_scored_rows'] > 0
+              and type(counters['actual_model_fit_calls']) is int and counters['actual_model_fit_calls'] > 0
+              and type(counters['actual_model_predict_calls']) is int and counters['actual_model_predict_calls'] > 0
+              and counters['control_model_fit_calls'] == 0 and counters['control_model_predict_calls'] == 0)
+          diagnostic = private / 'diagnostics.txt'
+          metadata = {'format': 'offline-quality-capacity-sealed-v1',
+              'workflow': {k: os.environ.get(k) for k in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA',
+                  'EVALUATION_OUTCOME', 'INDEPENDENT_OUTCOME', 'INPUT_OUTCOME', 'REQUEST_SHA256', 'SETUP_OUTCOMES')},
+              'strategy_evaluated': evaluated, 'comparison_valid': evaluated, 'input_verified': input_verified,
+              'independent_audit_passed': independent_passed,
+              'independent_audit_helper_sha256': os.environ.get('PRIVATE_AUDIT_SHA'),
+              'independent_diagnostic_sha256': hashlib.sha256(diagnostic.read_bytes()).hexdigest() if diagnostic.is_file() else None,
+              'input_restoration_receipt': inputs or None,
+              'model_refit': counters['actual_model_fit_calls'] > 0 if counters['actual_model_fit_calls'] is not None else None,
+              'new_data_collected': False, 'actual_fills': 0, 'verified_canary_fills': 0,
+              'live_orders_enabled': False, **counters}
+          vault.write_new(private / 'run.json', vault.canonical(metadata))
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          count = bundle.deliver_bundle(bundle.make_bundle(private), delivery, recipient, recipient_id)
+          vault.write_new(delivery / 'status.json', vault.canonical({'version': 1, 'status': 'complete',
+              'stage': 'sealed_delivery', 'strategy_evaluated': evaluated, 'live_orders_enabled': False,
+              'plaintext_published': False, 'sealed_parts': count}) + b'\n', 0o644)
+          PY
+      - name: Retain ciphertext before publisher
+        if: always() && steps.seal.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sealed-offline-quality-capacity-audit
+          path: sealed-delivery/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Persist encrypted outcomes
+        if: always() && steps.seal.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RECIPIENT_ID"
+      - name: Remove runner-local plaintext
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for path in (Path(os.environ['RUNNER_TEMP']) / 'quality-capacity-audit', Path(os.environ['RUNNER_TEMP']) / 'quality-capacity-bootstrap', Path('sealed-delivery')):
+              if path.exists(): shutil.rmtree(path)
+          PY
