@@ -29,6 +29,17 @@ ROOT = pathlib.Path('/home/ubuntu/quantml-study')
 REPORT_LIMIT = 2 * 1024 * 1024
 MEMORY_LIMIT = 512 * 1024 * 1024
 MAX_METADATA = 64
+def bounded_option(name, default, minimum, maximum):
+    value = payload.get(name, default)
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise ValueError('invalid_' + name)
+    return value
+MAX_METADATA_LIMIT = bounded_option('max_metadata', MAX_METADATA, 1, MAX_METADATA)
+MAX_FILES_LIMIT = bounded_option('max_files', 32, 1, 32)
+MAX_UNITS_LIMIT = bounded_option('max_units', 200, 1, 200)
+PDF_OCR_ENABLED = payload.get('pdf_ocr', True)
+if type(PDF_OCR_ENABLED) is not bool:
+    raise ValueError('invalid_pdf_ocr')
 WORKER_MAX_SECONDS = 480
 WORKER_PROCESS_TIMEOUT_SECONDS = WORKER_MAX_SECONDS + 15
 SOURCE_RECEIPT_ROWS = 128
@@ -529,10 +540,16 @@ def process_locked():
         safe_directory(dependencies)
         regular(install_marker, 16384)
     report['private_dependency_distributions'] = sorted(p.name for p in dependencies.glob('*.dist-info'))[:10]
-    tessdata, tessdata_provenance = prepare_tessdata(run_dir)
-    report['ocr_language_data'] = tessdata_provenance
-    report['ocr_engine'] = 'PyMuPDF_embedded_Tesseract; no_external_executable'
+    if PDF_OCR_ENABLED:
+        tessdata, tessdata_provenance = prepare_tessdata(run_dir)
+        report['ocr_language_data'] = tessdata_provenance
+        report['ocr_engine'] = 'PyMuPDF_embedded_Tesseract; no_external_executable'
+    else:
+        tessdata, tessdata_provenance = None, []
+        report['ocr_language_data'] = []
+        report['ocr_engine'] = 'disabled_native_text_only'
     capability_id = hashlib.sha256(raw_json({'distributions': report['private_dependency_distributions'],
+                                            'pdf_ocr': PDF_OCR_ENABLED,
                                             'language_data': [{key: item[key] for key in ('language', 'source_commit', 'sha256', 'bytes')}
                                                               for item in tessdata_provenance]})).hexdigest()
     report['extraction_capability_id'] = capability_id
@@ -548,7 +565,7 @@ def process_locked():
     names = sorted(p.name for p in (ROOT / 'metadata').iterdir() if re.fullmatch('[0-9a-f]{64}', p.name))
     order = [name for name in names if name > last] + [name for name in names if name <= last]
     selected, metadata_read, deferred = [], 0, []
-    for sid in order[:MAX_METADATA]:
+    for sid in order[:MAX_METADATA_LIMIT]:
         metadata_read += 1
         try:
             meta = json.loads(read_small(ROOT / 'metadata' / sid, 8192))
@@ -582,8 +599,8 @@ def process_locked():
             deferred.append({'source_id': sid, 'state': 'metadata_or_object_rejected', 'error_class': type(exc).__name__, 'error': str(exc)[:160]})
     manifest = run_dir / 'manifest.jsonl'
     atomic(manifest, b''.join(raw_json(entry) + b'\n' for entry in selected))
-    if order[:MAX_METADATA]:
-        atomic(cursor_path, raw_json({'last_source_id': order[:MAX_METADATA][-1], 'updated_run_id': payload['run_id']}))
+    if order[:MAX_METADATA_LIMIT]:
+        atomic(cursor_path, raw_json({'last_source_id': order[:MAX_METADATA_LIMIT][-1], 'updated_run_id': payload['run_id']}))
     report.update(metadata_records_read=metadata_read, metadata_names_seen=len(names),
                   selected_manifest=selected, deferred_sources=deferred,
                   manifest_scope='rotating_uploaded_objects_tranche_not_full_corpus')
@@ -596,16 +613,19 @@ def process_locked():
                  'estimated_cpu_memory_runtime': {'cpu_parallelism': 1, 'max_address_space_mib': 512, 'worker_wall_seconds': WORKER_MAX_SECONDS},
                  'cache_identity': worker_hash, 'concurrency': 1, 'timeout_seconds': WORKER_MAX_SECONDS,
                  'cost_or_quota_bound': 'existing_host_only; no provisioning; one worker for at most480seconds',
+                 'batch_profile': {'max_metadata': MAX_METADATA_LIMIT, 'max_files': MAX_FILES_LIMIT,
+                                   'max_units': MAX_UNITS_LIMIT, 'pdf_ocr': PDF_OCR_ENABLED},
                  'private_output_destination': str(output)}
     preflight_path = run_dir / 'preflight.json'
     atomic(preflight_path, raw_json(preflight))
     command = [sys.executable, str(worker), '--manifest', str(manifest), '--input-root', str(ROOT / 'input'),
                '--output-root', str(output), '--preflight', str(preflight_path), '--backend', 'aws',
-               '--max-files', '32', '--max-units', '200', '--max-seconds', str(WORKER_MAX_SECONDS),
+               '--max-files', str(MAX_FILES_LIMIT), '--max-units', str(MAX_UNITS_LIMIT), '--max-seconds', str(WORKER_MAX_SECONDS),
                '--max-output-bytes', str(64 * 1024**2), '--max-memory-mib', '512',
                '--max-member-bytes', str(64 * 1024**2), '--max-page-pixels', '4000000',
-               '--pdf-ocr', '--tessdata', str(tessdata), '--ocr-languages', 'eng+chi_sim',
                '--capability-id', capability_id]
+    if PDF_OCR_ENABLED:
+        command.extend(('--pdf-ocr', '--tessdata', str(tessdata), '--ocr-languages', 'eng+chi_sim'))
     with (run_dir / 'worker-private.log').open('wb') as log:
         try:
             report['worker_executed'] = True
@@ -669,9 +689,25 @@ def source_payload(environment, worker_source):
     if not isinstance(worker_source, bytes) or not 0 < len(worker_source) <= 200000:
         raise ValueError('WORKER_SOURCE_SIZE')
     compile(worker_source, 'corpus_worker.py', 'exec')
+    raw_ocr = environment.get('CORPUS_PDF_OCR', 'false').strip().lower()
+    if raw_ocr not in ('true', 'false'):
+        raise ValueError('INVALID_PDF_OCR')
+    def option(name, default, minimum, maximum):
+        raw = environment.get(name, str(default))
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError('INVALID_' + name.upper())
+        if not minimum <= value <= maximum:
+            raise ValueError('INVALID_' + name.upper())
+        return value
     return {'run_id': run + '-' + attempt, 'source_commit': commit, 'mode': mode,
             'worker_base64': base64.b64encode(worker_source).decode(),
-            'delivery_ack': delivery_ack_from_environment(environment)}
+            'delivery_ack': delivery_ack_from_environment(environment),
+            'pdf_ocr': raw_ocr == 'true',
+            'max_metadata': option('CORPUS_MAX_METADATA', 16, 1, 64),
+            'max_files': option('CORPUS_MAX_FILES', 8, 1, 32),
+            'max_units': option('CORPUS_MAX_UNITS', 80, 1, 200)}
 
 
 def extract():

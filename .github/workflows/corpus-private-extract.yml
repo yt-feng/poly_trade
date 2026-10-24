@@ -10,6 +10,44 @@ on:
         options:
           - extract
           - readback
+      pdf_ocr:
+        description: Enable OCR for this bounded cloud batch
+        type: choice
+        required: true
+        default: 'false'
+        options:
+          - 'true'
+          - 'false'
+      max_metadata:
+        description: Number of source metadata entries to schedule
+        type: choice
+        required: true
+        default: '16'
+        options:
+          - '8'
+          - '16'
+          - '32'
+          - '64'
+      max_files:
+        description: Maximum files for one worker batch
+        type: choice
+        required: true
+        default: '8'
+        options:
+          - '4'
+          - '8'
+          - '16'
+          - '32'
+      max_units:
+        description: Maximum units for one worker batch
+        type: choice
+        required: true
+        default: '80'
+        options:
+          - '40'
+          - '80'
+          - '120'
+          - '200'
 permissions:
   contents: read
 concurrency:
@@ -37,6 +75,10 @@ jobs:
       - name: Bounded private cloud extraction and sealed evidence
         env:
           CORPUS_EXTRACT_MODE: ${{ inputs.mode }}
+          CORPUS_PDF_OCR: ${{ inputs.pdf_ocr }}
+          CORPUS_MAX_METADATA: ${{ inputs.max_metadata }}
+          CORPUS_MAX_FILES: ${{ inputs.max_files }}
+          CORPUS_MAX_UNITS: ${{ inputs.max_units }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
           CORPUS_SSH_HOST: ${{ secrets.CORPUS_SSH_HOST }}

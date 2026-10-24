@@ -34,6 +34,10 @@ class CorpusExtractTests(unittest.TestCase):
         source = b'raise RuntimeError("must never execute here")\n'
         payload = extract.source_payload({'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'a'*40}, source)
         self.assertEqual(payload['run_id'], '123-2')
+        self.assertFalse(payload['pdf_ocr'])
+        self.assertEqual(payload['max_metadata'], 16)
+        self.assertEqual(payload['max_files'], 8)
+        self.assertEqual(payload['max_units'], 80)
         self.assertEqual(base64.b64decode(payload['worker_base64']), source)
         for invalid in ('../../elsewhere', '', '-1'):
             with self.subTest(run=invalid), self.assertRaises(ValueError):
@@ -48,6 +52,7 @@ class CorpusExtractTests(unittest.TestCase):
         self.assertEqual(second['mode'], 'readback')
         self.assertEqual(first['worker_base64'], second['worker_base64'])
         self.assertEqual(hashlib.sha256(base64.b64decode(second['worker_base64'])).digest(), hashlib.sha256(source).digest())
+        self.assertEqual(first['pdf_ocr'], second['pdf_ocr'])
         with self.assertRaisesRegex(ValueError, 'INVALID_CONTROLLER_MODE'):
             extract.source_payload(dict(env, CORPUS_EXTRACT_MODE='other'), source)
 
