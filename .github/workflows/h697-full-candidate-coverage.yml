@@ -1,0 +1,162 @@
+name: h697-full-candidate-coverage
+
+on:
+  workflow_dispatch:
+    inputs:
+      config_sha256:
+        description: SHA-256 of the registered H695 configuration bytes
+        type: string
+        required: true
+      score_descriptor_sha256:
+        description: SHA-256 of the registered H696 score-bundle descriptor
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - analysis/offline_full_candidate_coverage.py
+      - tools/prepare_h697_candidate_coverage_inputs.py
+      - tools/seal_h697_candidate_coverage.py
+      - tests/test_offline_full_candidate_coverage.py
+      - tests/test_seal_h697_candidate_coverage.py
+      - .github/workflows/h697-full-candidate-coverage.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: h697-full-candidate-coverage-${{ github.event_name == 'workflow_dispatch' && github.ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install fixed vault dependencies
+        run: python -m pip install -r requirements-vault.txt pytest pandas==3.1.0 numpy==2.4.6
+      - name: Run aggregate-only contracts
+        run: >-
+          python -m pytest -q
+          tests/test_offline_full_candidate_coverage.py
+          tests/test_seal_h697_candidate_coverage.py
+          tests/test_scoped_research_dataset.py
+          tests/test_restore_quality_capacity_inputs.py
+      - name: Compile aggregate-only code
+        run: >-
+          python -m py_compile
+          analysis/offline_full_candidate_coverage.py
+          tools/prepare_h697_candidate_coverage_inputs.py
+          tools/seal_h697_candidate_coverage.py
+
+  diagnostic:
+    needs: contracts
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install fixed vault dependencies
+        run: python -m pip install -r requirements-vault.txt pandas==3.1.0 numpy==2.4.6
+      - name: Restore old saved inputs and H696 score bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NET_MARGIN_CONFIG_B64: ${{ secrets.NET_MARGIN_CONFIG_B64 }}
+          SCOPED_RESEARCH_DATA_CAPABILITY_B64: ${{ secrets.SCOPED_RESEARCH_DATA_CAPABILITY_B64 }}
+          SCOPED_RESEARCH_CONTROL_CAPABILITY_B64: ${{ secrets.SCOPED_RESEARCH_CONTROL_CAPABILITY_B64 }}
+          H696_SCORE_BUNDLE_CAPABILITY_B64: ${{ secrets.H696_SCORE_BUNDLE_CAPABILITY_B64 }}
+          CONFIG_SHA256: ${{ inputs.config_sha256 }}
+          SCORE_DESCRIPTOR_SHA256: ${{ inputs.score_descriptor_sha256 }}
+        run: |
+          python - <<'PY'
+          import os, re
+          for name in ('CONFIG_SHA256', 'SCORE_DESCRIPTOR_SHA256'):
+              if not re.fullmatch(r'[0-9a-f]{64}', os.environ[name]):
+                  raise SystemExit(name + '_format')
+          PY
+          git fetch origin refs/heads/sealed-research-journal:refs/remotes/origin/sealed-research-journal --depth=1
+          ROOT="$RUNNER_TEMP/h697-inputs"
+          mkdir -m 700 "$ROOT"
+          git show "origin/sealed-research-journal:research_vault/h696-score-bundle/${SCORE_DESCRIPTOR_SHA256}/envelope.json" > "$ROOT/score-envelope.json"
+          git show "origin/sealed-research-journal:research_vault/h696-score-bundle/${SCORE_DESCRIPTOR_SHA256}/descriptor.json" > "$ROOT/score-descriptor.json"
+          python tools/prepare_h697_candidate_coverage_inputs.py \
+            --bootstrap "$ROOT/bootstrap" \
+            --score-envelope "$ROOT/score-envelope.json" \
+            --score-descriptor "$ROOT/score-descriptor.json" \
+            --config-sha256 "$CONFIG_SHA256" \
+            --score-descriptor-sha256 "$SCORE_DESCRIPTOR_SHA256"
+      - name: Expand full saved-score execution coverage
+        id: evaluate
+        run: |
+          ROOT="$RUNNER_TEMP/h697-inputs"
+          mkdir -m 700 "$RUNNER_TEMP/h697-report"
+          python analysis/offline_full_candidate_coverage.py \
+            --features "$ROOT/bootstrap/dataset/features.csv" \
+            --scores "$ROOT/score/scores.csv" \
+            --config "$ROOT/execution-config.json" \
+            --output "$RUNNER_TEMP/h697-report/coverage.json"
+      - name: Seal aggregate coverage report
+        id: seal
+        if: always() && steps.evaluate.outcome == 'success'
+        env:
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          python tools/seal_h697_candidate_coverage.py \
+            --report "$RUNNER_TEMP/h697-report/coverage.json" \
+            --descriptor "$RUNNER_TEMP/h697-inputs/score-descriptor.json" \
+            --output sealed-delivery
+      - name: Retain encrypted report before publication
+        id: retain
+        if: always() && steps.seal.outputs.delivery_complete == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sealed-h697-full-candidate-coverage
+          path: sealed-delivery/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Persist encrypted report
+        id: persist
+        if: always() && steps.seal.outputs.delivery_complete == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: >-
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py
+          --source sealed-delivery
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$GITHUB_RUN_ID"
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
+          --recipient-id "$RECIPIENT_ID"
+      - name: Require encrypted evidence after persistence
+        if: always() && steps.seal.outputs.delivery_complete == 'true'
+        env:
+          RETAIN_OUTCOME: ${{ steps.retain.outcome }}
+          PERSIST_OUTCOME: ${{ steps.persist.outcome }}
+          FULL_EVIDENCE: ${{ steps.seal.outputs.full_evidence }}
+        run: |
+          test "$RETAIN_OUTCOME" = success
+          test "$PERSIST_OUTCOME" = success
+          test "$FULL_EVIDENCE" = true
+      - name: Remove runner plaintext and temporary archive
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for name in ('h697-inputs', 'h697-report'):
+              path = Path(os.environ['RUNNER_TEMP']) / name
+              if path.exists(): shutil.rmtree(path)
+          path = Path('sealed-delivery')
+          if path.exists(): shutil.rmtree(path)
+          PY
