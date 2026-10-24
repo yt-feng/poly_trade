@@ -288,7 +288,7 @@ class ReadbackTests(unittest.TestCase):
         (self.root / 'bin' / ('corpus_worker-' + self.worker_hash + '.py')).write_bytes(self.worker_raw)
         (self.output / 'coverage.json').write_text('{"source_count_including_discovered_children":2}')
         names = {'raw_json', 'safe_directory', 'regular', 'read_small', 'worker_lock_busy',
-                 'source_receipts', 'attach_output_snapshot', 'readback_existing_output', 'process', 'process_locked'}
+                 'source_receipts', 'source_availability_snapshot', 'attach_output_snapshot', 'readback_existing_output', 'process', 'process_locked'}
         nodes = [node for node in ast.parse(extract.REMOTE_EXTRACT).body
                  if isinstance(node, ast.FunctionDef) and node.name in names]
         self.ns = {'json': json, 'hashlib': hashlib, 'os': os, 'stat': stat, 're': re, 'fcntl': fcntl,
@@ -354,6 +354,34 @@ class ReadbackTests(unittest.TestCase):
             self.ns['process']()
         self.assertFalse(missing.exists())
         self.ns['subprocess'].run.assert_not_called()
+
+    def test_readback_checks_cursor_and_source_stat_without_reading_source_bytes(self):
+        self.write_sources(1)
+        for directory in ('metadata', 'objects'):
+            (self.root / directory).mkdir(mode=0o700)
+        sid = '0'*64
+        (self.root / 'objects' / sid).write_bytes(b'synthetic original bytes never opened')
+        meta = {'source_id': sid, 'relative_path': None, 'state': 'complete',
+                'sha256': 'a'*64, 'size_bytes': (self.root / 'objects' / sid).stat().st_size}
+        (self.root / 'metadata' / sid).write_text(json.dumps(meta))
+        cursor = self.root / 'metadata-extract-cursor.json'
+        cursor.write_text(json.dumps({'last_source_id': sid, 'updated_run_id': '100-1'}))
+        before = cursor.read_bytes()
+        bounded_read = self.ns['read_small']
+        def small_only(path, cap):
+            self.assertNotEqual(Path(path).parent.name, 'objects', 'original corpus bytes must not be opened')
+            return bounded_read(path, cap)
+        self.ns['read_small'] = small_only
+        self.ns['process']()
+        snapshot = self.ns['report']['source_availability']
+        self.assertEqual(snapshot['metadata_cursor']['last_source_id'], sid)
+        self.assertEqual(snapshot['sources'][0]['status'], 'available_metadata_and_size_match')
+        self.assertFalse(snapshot['metadata_cursor_advanced'])
+        self.assertFalse(snapshot['source_content_read'])
+        self.assertEqual(cursor.read_bytes(), before)
+        (self.root / 'objects' / sid).unlink()
+        self.ns['source_availability_snapshot'](self.root, self.ns['report'])
+        self.assertEqual(self.ns['report']['source_availability']['sources'][0]['status'], 'unavailable_or_rejected')
 
 
 if __name__ == '__main__':

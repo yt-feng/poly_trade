@@ -431,10 +431,64 @@ def source_receipts(output, report):
     summary.update(receipts_returned=len(receipts), serialized_receipt_bytes=len(raw_json(receipts)))
     report.update(source_receipts=receipts, source_receipts_bounds=summary)
 
+def source_availability_snapshot(root, report):
+    """Inspect small upload metadata and object stat only; never hash corpus bytes."""
+    cursor = root / 'metadata-extract-cursor.json'
+    snapshot = {'metadata_cursor_advanced': False, 'source_content_read': False,
+                'source_hashes_recomputed': False, 'max_sources': SOURCE_RECEIPT_ROWS,
+                'source_scope': 'bounded_source_receipts_only', 'sources': []}
+    if cursor.exists() or cursor.is_symlink():
+        raw = read_small(cursor, 4096)
+        value = json.loads(raw)
+        last = value.get('last_source_id', '')
+        if last and not re.fullmatch('[0-9a-f]{64}', last):
+            raise ValueError('readback_metadata_cursor_identity')
+        snapshot['metadata_cursor'] = {'last_source_id': last, 'updated_run_id': value.get('updated_run_id'),
+                                       'snapshot_sha256': hashlib.sha256(raw).hexdigest()}
+    else:
+        snapshot['metadata_cursor'] = None
+    metadata, objects = root / 'metadata', root / 'objects'
+    try:
+        safe_directory(metadata)
+        safe_directory(objects)
+    except (FileNotFoundError, ValueError) as exc:
+        snapshot.update(status='source_directories_unavailable', error_class=type(exc).__name__)
+        report['source_availability'] = snapshot
+        return
+    for source in report.get('source_receipts', [])[:SOURCE_RECEIPT_ROWS]:
+        sid = source.get('source_id')
+        if not isinstance(sid, str) or not re.fullmatch('[0-9a-f]{64}', sid):
+            raise ValueError('readback_source_identity')
+        item = {'source_id': sid, 'content_hash_recomputed': False}
+        if source.get('parent_id'):
+            item['status'] = 'archive_child_not_top_level_uploaded_object'
+        else:
+            try:
+                meta = json.loads(read_small(metadata / sid, 8192))
+                info = regular(objects / sid)
+                size = meta.get('size_bytes')
+                valid = (meta.get('state') == 'complete' and meta.get('source_id') == sid
+                         and type(size) is int and size == info.st_size
+                         and isinstance(meta.get('sha256'), str) and re.fullmatch('[0-9a-f]{64}', meta['sha256'])
+                         and source.get('expected_bytes') in (None, size)
+                         and meta.get('relative_path') == source.get('relative_path')
+                         and meta.get('sha256') == source.get('sha256'))
+                item.update(status='available_metadata_and_size_match' if valid else 'metadata_or_size_mismatch',
+                            upload_state=meta.get('state'), object_bytes=info.st_size,
+                            object_mtime_ns=info.st_mtime_ns, metadata_sha256=meta.get('sha256'))
+            except (FileNotFoundError, ValueError, OSError) as exc:
+                item.update(status='unavailable_or_rejected', error_class=type(exc).__name__)
+        snapshot['sources'].append(item)
+    snapshot.update(status='observed', sources_checked=len(snapshot['sources']),
+                    source_receipts_truncated=report.get('source_receipts_bounds', {}).get('truncated', False))
+    report['source_availability'] = snapshot
+
 def attach_output_snapshot(output, worker_hash, source_run, report):
     if (output / 'coverage.json').exists():
         report['coverage'] = json.loads(read_small(output / 'coverage.json', 65536))
     source_receipts(output, report)
+    if payload['mode'] == 'readback':
+        source_availability_snapshot(ROOT, report)
     build_unit_delivery(output, worker_hash, source_run, report)
 
 def readback_existing_output(worker_raw, worker_hash):
