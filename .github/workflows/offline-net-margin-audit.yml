@@ -14,6 +14,7 @@ on:
       - analysis/offline_exit_continuation_audit.py
       - analysis/offline_price_calibration_audit.py
       - analysis/offline_net_margin_audit.py
+      - analysis/offline_score_coverage_diagnostic.py
       - tools/prepare_exit_retry_inputs.py
       - tools/prepare_net_margin_inputs.py
       - tools/restore_quality_capacity_inputs.py
@@ -21,6 +22,7 @@ on:
       - tests/test_scheduled_exit_retry.py
       - tests/test_offline_exit_continuation_audit.py
       - tests/test_offline_net_margin_audit.py
+      - tests/test_offline_score_coverage_diagnostic.py
       - tests/test_cached_quote_decision_veto.py
       - tests/test_net_margin_delivery.py
       - tests/test_price_calibration_delivery.py
@@ -47,7 +49,7 @@ jobs:
       - name: Install fixed offline dependencies
         run: python -m pip install -r requirements-vault.txt numpy==2.4.6 scipy==1.17.1 scikit-learn==1.9.1 pandas==3.1.0 joblib==1.6.0 threadpoolctl==3.7.0 pytest
       - name: Synthetic execution and delivery contracts
-        run: python -m pytest -q tests/test_cached_quote_execution.py tests/test_cached_quote_decision_veto.py tests/test_net_margin_delivery.py tests/test_offline_net_margin_audit.py tests/test_restore_quality_capacity_inputs.py tests/test_scheduled_exit_retry.py tests/test_offline_exit_retry_audit.py tests/test_offline_exit_continuation_audit.py tests/test_offline_price_calibration_audit.py tests/test_price_calibration_delivery.py tests/test_exit_retry_delivery.py tests/test_exit_continuation_delivery.py tests/test_cached_quote_continuation.py
+        run: python -m pytest -q tests/test_cached_quote_execution.py tests/test_cached_quote_decision_veto.py tests/test_net_margin_delivery.py tests/test_offline_net_margin_audit.py tests/test_offline_score_coverage_diagnostic.py tests/test_restore_quality_capacity_inputs.py tests/test_scheduled_exit_retry.py tests/test_offline_exit_retry_audit.py tests/test_offline_exit_continuation_audit.py tests/test_offline_price_calibration_audit.py tests/test_price_calibration_delivery.py tests/test_exit_retry_delivery.py tests/test_exit_continuation_delivery.py tests/test_cached_quote_continuation.py
   audit:
     needs: contracts
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
@@ -125,6 +127,15 @@ jobs:
             --config "$RUNNER_TEMP/net-margin-audit/config.json" \
             --output "$RUNNER_TEMP/net-margin-audit/results" \
             >> "$RUNNER_TEMP/net-margin-audit/analysis-output.txt" 2>&1
+      - name: Build aggregate saved-score coverage diagnostic
+        id: score_coverage
+        if: always() && steps.evaluate.outcome == 'success'
+        run: >-
+          python analysis/offline_score_coverage_diagnostic.py
+          --scores "$RUNNER_TEMP/net-margin-audit/results/scores.csv"
+          --candidates "$RUNNER_TEMP/net-margin-audit/results/candidate-gate-predictions.jsonl"
+          --output "$RUNNER_TEMP/net-margin-audit/results/score-coverage.json"
+          --edge-floor 0.02
       - name: Run frozen independent reader
         id: independent
         if: always() && steps.evaluate.outcome == 'success'
