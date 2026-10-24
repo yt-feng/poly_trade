@@ -18,7 +18,6 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 
 from causal_model_small_cash_replay import (
-    BLOCK_SIZES,
     build_m1,
     add_features,
     make_events,
@@ -32,6 +31,7 @@ PRICE_CAPS = (0.50, 0.55, 0.60)
 SPREAD_CAPS = (0.04, 0.06)
 SLIPPAGES = (0.005, 0.01)
 SELECTION_BLOCK_SIZE = 5
+HOLDOUT_BLOCK_SIZES = (12, 12, 12, 12, 11)
 
 
 def expanding_probabilities(
@@ -76,11 +76,11 @@ def selection_blocks(events: pd.DataFrame, selection_runs: list[str], slippage: 
 
 
 def holdout_blocks(events: pd.DataFrame, holdout_runs: list[str], slippage: float) -> list[dict[str, object]]:
-    if len(holdout_runs) != sum(BLOCK_SIZES):
+    if len(holdout_runs) != sum(HOLDOUT_BLOCK_SIZES):
         raise ValueError("holdout_block_scope_must_match_frozen_59_runs")
     rows: list[dict[str, object]] = []
     cursor = 0
-    for block, size in enumerate(BLOCK_SIZES, 1):
+    for block, size in enumerate(HOLDOUT_BLOCK_SIZES, 1):
         names = holdout_runs[cursor : cursor + size]
         cursor += size
         metrics, _ = replay(events, names, slippage)
@@ -179,7 +179,7 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, o
         "slippages": list(SLIPPAGES),
         "selection_block_size": SELECTION_BLOCK_SIZE,
         "selection_block_count": 4,
-        "holdout_block_sizes": list(BLOCK_SIZES),
+        "holdout_block_sizes": list(HOLDOUT_BLOCK_SIZES),
         "promotion_gate": promotion_gate,
         "gate_reason": (
             "selected cell must have >=10 holdout trades at both slippages and every holdout block >=$5 with nonnegative PnL"
