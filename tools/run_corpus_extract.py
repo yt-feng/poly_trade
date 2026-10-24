@@ -18,8 +18,8 @@ import run_quality_first_research as delivery
 import run_corpus_capacity_probe as probe
 
 REPORT_LIMIT = 2 * 1024 * 1024
-REMOTE_TIMEOUT_SECONDS = 360
-WORKER_MAX_SECONDS = 240
+REMOTE_TIMEOUT_SECONDS = 660
+WORKER_MAX_SECONDS = 480
 WORKER_PROCESS_TIMEOUT_SECONDS = WORKER_MAX_SECONDS + 15
 
 REMOTE_EXTRACT = r'''
@@ -29,7 +29,7 @@ ROOT = pathlib.Path('/home/ubuntu/quantml-study')
 REPORT_LIMIT = 2 * 1024 * 1024
 MEMORY_LIMIT = 512 * 1024 * 1024
 MAX_METADATA = 64
-WORKER_MAX_SECONDS = 240
+WORKER_MAX_SECONDS = 480
 WORKER_PROCESS_TIMEOUT_SECONDS = WORKER_MAX_SECONDS + 15
 SOURCE_RECEIPT_ROWS = 128
 SOURCE_RECEIPT_BYTES = 256 * 1024
@@ -595,7 +595,7 @@ def process_locked():
                                            'existing_private_queue_may_resume': True},
                  'estimated_cpu_memory_runtime': {'cpu_parallelism': 1, 'max_address_space_mib': 512, 'worker_wall_seconds': WORKER_MAX_SECONDS},
                  'cache_identity': worker_hash, 'concurrency': 1, 'timeout_seconds': WORKER_MAX_SECONDS,
-                 'cost_or_quota_bound': 'existing_host_only; no provisioning; one worker for at most240seconds',
+                 'cost_or_quota_bound': 'existing_host_only; no provisioning; one worker for at most480seconds',
                  'private_output_destination': str(output)}
     preflight_path = run_dir / 'preflight.json'
     atomic(preflight_path, raw_json(preflight))
