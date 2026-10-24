@@ -1,0 +1,44 @@
+name: corpus-private-stage
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: corpus-private-stage
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-vault.txt
+      - name: Validate receiver and installer
+        run: python -m py_compile tools/corpus_receiver.py tools/run_corpus_stage.py
+      - name: Install dedicated expiring upload identity and bounded receiver
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+          CORPUS_SSH_HOST: ${{ secrets.CORPUS_SSH_HOST }}
+          CORPUS_SSH_USER: ${{ secrets.CORPUS_SSH_USER }}
+          CORPUS_SSH_KNOWN_HOSTS: ${{ secrets.CORPUS_SSH_KNOWN_HOSTS }}
+          AWS_ADMIN_SSH_KEY: ${{ secrets.AWS_ADMIN_SSH_KEY }}
+          CORPUS_UPLOAD_PUBLIC_KEY: ${{ secrets.CORPUS_UPLOAD_PUBLIC_KEY }}
+        run: python tools/run_corpus_stage.py --output sealed-delivery
+      - name: Deliver ciphertext and generic operational status only
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-first-sealed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            sealed-delivery/*.vault
+            sealed-delivery/status.json
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
