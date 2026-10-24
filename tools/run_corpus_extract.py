@@ -22,6 +22,18 @@ REMOTE_TIMEOUT_SECONDS = 660
 WORKER_MAX_SECONDS = 480
 WORKER_PROCESS_TIMEOUT_SECONDS = WORKER_MAX_SECONDS + 15
 
+# Public status is intentionally limited to a small operational taxonomy.  It
+# helps the next scheduler distinguish transport/configuration failures from a
+# remote report that ran and failed, without exposing host details or sealed
+# research diagnostics.
+FAILURE_CODES = {
+    'identity_preflight_failed': 'identity_preflight_failed',
+    'remote_failed': 'remote_transport_failed',
+    'remote_outcome_unknown_requires_readback': 'remote_timeout_unknown',
+    'remote_result_too_large': 'remote_result_too_large',
+    'configuration_rejected': 'configuration_rejected',
+}
+
 REMOTE_EXTRACT = r'''
 import base64, datetime, fcntl, hashlib, importlib.util, json, os, pathlib, re, resource, signal, stat, subprocess, sys, urllib.request
 payload = json.loads(PAYLOAD_LITERAL)
@@ -1026,6 +1038,13 @@ def main():
                   'live_orders_enabled': False, 'plaintext_published': False}
         if not successful:
             status['failed_stage'] = 'acquisition'
+            record_status = record.get('status')
+            if record_status == 'remote_result_received':
+                # The SSH transport succeeded, but the sealed remote report
+                # did not reach an accepted terminal state.
+                status['failure_code'] = 'remote_report_not_successful'
+            else:
+                status['failure_code'] = FAILURE_CODES.get(record_status, 'acquisition_unclassified')
         with tempfile.TemporaryDirectory() as folder:
             private = Path(folder)
             vault.write_new(private / 'results' / 'extraction.json', vault.canonical(record))

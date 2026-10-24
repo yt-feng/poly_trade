@@ -137,6 +137,18 @@ class SealedJournalTests(unittest.TestCase):
         self.assertEqual(stored['failed_stage'], 'research')
         self.assertFalse(stored['strategy_evaluated'])
 
+    def test_failed_acquisition_accepts_only_bounded_failure_code(self):
+        self.status.update(status='failed', strategy_evaluated=False,
+                           failed_stage='acquisition', failure_code='remote_transport_failed')
+        self.write_status()
+        result = self.persist()
+        stored = json.loads((self.episodes / result['episode_id'] / 'status.json').read_text())
+        self.assertEqual(stored['failure_code'], 'remote_transport_failed')
+        self.status['failure_code'] = 'host-and-secret-details'
+        self.write_status()
+        with self.assertRaisesRegex(ValueError, 'FAILURE_CODE'):
+            self.persist()
+
     def test_manual_work_summary_uses_same_envelope_without_claiming_evaluation(self):
         self.status['strategy_evaluated'] = False
         self.write_status()

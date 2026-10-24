@@ -25,6 +25,12 @@ PART_NAME = re.compile(r'part-([0-9]{4})\.vault\Z')
 FINGERPRINT = re.compile(r'[0-9a-f]{64}\Z')
 STATUS_KEYS = {'version', 'status', 'stage', 'strategy_evaluated',
                'live_orders_enabled', 'plaintext_published', 'sealed_parts'}
+FAILURE_CODES = {
+    'identity_preflight_failed', 'remote_transport_failed',
+    'remote_timeout_unknown', 'remote_result_too_large',
+    'configuration_rejected', 'remote_report_not_successful',
+    'acquisition_unclassified',
+}
 
 
 def validate_status(value):
@@ -32,7 +38,11 @@ def validate_status(value):
         raise ValueError('INVALID_STATUS_SCHEMA')
     outcome = value.get('status')
     expected = STATUS_KEYS | ({'failed_stage'} if outcome == 'failed' else set())
-    if set(value) != expected or outcome not in {'complete', 'failed'}:
+    allowed = [expected]
+    # Keep old failed envelopes valid while accepting the new bounded category.
+    if outcome == 'failed':
+        allowed.append(expected | {'failure_code'})
+    if set(value) not in allowed or outcome not in {'complete', 'failed'}:
         raise ValueError('INVALID_STATUS_SCHEMA')
     if type(value['version']) is not int or value['version'] != 1:
         raise ValueError('INVALID_STATUS_VERSION')
@@ -49,8 +59,13 @@ def validate_status(value):
         raise ValueError('INVALID_SEALED_PART_COUNT')
     if outcome == 'failed' and value['failed_stage'] not in {'acquisition', 'research'}:
         raise ValueError('INVALID_FAILURE_STAGE')
+    if outcome == 'failed' and 'failure_code' in value and value['failure_code'] not in FAILURE_CODES:
+        raise ValueError('INVALID_FAILURE_CODE')
     # Return a fresh allowlisted record. No free text, paths, identity or metrics.
-    return {key: value[key] for key in sorted(expected)}
+    keys = set(expected)
+    if outcome == 'failed' and 'failure_code' in value:
+        keys.add('failure_code')
+    return {key: value[key] for key in sorted(keys)}
 
 
 def episode_identity(repository, run_id, run_attempt, *, cell_id=None):

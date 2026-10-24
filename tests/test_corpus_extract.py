@@ -21,6 +21,12 @@ import run_corpus_extract as extract
 
 
 class CorpusExtractTests(unittest.TestCase):
+    def test_public_failure_taxonomy_is_bounded_and_content_free(self):
+        self.assertEqual(extract.FAILURE_CODES['remote_failed'], 'remote_transport_failed')
+        self.assertEqual(extract.FAILURE_CODES['remote_outcome_unknown_requires_readback'], 'remote_timeout_unknown')
+        self.assertNotIn('host', ' '.join(extract.FAILURE_CODES.values()))
+        self.assertNotIn('secret', ' '.join(extract.FAILURE_CODES.values()))
+
     def test_cloud_gate_precedes_identity_source_or_transport(self):
         with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}), \
                 patch.object(extract.probe, 'configuration') as configuration, \
