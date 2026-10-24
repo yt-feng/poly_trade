@@ -300,6 +300,120 @@ class NetMarginCiphertextTests(unittest.TestCase):
         self.assertEqual(self.private.joinpath('results/scores.csv').read_bytes(), self.original_scores)
 
 
+class CompactNetMarginAuditTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup); self.root = Path(self.temp.name)
+        self.script = '#!/usr/bin/env python3\nprint("合成 reader")\n'
+        self.scientific = {'evaluation_mode': 'offline_net_margin', 'live_orders_enabled': False,
+            'source_repository': 'yt-feng/poly', 'source_commit': 'a' * 40,
+            'candidate_binding': {'bytes': 8, 'sha256': hashlib.sha256(b'fixture\n').hexdigest()},
+            'frozen_metadata': {'positive': True}}
+        self.metadata = {'format': 'synthetic-full-registration-v1', 'provenance': 'unchanged',
+                         'independent_reader_sha256': hashlib.sha256(self.script.encode()).hexdigest()}
+
+    def packets(self, *, compact=True, mode='offline_net_margin', scientific=None, script=None, metadata=None,
+                mutate_envelope=None, mutate_config=None, audit_utf8=False):
+        scientific = copy.deepcopy(self.scientific if scientific is None else scientific)
+        scientific['evaluation_mode'] = mode
+        script = self.script if script is None else script
+        metadata = copy.deepcopy(self.metadata if metadata is None else metadata)
+        registration = {**metadata, 'scientific_config': scientific, 'independent_reader_source_utf8': script}
+        config = {**scientific, 'independent_audit': {'helper_sha256': hashlib.sha256(script.encode()).hexdigest(),
+            'registration_canonical_sha256': hashlib.sha256(vault.canonical(registration)).hexdigest()}}
+        if compact:
+            audit = {'format': 'net-margin-private-audit-compact-v1', 'script_utf8': script,
+                'registration_metadata': metadata, 'scientific_config_sha256': hashlib.sha256(vault.canonical(scientific)).hexdigest()}
+        else:
+            audit = {'format': 'net-margin-private-audit-v1', 'script_utf8': script, 'registration': registration}
+        if mutate_envelope: mutate_envelope(audit)
+        if mutate_config: mutate_config(config)
+        encode = lambda raw: base64.b64encode(lzma.compress(raw)).decode()
+        raw = vault.canonical(config)
+        audit_raw = json.dumps(audit, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8') if audit_utf8 else vault.canonical(audit)
+        return (encode(raw), encode(b'fixture\n'), encode(audit_raw), hashlib.sha256(raw).hexdigest()), registration
+
+    def materialize(self, packets, name='case', mode='offline_net_margin'):
+        private, bootstrap = self.root / (name + '-private'), self.root / (name + '-bootstrap')
+        fake = SimpleNamespace(decode_candidate_packet=lambda value, binding: b'fixture\n')
+        with mock.patch.object(common, 'verify_code_bindings'), mock.patch.dict(sys.modules, {'offline_exit_retry_audit': fake}):
+            result = common.materialize(*packets, 'b' * 40, private, bootstrap, evaluation_mode=mode)
+        return result, private, bootstrap
+
+    def test_full_and_compact_restore_identical_full_registration_and_receipt_bytes(self):
+        full, expected = self.packets(compact=False)
+        compact, _ = self.packets()
+        result_full, private_full, bootstrap_full = self.materialize(full, 'full')
+        result_compact, private_compact, bootstrap_compact = self.materialize(compact, 'compact')
+        self.assertEqual(result_full, result_compact)
+        for name in ('config.json', 'input-receipt.json'):
+            self.assertEqual((private_full / name).read_bytes(), (private_compact / name).read_bytes())
+        for name in ('candidates.csv', 'reader.py', 'registration.json'):
+            self.assertEqual((bootstrap_full / name).read_bytes(), (bootstrap_compact / name).read_bytes())
+            self.assertEqual((bootstrap_compact / name).stat().st_mode & 0o777, 0o600)
+        self.assertEqual((bootstrap_compact / 'registration.json').read_bytes(), vault.canonical(expected))
+        self.assertEqual((bootstrap_compact / 'reader.py').read_bytes(), self.script.encode())
+        self.assertEqual(json.loads((bootstrap_compact / 'registration.json').read_bytes())['scientific_config'], self.scientific)
+
+    def test_tampered_scientific_metadata_source_and_hash_fail_before_any_write(self):
+        mutations = [lambda a: a.update(scientific_config_sha256='0' * 64),
+            lambda a: a.update(scientific_config_sha256=True),
+            lambda a: a.update(scientific_config_sha256='A' * 64),
+            lambda a: a.update(registration_metadata=[]),
+            lambda a: a['registration_metadata'].update(provenance='changed'),
+            lambda a: a.update(script_utf8=a['script_utf8'] + '# changed\n'),
+            lambda a: a.update(script_utf8=None),
+            lambda a: a.update(extra='forbidden')]
+        for index, mutation in enumerate(mutations):
+            packets, _ = self.packets(mutate_envelope=mutation)
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                self.materialize(packets, str(index))
+            self.assertFalse((self.root / (str(index) + '-private')).exists())
+            self.assertFalse((self.root / (str(index) + '-bootstrap')).exists())
+
+    def test_reserved_registration_fields_cannot_override_hydrated_values(self):
+        for index, key in enumerate(('scientific_config', 'independent_reader_source_utf8')):
+            packets, _ = self.packets(mutate_envelope=lambda a, key=key: a['registration_metadata'].update({key: 'injected'}))
+            with self.assertRaisesRegex(ValueError, 'compact registration metadata'):
+                self.materialize(packets, 'reserved' + str(index))
+            self.assertFalse((self.root / ('reserved' + str(index) + '-private')).exists())
+
+    def test_full_registration_sha_and_actual_scientific_type_are_bound(self):
+        for index, mutation in enumerate((lambda c: c['independent_audit'].update(registration_canonical_sha256='0' * 64),
+                lambda c: c['frozen_metadata'].update(positive=1))):
+            packets, _ = self.packets(mutate_config=mutation)
+            with self.assertRaises(ValueError): self.materialize(packets, 'config' + str(index))
+            self.assertFalse((self.root / ('config' + str(index) + '-private')).exists())
+
+    def test_compact_envelope_is_net_margin_only(self):
+        for index, mode in enumerate(('offline_exit_retry', 'offline_exit_continuation', 'offline_price_calibration')):
+            packets, _ = self.packets(mode=mode)
+            with self.assertRaisesRegex(ValueError, 'compact independent audit envelope'):
+                self.materialize(packets, 'mode' + str(index), mode=mode)
+            self.assertFalse((self.root / ('mode' + str(index) + '-private')).exists())
+
+    def test_hydrated_full_registration_bounded_after_deduplication(self):
+        scientific = {**self.scientific, 'padding': 'x' * 220000}
+        metadata = {**self.metadata, 'padding': 'm' * 110000}
+        packets, registration = self.packets(scientific=scientific, script='r' * 200000, metadata=metadata)
+        self.assertGreater(len(vault.canonical(registration)), 524288)
+        self.assertLess(len(packets[2]), 45000)
+        with self.assertRaisesRegex(ValueError, 'excessive hydrated registration'):
+            self.materialize(packets, 'oversize')
+        self.assertFalse((self.root / 'oversize-private').exists())
+        self.assertFalse((self.root / 'oversize-bootstrap').exists())
+
+    def test_reader_budget_is_utf8_bytes_and_encoded_limit_is_unchanged(self):
+        packets, _ = self.packets(script='é' * 131073, audit_utf8=True)
+        with self.assertRaisesRegex(ValueError, 'excessive reader source'):
+            self.materialize(packets, 'reader-bytes')
+        packets, _ = self.packets()
+        packets = list(packets); packets[2] = 'x' * 45001
+        with self.assertRaisesRegex(ValueError, 'encoded input exceeds limit'):
+            self.materialize(packets, 'encoded-limit')
+        self.assertFalse((self.root / 'reader-bytes-private').exists())
+        self.assertFalse((self.root / 'encoded-limit-private').exists())
+
+
 class NetMarginWorkflowTests(unittest.TestCase):
     def test_workflow_scopes_and_phase_order_and_failures_retained_before_gate(self):
         text = (ROOT / '.github/workflows/offline-net-margin-audit.yml').read_text()
