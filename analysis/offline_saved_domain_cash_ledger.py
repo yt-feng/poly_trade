@@ -18,7 +18,7 @@ from typing import Any, Mapping
 
 import pandas as pd
 
-from analysis.cached_quote_execution import depth_proxy_fraction, entry_price_cap
+from analysis.timed_quote_execution import depth_proxy_fraction, entry_price_cap
 from analysis.offline_full_candidate_coverage import FEATURE_FIELDS, SCORE_FIELDS, implied_exit_bid
 
 
