@@ -101,6 +101,32 @@ def explicit_tessdata(value, languages):
     return str(path), details
 
 
+def has_tiny_embedded_image(page):
+    """Return true when page image metadata cannot satisfy Tesseract's minimum size.
+
+    Some PDFs contain 1--2 pixel tracking or separator images. Passing those
+    images to embedded Tesseract can emit ``Image too small to scale`` and
+    consume the whole bounded worker budget. Metadata inspection is optional
+    because older PyMuPDF builds may not expose ``get_image_info``; in that
+    case the normal OCR path remains unchanged.
+    """
+    getter = getattr(page, 'get_image_info', None)
+    if not callable(getter):
+        return False
+    try:
+        infos = getter(xrefs=True) or []
+    except Exception:
+        return False
+    for info in infos:
+        if not isinstance(info, dict):
+            continue
+        width, height = info.get('width'), info.get('height')
+        if (isinstance(width, (int, float)) and isinstance(height, (int, float))
+                and width > 0 and height > 0 and (width < 3 or height < 3)):
+            return True
+    return False
+
+
 def contained_file(root, relative):
     rel = safe_relative(relative)
     path = root.joinpath(*rel.parts)
@@ -455,11 +481,14 @@ class Worker:
                 drawings = len(page.get_drawings())
                 area = max(1.0, float(page.rect.width) * float(page.rect.height))
                 needs_ocr = len(native_text.strip()) < 40 or raster_images > 0 or drawings > 0
+                tiny_raster_image = has_tiny_embedded_image(page) if raster_images else False
                 ocr_status = 'not_required'
                 ocr_full = None
                 tessdata_files = None
                 if needs_ocr:
-                    if area * (150 / 72) ** 2 > min(self.args.max_page_pixels, 4000000):
+                    if tiny_raster_image:
+                        ocr_status = 'pending_ocr_tiny_image'
+                    elif area * (150 / 72) ** 2 > min(self.args.max_page_pixels, 4000000):
                         ocr_status = 'pending_ocr_render_capacity'
                     elif self.args.pdf_ocr:
                         self.check(int(area * (150 / 72) ** 2 * 4) + 65536)
@@ -492,7 +521,8 @@ class Worker:
                 self.unit(sid, number, 'page', {'page': number + 1, 'text': text,
                                               'native_text': native_text, 'ocr_text': ocr_text,
                                               'text_primary_source': 'native' if native_text.strip() else 'ocr' if ocr_text is not None else 'native_empty'},
-                          {'page': number + 1, 'ocr_status': ocr_status, 'raster_images': raster_images,
+                           {'page': number + 1, 'ocr_status': ocr_status, 'raster_images': raster_images,
+                           'tiny_raster_image': tiny_raster_image,
                            'vector_drawings': drawings, 'visual_artifact': visual_path,
                            'render_scale': render_scale, 'full_resolution_visual_pending': bool(render_scale is not None and render_scale < 1),
                            'ocr_languages': self.args.ocr_languages if self.args.pdf_ocr else None,

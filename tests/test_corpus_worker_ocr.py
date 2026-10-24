@@ -11,8 +11,10 @@ import corpus_worker as worker
 
 
 class FakePage:
-    def __init__(self, native='Native text must survive.', ocr='OCR evidence.', area=100):
+    def __init__(self, native='Native text must survive.', ocr='OCR evidence.', area=100,
+                 image_infos=None):
         self.native, self.ocr = native, ocr
+        self.image_infos = image_infos
         self.rect = SimpleNamespace(width=area, height=1)
         self.calls = []
 
@@ -21,6 +23,9 @@ class FakePage:
 
     def get_images(self):
         return [object()]
+
+    def get_image_info(self, **kwargs):
+        return self.image_infos or [{'width': 100, 'height': 100}]
 
     def get_drawings(self):
         return []
@@ -132,6 +137,15 @@ class WorkerOCRTests(unittest.TestCase):
         self.assertEqual(data['text'], page.native)
         self.assertIsNone(data['ocr_text'])
         self.assertEqual(metadata['ocr_status'], 'pending_ocr_RuntimeError')
+
+    def test_tiny_embedded_image_skips_ocr_engine_and_records_boundary(self):
+        page = FakePage(image_infos=[{'width': 2, 'height': 36}])
+        data, metadata, kwargs, instance = self.run_page(page)
+        self.assertEqual(page.calls, [])
+        self.assertEqual(metadata['ocr_status'], 'pending_ocr_tiny_image')
+        self.assertTrue(metadata['tiny_raster_image'])
+        self.assertEqual(kwargs['status'], 'pending_ocr')
+        self.assertEqual(data['text'], page.native)
 
 
 if __name__ == '__main__':
