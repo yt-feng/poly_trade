@@ -217,6 +217,8 @@ class PublicationContracts(unittest.TestCase):
             paths.append(line.strip())
         self.assertEqual(paths,['sealed-delivery/*.vault','sealed-delivery/status.json'])
         self.assertIn('tools/run_quality_first_research.py',workflow)
+        self.assertIn('ulimit -v 12582912',workflow)
+        self.assertNotIn('ulimit -v 3145728',workflow)
         for banned in ['contents: write','GITHUB_STEP_SUMMARY','git push','canary_results',
                        'forward_results','analysis/canary_readiness.py','analysis/forward_roll_conflict.py']:
             self.assertNotIn(banned,workflow)

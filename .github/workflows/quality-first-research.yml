@@ -134,7 +134,13 @@ jobs:
           RESEARCH_MODE: ${{ inputs.research_mode }}
           FROZEN_INPUT_B64: ${{ secrets.QUALITY_FIRST_FROZEN_INPUT_B64 }}
         run: |
-          ulimit -v 3145728
+          # The forward gate may verify up to 1 GiB of compressed public
+          # archives.  The in-memory causal projection necessarily expands
+          # those archives into compact rows plus decision records; a 3 GiB
+          # address-space ceiling caused a worker-only MemoryError before
+          # research could produce a sealed result.  Keep concurrency at one
+          # but allow the hosted runner's bounded memory budget to be used.
+          ulimit -v 12582912
           MODE_ARGS=()
           if [ "$RESEARCH_MODE" = forward ]; then
             python - <<'PY'
