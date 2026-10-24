@@ -16,6 +16,7 @@ from validate_polybolt_compound_bundle import validate_bundle_document
 from validate_polybolt_compound_bundle import H530_STRATEGY_CONFIG_SHA256, H530_STRATEGY_ID, H530_STRATEGY_PROFILE, H530_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H534_STRATEGY_CONFIG_SHA256, H534_STRATEGY_ID, H534_STRATEGY_PROFILE, H534_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H546_STRATEGY_CONFIG_SHA256, H546_STRATEGY_ID, H546_STRATEGY_PROFILE, H546_STRATEGY_VERSION
+from validate_polybolt_compound_bundle import H544_STRATEGY_CONFIG_SHA256, H544_STRATEGY_ID, H544_STRATEGY_PROFILE, H544_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H549_STRATEGY_CONFIG_SHA256, H549_STRATEGY_ID, H549_STRATEGY_PROFILE, H549_STRATEGY_VERSION
 from validate_polybolt_compound_bundle import H561_STRATEGY_CONFIG_SHA256, H561_STRATEGY_ID, H561_STRATEGY_PROFILE, H561_STRATEGY_VERSION, _expected_entry_terms
 from validate_polybolt_compound_bundle import H578_STRATEGY_CONFIG_SHA256, H578_STRATEGY_ID, H578_STRATEGY_PROFILE, H578_STRATEGY_VERSION
@@ -206,6 +207,28 @@ def test_tool_accepts_the_frozen_h549_adaptive_profile(tmp_path):
     result = json.loads(output.read_text())
     assert result["offline_consistency_passed"] is True
     assert result["strategy_profile"] == H549_STRATEGY_PROFILE
+
+
+def test_tool_accepts_the_frozen_h544_two_profit_profile(tmp_path):
+    source = tmp_path / "bundle.json"
+    output = tmp_path / "result.json"
+    document = bundle()
+    document["strategy"] = {
+        "id": H544_STRATEGY_ID,
+        "version": H544_STRATEGY_VERSION,
+        "config_sha256": H544_STRATEGY_CONFIG_SHA256,
+    }
+    fractions = ["0.55", "0.55"] + ["0.575"] * 8
+    configure_adaptive_fixture(document, fractions)
+    attach_strategy_trace(document, fractions)
+    source.write_text(json.dumps(document))
+    subprocess.run([
+        sys.executable, str(TOOL), "--bundle", str(source), "--output", str(output),
+        "--strategy-profile", H544_STRATEGY_PROFILE,
+    ], check=True, capture_output=True, text=True)
+    result = json.loads(output.read_text())
+    assert result["offline_consistency_passed"] is True
+    assert result["strategy_profile"] == H544_STRATEGY_PROFILE
 
 
 def test_tool_accepts_the_frozen_h561_depth_proxy_without_private_config(tmp_path):

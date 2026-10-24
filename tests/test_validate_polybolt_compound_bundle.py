@@ -18,6 +18,10 @@ from validate_polybolt_compound_bundle import (
     H534_STRATEGY_ID,
     H534_STRATEGY_PROFILE,
     H534_STRATEGY_VERSION,
+    H544_STRATEGY_CONFIG_SHA256,
+    H544_STRATEGY_ID,
+    H544_STRATEGY_PROFILE,
+    H544_STRATEGY_VERSION,
     H549_STRATEGY_CONFIG_SHA256,
     H549_STRATEGY_ID,
     H549_STRATEGY_PROFILE,
@@ -440,6 +444,24 @@ def test_adaptive_profile_binds_actual_entry_size_to_fraction():
     result = validate_bundle_document(doc, strategy_profile=H549_STRATEGY_PROFILE)
     assert result["offline_consistency_passed"] is False
     assert result["failure_reason"] == "strategy_entry_size_mismatch"
+
+
+def test_h544_two_profit_profile_binds_second_release_before_boost():
+    doc = bundle()
+    doc["strategy"] = {
+        "id": H544_STRATEGY_ID,
+        "version": H544_STRATEGY_VERSION,
+        "config_sha256": H544_STRATEGY_CONFIG_SHA256,
+    }
+    fractions = ["0.55", "0.55"] + ["0.575"] * 8
+    configure_adaptive_fixture(doc, fractions)
+    attach_strategy_trace(doc, fractions)
+    result = validate_bundle_document(doc, strategy_profile=H544_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is True
+    doc["strategy_decisions"][2]["cash_fraction"] = "0.55"
+    result = validate_bundle_document(doc, strategy_profile=H544_STRATEGY_PROFILE)
+    assert result["offline_consistency_passed"] is False
+    assert result["failure_reason"] == "strategy_decision_trace_hash_mismatch"
 
 
 def test_h561_profile_binds_side_specific_entry_depth_to_fraction():
