@@ -121,6 +121,34 @@ class CorpusExtractTests(unittest.TestCase):
                 self.assertTrue(namespace['worker_lock_busy'](path))
             self.assertFalse(namespace['worker_lock_busy'](path))
 
+    def test_cursor_commit_is_after_worker_and_uncommitted_manifest_is_recoverable(self):
+        remote = extract.REMOTE_EXTRACT
+        # The cursor must not move before the worker has returned success.
+        self.assertGreater(remote.find("subprocess.run(command"), -1)
+        self.assertGreater(remote.find("atomic(cursor_path"), remote.find("subprocess.run(command"))
+        tree = ast.parse(remote)
+        nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                 and node.name in ('regular', 'read_small', 'load_uncommitted_manifest')]
+        namespace = {'json': json, 'os': os, 'pathlib': __import__('pathlib'),
+                     're': re, 'stat': __import__('stat'), 'read_small': None,
+                     'regular': None}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), 'isolated_recovery_test', 'exec'), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / 'extract-runs' / '123-1'
+            run.mkdir(mode=0o700, parents=True)
+            source_id = 'a' * 64
+            entry = {'source_id': source_id, 'relative_path': 'x.txt', 'size_bytes': 1,
+                     'sha256': 'b' * 64}
+            (run / 'manifest.jsonl').write_text(json.dumps(entry) + '\n')
+            found = namespace['load_uncommitted_manifest'](
+                root, {'last_source_id': source_id, 'updated_run_id': '123-1'})
+            self.assertEqual(found['run_id'], '123-1')
+            self.assertEqual(found['selected'][0]['source_id'], source_id)
+            (run / 'worker-complete.json').write_text('{}')
+            self.assertIsNone(namespace['load_uncommitted_manifest'](
+                root, {'last_source_id': source_id, 'updated_run_id': '123-1'}))
+
 
 class DeliveryAcknowledgementTests(unittest.TestCase):
     def setUp(self):

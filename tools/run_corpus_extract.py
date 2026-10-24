@@ -625,6 +625,47 @@ def source_availability_snapshot(root, report):
                     source_receipts_truncated=report.get('source_receipts_bounds', {}).get('truncated', False))
     report['source_availability'] = snapshot
 
+def load_uncommitted_manifest(root, cursor):
+    """Recover a manifest whose cursor was written before its worker finished.
+
+    Older controller versions advanced the metadata cursor before launching the
+    worker.  A transport drop could therefore leave a manifest on disk while
+    making the next batch skip it.  Recovery is intentionally narrow: it only
+    follows the run id stamped in the cursor, requires the immutable manifest,
+    and refuses a run that already has a completion marker.
+    """
+    if not isinstance(cursor, dict):
+        return None
+    run_id = cursor.get('updated_run_id')
+    if not isinstance(run_id, str) or not re.fullmatch(r'[0-9]{1,25}-[0-9]{1,5}', run_id):
+        return None
+    run_dir = root / 'extract-runs' / run_id
+    manifest = run_dir / 'manifest.jsonl'
+    complete = run_dir / 'worker-complete.json'
+    if not manifest.exists() or manifest.is_symlink() or complete.exists() or complete.is_symlink():
+        return None
+    regular(manifest)
+    raw = read_small(manifest, 2 * 1024 * 1024)
+    entries = []
+    for line in raw.splitlines():
+        if not line:
+            continue
+        entry = json.loads(line)
+        source_id = entry.get('source_id')
+        relative_path = entry.get('relative_path')
+        size_bytes = entry.get('size_bytes')
+        digest = entry.get('sha256')
+        if (not isinstance(source_id, str) or not re.fullmatch(r'[0-9a-f]{64}', source_id)
+                or not isinstance(relative_path, str) or not isinstance(size_bytes, int)
+                or isinstance(size_bytes, bool) or not 0 < size_bytes <= 256 * 1024**2
+                or not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest)):
+            raise ValueError('uncommitted_manifest_entry_identity')
+        entries.append({'source_id': source_id, 'relative_path': relative_path,
+                        'size_bytes': size_bytes, 'sha256': digest})
+    if not entries:
+        raise ValueError('uncommitted_manifest_empty')
+    return {'run_id': run_id, 'run_dir': run_dir, 'manifest': manifest, 'selected': entries}
+
 def attach_output_snapshot(output, worker_hash, source_run, report):
     if (output / 'coverage.json').exists():
         report['coverage'] = json.loads(read_small(output / 'coverage.json', 65536))
@@ -753,50 +794,60 @@ def process_locked():
         report['status'] = 'deferred_capacity_after_dependency'
         return
     cursor_path = ROOT / 'metadata-extract-cursor.json'
+    cursor_value = {}
     last = ''
     if cursor_path.exists():
-        last = json.loads(read_small(cursor_path, 4096)).get('last_source_id', '')
+        cursor_value = json.loads(read_small(cursor_path, 4096))
+        if not isinstance(cursor_value, dict):
+            raise ValueError('invalid_metadata_cursor')
+        last = cursor_value.get('last_source_id', '')
         if last and not re.fullmatch('[0-9a-f]{64}', last):
             raise ValueError('invalid_metadata_cursor')
+    recovery = load_uncommitted_manifest(ROOT, cursor_value)
     names = sorted(p.name for p in (ROOT / 'metadata').iterdir() if re.fullmatch('[0-9a-f]{64}', p.name))
     order = [name for name in names if name > last] + [name for name in names if name <= last]
     selected, metadata_read, deferred = [], 0, []
-    for sid in order[:MAX_METADATA_LIMIT]:
-        metadata_read += 1
-        try:
-            meta = json.loads(read_small(ROOT / 'metadata' / sid, 8192))
-            if meta.get('state') != 'complete':
-                deferred.append({'source_id': sid, 'state': 'upload_not_complete'})
-                continue
-            if meta.get('source_id') != sid or not re.fullmatch('[0-9a-f]{64}', meta.get('sha256', '')):
-                raise ValueError('object_identity_contract')
-            size = meta.get('size_bytes')
-            if not isinstance(size, int) or isinstance(size, bool) or not 0 < size <= 256 * 1024**2:
-                raise ValueError('object_size_contract')
-            origin = ROOT / 'objects' / sid
-            original_stat = regular(origin)
-            if original_stat.st_size != size:
-                raise ValueError('object_size_mismatch')
-            relative = checked_relative(meta['relative_path'])
-            target = ROOT / 'input'
-            for part in relative.parts[:-1]:
-                target = target / part
-                safe_directory(target, create=True)
-            target = target / relative.name
-            if target.exists() or target.is_symlink():
-                current = regular(target)
-                if (current.st_dev, current.st_ino) != (original_stat.st_dev, original_stat.st_ino):
-                    raise ValueError('existing_input_identity_conflict')
-            else:
-                os.link(origin, target, follow_symlinks=False)
-            selected.append({'source_id': sid, 'relative_path': meta['relative_path'],
-                             'size_bytes': size, 'sha256': meta['sha256']})
-        except Exception as exc:
-            deferred.append({'source_id': sid, 'state': 'metadata_or_object_rejected', 'error_class': type(exc).__name__, 'error': str(exc)[:160]})
-    manifest = run_dir / 'manifest.jsonl'
-    atomic(manifest, b''.join(raw_json(entry) + b'\n' for entry in selected))
-    if order[:MAX_METADATA_LIMIT]:
-        atomic(cursor_path, raw_json({'last_source_id': order[:MAX_METADATA_LIMIT][-1], 'updated_run_id': payload['run_id']}))
+    if recovery is not None:
+        selected = recovery['selected']
+        manifest = recovery['manifest']
+        run_dir = recovery['run_dir']
+        report['recovered_uncommitted_run_id'] = recovery['run_id']
+        report['recovery_scope'] = 'cursor_stamped_manifest_before_worker_completion'
+    else:
+        for sid in order[:MAX_METADATA_LIMIT]:
+            metadata_read += 1
+            try:
+                meta = json.loads(read_small(ROOT / 'metadata' / sid, 8192))
+                if meta.get('state') != 'complete':
+                    deferred.append({'source_id': sid, 'state': 'upload_not_complete'})
+                    continue
+                if meta.get('source_id') != sid or not re.fullmatch('[0-9a-f]{64}', meta.get('sha256', '')):
+                    raise ValueError('object_identity_contract')
+                size = meta.get('size_bytes')
+                if not isinstance(size, int) or isinstance(size, bool) or not 0 < size <= 256 * 1024**2:
+                    raise ValueError('object_size_contract')
+                origin = ROOT / 'objects' / sid
+                original_stat = regular(origin)
+                if original_stat.st_size != size:
+                    raise ValueError('object_size_mismatch')
+                relative = checked_relative(meta['relative_path'])
+                target = ROOT / 'input'
+                for part in relative.parts[:-1]:
+                    target = target / part
+                    safe_directory(target, create=True)
+                target = target / relative.name
+                if target.exists() or target.is_symlink():
+                    current = regular(target)
+                    if (current.st_dev, current.st_ino) != (original_stat.st_dev, original_stat.st_ino):
+                        raise ValueError('existing_input_identity_conflict')
+                else:
+                    os.link(origin, target, follow_symlinks=False)
+                selected.append({'source_id': sid, 'relative_path': meta['relative_path'],
+                                 'size_bytes': size, 'sha256': meta['sha256']})
+            except Exception as exc:
+                deferred.append({'source_id': sid, 'state': 'metadata_or_object_rejected', 'error_class': type(exc).__name__, 'error': str(exc)[:160]})
+        manifest = run_dir / 'manifest.jsonl'
+        atomic(manifest, b''.join(raw_json(entry) + b'\n' for entry in selected))
     report.update(metadata_records_read=metadata_read, metadata_names_seen=len(names),
                   selected_manifest=selected, deferred_sources=deferred,
                   manifest_scope='rotating_uploaded_objects_tranche_not_full_corpus')
@@ -828,6 +879,16 @@ def process_locked():
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                     env=child_env, timeout=WORKER_PROCESS_TIMEOUT_SECONDS, preexec_fn=child_limits, check=False)
             report.update(status='batch_observed' if result.returncode == 0 else 'worker_failed', worker_returncode=result.returncode)
+            if result.returncode == 0:
+                atomic(run_dir / 'worker-complete.json', raw_json({'run_id': run_dir.name,
+                                                                   'controller_run_id': payload['run_id'],
+                                                                   'completed_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}))
+                if recovery is None and order[:MAX_METADATA_LIMIT]:
+                    atomic(cursor_path, raw_json({'last_source_id': order[:MAX_METADATA_LIMIT][-1],
+                                                  'updated_run_id': payload['run_id']}))
+                    report['metadata_cursor_committed'] = True
+                else:
+                    report['metadata_cursor_committed'] = False
         except subprocess.TimeoutExpired:
             report.update(status='worker_timeout_checkpoint_recovery_pending', worker_returncode=None,
                           recovery='next_worker_reconciles_unfinished_page_attempts_under_kernel_lock')
