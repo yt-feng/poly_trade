@@ -79,20 +79,39 @@ def materialize(config_encoded: str, candidate_encoded: str, audit_encoded: str,
     from offline_exit_retry_audit import decode_candidate_packet
     candidates = decode_candidate_packet(candidate_encoded, config["candidate_binding"])
     audit = vault.load_json_bytes(decode_xz(audit_encoded, 524288), 524288)
-    if set(audit) != {"format", "script_utf8", "registration"} or audit["format"] != formats[evaluation_mode]:
-        raise ValueError("invalid independent audit envelope")
+    scientific = {key: value for key, value in config.items() if key != "independent_audit"}
+    compact = audit.get("format") == "net-margin-private-audit-compact-v1"
+    if compact:
+        if (evaluation_mode != "offline_net_margin"
+                or set(audit) != {"format", "script_utf8", "registration_metadata", "scientific_config_sha256"}):
+            raise ValueError("invalid compact independent audit envelope")
+        metadata, scientific_sha = audit["registration_metadata"], audit["scientific_config_sha256"]
+        if (not isinstance(metadata, dict)
+                or {"scientific_config", "independent_reader_source_utf8"} & set(metadata)
+                or not isinstance(scientific_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", scientific_sha)
+                or hashlib.sha256(vault.canonical(scientific)).hexdigest() != scientific_sha):
+            raise ValueError("invalid compact registration metadata or scientific binding")
+        # Rebuild the exact original full registration, not a smaller scientific
+        # record. The frozen reader still receives its original full schema.
+        registration_object = {**metadata, "scientific_config": scientific,
+                               "independent_reader_source_utf8": audit["script_utf8"]}
+    else:
+        if set(audit) != {"format", "script_utf8", "registration"} or audit["format"] != formats[evaluation_mode]:
+            raise ValueError("invalid independent audit envelope")
+        registration_object = audit["registration"]
     if not isinstance(audit["script_utf8"], str):
         raise ValueError("invalid reader source")
     script = audit["script_utf8"].encode("utf-8")
-    registration = vault.canonical(audit["registration"])
+    registration = vault.canonical(registration_object)
     if not 0 < len(script) <= 262144:
         raise ValueError("excessive reader source")
+    if compact and not 0 < len(registration) <= 524288:
+        raise ValueError("excessive hydrated registration")
     reader_sha = hashlib.sha256(script).hexdigest()
     if (reader_sha != config["independent_audit"]["helper_sha256"]
             or hashlib.sha256(registration).hexdigest() != config["independent_audit"]["registration_canonical_sha256"]):
         raise ValueError("independent audit binding mismatch")
-    scientific = {key: value for key, value in config.items() if key != "independent_audit"}
-    if audit["registration"].get("scientific_config") != scientific:
+    if registration_object.get("scientific_config") != scientific:
         raise ValueError("scientific registration mismatch")
     private.mkdir(mode=0o700, parents=True, exist_ok=False)
     bootstrap.mkdir(mode=0o700, parents=True, exist_ok=False)
