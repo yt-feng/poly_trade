@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import select
 import shutil
 import stat
 import sys
@@ -23,6 +24,7 @@ FILE_MAX = 256 * 1024**2
 SPOOL_MAX = 8 * 1024**3
 FREE_FLOOR = 8 * 1024**3
 HEADER_MAX = 8192
+IDLE_TIMEOUT_SECONDS = 180
 
 
 class Rejected(Exception):
@@ -234,6 +236,73 @@ def handle(store, header, body):
     return store.finish(header['source_id'])
 
 
+class TimedInput:
+    """Own buffer avoids select-vs-BufferedReader ambiguity across frames."""
+    def __init__(self, fd, timeout=IDLE_TIMEOUT_SECONDS):
+        self.fd = fd
+        self.timeout = timeout
+        self.buffer = bytearray()
+        self.eof = False
+
+    def _receive(self, size):
+        if self.eof:
+            return b''
+        ready, _, _ = select.select([self.fd], [], [], self.timeout)
+        if not ready:
+            raise Rejected('session_inactivity_timeout_read_status')
+        piece = os.read(self.fd, size)
+        if not piece:
+            self.eof = True
+        return piece
+
+    def readline(self, limit):
+        while True:
+            end = self.buffer.find(b'\n')
+            if end >= 0 and end < limit:
+                result = bytes(self.buffer[:end + 1])
+                del self.buffer[:end + 1]
+                return result
+            if len(self.buffer) >= limit or self.eof:
+                count = min(len(self.buffer), limit)
+                result = bytes(self.buffer[:count])
+                del self.buffer[:count]
+                return result
+            self.buffer.extend(self._receive(min(65536, limit - len(self.buffer))))
+
+    def read(self, size):
+        if self.buffer:
+            count = min(size, len(self.buffer))
+            result = bytes(self.buffer[:count])
+            del self.buffer[:count]
+            return result
+        return self._receive(size)
+
+
+def serve_session(store, stream, output):
+    """Multiple frames on one SSH stream; EOF remains old-client compatible."""
+    while True:
+        close_after = False
+        try:
+            line = stream.readline(HEADER_MAX + 1)
+            if not line:
+                return
+            require(len(line) <= HEADER_MAX and line.endswith(b'\n'), 'header_limit_or_missing_newline')
+            response = handle(store, json.loads(line), stream)
+            # A rejected upload can leave unread body bytes. Never parse them
+            # as another header; the next connection must begin with status.
+            close_after = not response.get('ok')
+        except Rejected as exc:
+            response = {'ok': False, 'error': exc.code}
+            close_after = True
+        except Exception as exc:
+            response = {'ok': False, 'error': 'receiver_' + type(exc).__name__}
+            close_after = True
+        output.write(json.dumps(response, sort_keys=True) + '\n')
+        output.flush()
+        if close_after:
+            return
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', choices=(str(ROOT),), default=str(ROOT))
@@ -251,9 +320,8 @@ def main():
                 fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise Rejected('transport_busy_retry_status')
-            line = sys.stdin.buffer.readline(HEADER_MAX + 1)
-            require(len(line) <= HEADER_MAX and line.endswith(b'\n'), 'header_limit_or_missing_newline')
-            response = handle(store, json.loads(line), sys.stdin.buffer)
+            serve_session(store, TimedInput(sys.stdin.fileno()), sys.stdout)
+            return
     except Rejected as exc:
         response = {'ok': False, 'error': exc.code}
     except Exception as exc:

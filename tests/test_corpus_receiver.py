@@ -1,13 +1,14 @@
 """Tiny synthetic storage/transport boundaries; never contact remote hosts."""
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from corpus_receiver import CHUNK_MAX, FILE_MAX, Rejected, Store, handle, validate_header
+from corpus_receiver import CHUNK_MAX, FILE_MAX, Rejected, Store, TimedInput, handle, serve_session, validate_header
 
 SID = 'a' * 64
 
@@ -76,6 +77,37 @@ class ReceiverBoundaries(unittest.TestCase):
         os.rename(self.store.partial / SID, self.store.objects / SID)
         self.assertEqual(self.store.status(SID)['state'], 'finalization_pending')
         self.assertEqual(self.store.finish(SID)['state'], 'complete')
+
+    def test_multiple_frames_share_one_stream_without_eof_between_requests(self):
+        frames = [json.dumps({'op': 'status', 'source_id': SID}).encode() + b'\n',
+                  json.dumps(header()).encode() + b'\n' + b'hello',
+                  json.dumps({'op': 'finish', 'source_id': SID}).encode() + b'\n',
+                  json.dumps({'op': 'status', 'source_id': SID}).encode() + b'\n']
+        output = io.StringIO()
+        readfd, writefd = os.pipe()
+        try:
+            os.write(writefd, b''.join(frames))
+            os.close(writefd)
+            writefd = None
+            serve_session(self.store, TimedInput(readfd, timeout=1), output)
+        finally:
+            os.close(readfd)
+            if writefd is not None:
+                os.close(writefd)
+        responses = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(len(responses), 4)
+        self.assertEqual(responses[0]['state'], 'absent')
+        self.assertEqual(responses[1]['offset'], 5)
+        self.assertEqual(responses[2]['state'], 'complete')
+        self.assertEqual(responses[3]['sha256'], hashlib.sha256(b'hello').hexdigest())
+
+    def test_truncated_body_closes_session_with_partial_status_recoverable(self):
+        output = io.StringIO()
+        serve_session(self.store, io.BytesIO(json.dumps(header()).encode() + b'\nhel'), output)
+        response = json.loads(output.getvalue())
+        self.assertFalse(response['ok'])
+        self.assertEqual(response['error'], 'interrupted_chunk_read_status')
+        self.assertEqual(self.store.status(SID)['offset'], 3)
 
 
 if __name__ == '__main__':
