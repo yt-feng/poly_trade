@@ -59,7 +59,8 @@ def materialize(config_encoded: str, candidate_encoded: str, audit_encoded: str,
                 evaluation_mode: str = "offline_exit_retry") -> dict:
     formats = {"offline_exit_retry": "exit-retry-private-audit-v1",
                "offline_exit_continuation": "exit-continuation-private-audit-v1",
-               "offline_price_calibration": "price-calibration-private-audit-v1"}
+               "offline_price_calibration": "price-calibration-private-audit-v1",
+               "offline_net_margin": "net-margin-private-audit-v1"}
     if evaluation_mode not in formats:
         raise ValueError("unsupported offline comparison mode")
     if not re.fullmatch(r"[0-9a-f]{64}", request_sha):
@@ -102,7 +103,8 @@ def materialize(config_encoded: str, candidate_encoded: str, audit_encoded: str,
         vault.write_new(target, raw, 0o600)
     receipt_format = {"offline_exit_retry": "exit-retry-input-receipt-v1",
                       "offline_exit_continuation": "exit-continuation-input-receipt-v1",
-                      "offline_price_calibration": "price-calibration-input-receipt-v1"}
+                      "offline_price_calibration": "price-calibration-input-receipt-v1",
+                      "offline_net_margin": "net-margin-input-receipt-v1"}
     receipt = {"format": receipt_format[evaluation_mode], "status": "complete",
                "configuration_sha256": request_sha, "expected_code_commit": expected_commit,
                "candidate_bytes": len(candidates), "candidate_sha256": hashlib.sha256(candidates).hexdigest(),
@@ -119,7 +121,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--private", type=Path, required=True)
     parser.add_argument("--bootstrap", type=Path, required=True)
-    parser.add_argument("--evaluation-mode", choices=("offline_exit_retry", "offline_exit_continuation", "offline_price_calibration"),
+    parser.add_argument("--evaluation-mode", choices=("offline_exit_retry", "offline_exit_continuation", "offline_price_calibration", "offline_net_margin"),
                         default="offline_exit_retry")
     args = parser.parse_args()
     try:
