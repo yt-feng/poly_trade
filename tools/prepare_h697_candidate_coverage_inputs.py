@@ -58,7 +58,8 @@ def materialize(*, bootstrap: Path, score_envelope: Path, score_descriptor: Path
         raise ValueError("score_descriptor_capability_mismatch")
     envelope = score_envelope.read_bytes()
     score_root = bootstrap.parent / "score"
-    score_root.mkdir(mode=0o700)
+    # scoped_research_dataset.restore reserves and creates this directory
+    # atomically after all ciphertext checks; do not pre-create it here.
     dataset.restore(envelope, score_capability, score_descriptor_sha256, score_root)
     if not (score_root / "scores.csv").is_file():
         raise ValueError("score_bundle_missing_scores")
