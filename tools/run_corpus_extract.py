@@ -27,12 +27,14 @@ ROOT = pathlib.Path('/home/ubuntu/quantml-study')
 REPORT_LIMIT = 2 * 1024 * 1024
 MEMORY_LIMIT = 512 * 1024 * 1024
 MAX_METADATA = 64
+SOURCE_RECEIPT_ROWS = 128
+SOURCE_RECEIPT_BYTES = 256 * 1024
 ACK_STATE_LIMIT = 32 * 1024 * 1024
 TESSDATA_REVISION = '87416418657359cb625c412a48b6e1d6d41c29bd'
 MAX_TESSDATA_BYTES = 32 * 1024 * 1024
 report = {'version': 1, 'scope': 'bounded_private_cloud_extraction',
           'created_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-          'run_id': payload['run_id'], 'source_commit': payload['source_commit'],
+          'run_id': payload['run_id'], 'source_commit': payload['source_commit'], 'mode': payload['mode'],
           'semantic_learning_complete': False, 'strategy_evaluations': 0,
           'actual_orders': 0, 'trading_services_changed': False,
           'source_publication': False, 'errors': []}
@@ -376,7 +378,68 @@ def build_unit_delivery(output, worker_hash, source_run, report):
                   unit_delivery_semantics='whole_unit_artifacts_and_separate_small_PNGs; no_semantic_or_visual_review_credit')
     report['unit_delivery_proposal'] = save_delivery_proposal(output, worker_hash, source_run, proposed)
 
+def source_receipts(output, report):
+    path = output / 'manifest-state.jsonl'
+    receipts, consumed, rows = [], 0, 0
+    summary = {'available': path.exists(), 'max_rows': SOURCE_RECEIPT_ROWS, 'max_bytes': SOURCE_RECEIPT_BYTES,
+               'snapshot_kind': 'existing_manifest_export', 'truncated': False,
+               'semantic_learning_complete': False}
+    if path.exists():
+        info = regular(path)
+        fields = ('source_id', 'relative_path', 'expected_bytes', 'expected_hash', 'content_hash',
+                  'total_units', 'cursor', 'status', 'unit_kind', 'notes', 'parser_protocol',
+                  'parent_id', 'archive_depth', 'duplicate_of', 'updated_utc')
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as source:
+            while rows < SOURCE_RECEIPT_ROWS and consumed < SOURCE_RECEIPT_BYTES:
+                raw = source.readline(min(65536, SOURCE_RECEIPT_BYTES - consumed))
+                if not raw:
+                    break
+                consumed += len(raw)
+                if not raw.endswith(b'\n') and consumed < info.st_size:
+                    summary.update(truncated=True, truncation_reason='source_line_or_byte_bound')
+                    break
+                row = json.loads(raw)
+                rows += 1
+                receipt = {key: row.get(key) for key in fields}
+                receipt.update(sha256=row.get('content_hash') or row.get('expected_hash'),
+                               sha256_verified=bool(row.get('content_hash')),
+                               semantic_learning_complete=False, visual_review_complete=False)
+                if len(raw_json(receipts + [receipt])) > SOURCE_RECEIPT_BYTES:
+                    summary.update(truncated=True, truncation_reason='serialized_receipt_byte_bound')
+                    break
+                receipts.append(receipt)
+        if consumed < info.st_size:
+            summary['truncated'] = True
+            summary.setdefault('truncation_reason', 'row_or_byte_bound')
+        summary.update(snapshot_bytes=info.st_size, input_bytes_read=consumed, input_rows_read=rows,
+                       last_source_id=receipts[-1]['source_id'] if receipts else None)
+    summary.update(receipts_returned=len(receipts), serialized_receipt_bytes=len(raw_json(receipts)))
+    report.update(source_receipts=receipts, source_receipts_bounds=summary)
+
+def attach_output_snapshot(output, worker_hash, source_run, report):
+    if (output / 'coverage.json').exists():
+        report['coverage'] = json.loads(read_small(output / 'coverage.json', 65536))
+    source_receipts(output, report)
+    build_unit_delivery(output, worker_hash, source_run, report)
+
+def readback_existing_output(worker_raw, worker_hash):
+    output = ROOT / 'extracted' / worker_hash
+    for directory in (ROOT / 'bin', ROOT / 'extracted', output):
+        safe_directory(directory)
+    if read_small(ROOT / 'bin' / ('corpus_worker-' + worker_hash + '.py'), 200000) != worker_raw:
+        raise ValueError('readback_worker_source_mismatch')
+    report.update(worker_sha256=worker_hash, private_output_root=str(output),
+                  worker_executed=False, extraction_dependencies_installed=False,
+                  snapshot_scope='existing_exports_only; no_source_parsing_or_queue_advance')
+    if worker_lock_busy(output / 'worker.lock'):
+        report['status'] = 'deferred_active_worker'
+        return
+    attach_output_snapshot(output, worker_hash, payload['run_id'], report)
+    report['status'] = 'readback_observed'
+
 def process():
+    if payload.get('mode') not in ('extract', 'readback'):
+        raise ValueError('invalid_controller_mode')
     os.umask(0o077)
     for ancestor in list(ROOT.parents)[:-1] + [ROOT]:
         if ancestor.is_symlink():
@@ -384,14 +447,28 @@ def process():
     safe_directory(ROOT)
     lockpath = ROOT / '.extract-controller.lock'
     lockfd = os.open(lockpath, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    lock = os.fdopen(lockfd, 'wb')
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        report['status'] = 'deferred_active_extraction_controller'
-        return
-    # Keep the descriptor open until the complete worker/readback operation ends.
+        try:
+            fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            report['status'] = 'deferred_active_extraction_controller'
+            return
+        process_locked()
+    finally:
+        os.close(lockfd)
+
+def process_locked():
+    # The caller owns the controller flock for extraction and readback alike.
     report['delivery_ack_result'] = apply_delivery_ack(ROOT, payload.get('delivery_ack'))
+    worker_raw = base64.b64decode(payload['worker_base64'], validate=True)
+    if not 0 < len(worker_raw) <= 200000:
+        raise ValueError('worker_source_size')
+    compile(worker_raw, 'corpus_worker.py', 'exec')
+    worker_hash = hashlib.sha256(worker_raw).hexdigest()
+    if payload['mode'] == 'readback':
+        readback_existing_output(worker_raw, worker_hash)
+        return
+    report['worker_executed'] = False
     report['capacity_before'] = {'mem_available_bytes': memory_available(), 'free_bytes': available_bytes()}
     if report['capacity_before']['mem_available_bytes'] is None or report['capacity_before']['mem_available_bytes'] < 600 * 1024**2 or report['capacity_before']['free_bytes'] < 8 * 1024**3:
         report['status'] = 'deferred_capacity'
@@ -400,11 +477,6 @@ def process():
         safe_directory(ROOT / name, create=True)
     for name in ('objects', 'metadata'):
         safe_directory(ROOT / name)
-    worker_raw = base64.b64decode(payload['worker_base64'], validate=True)
-    if len(worker_raw) > 200000:
-        raise ValueError('worker_source_size')
-    compile(worker_raw, 'corpus_worker.py', 'exec')
-    worker_hash = hashlib.sha256(worker_raw).hexdigest()
     worker = ROOT / 'bin' / ('corpus_worker-' + worker_hash + '.py')
     if worker.exists():
         if read_small(worker, 200000) != worker_raw:
@@ -532,6 +604,7 @@ def process():
                '--capability-id', capability_id]
     with (run_dir / 'worker-private.log').open('wb') as log:
         try:
+            report['worker_executed'] = True
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                     env=child_env, timeout=135, preexec_fn=child_limits, check=False)
             report.update(status='batch_observed' if result.returncode == 0 else 'worker_failed', worker_returncode=result.returncode)
@@ -539,9 +612,7 @@ def process():
             report.update(status='worker_timeout_checkpoint_recovery_pending', worker_returncode=None,
                           recovery='next_worker_reconciles_unfinished_page_attempts_under_kernel_lock')
     report['coverage_snapshot_may_precede_failed_worker'] = report.get('worker_returncode') != 0
-    if (output / 'coverage.json').exists():
-        report['coverage'] = json.loads(read_small(output / 'coverage.json', 65536))
-    build_unit_delivery(output, worker_hash, payload['run_id'], report)
+    attach_output_snapshot(output, worker_hash, payload['run_id'], report)
     report['worker_log_tail_base64'] = base64.b64encode(read_small(run_dir / 'worker-private.log', 512*1024)[-32768:]).decode()
     report['capacity_after'] = {'mem_available_bytes': memory_available(), 'free_bytes': available_bytes()}
     if len(raw_json(report)) > REPORT_LIMIT:
@@ -581,6 +652,9 @@ def delivery_ack_from_environment(environment):
 
 
 def source_payload(environment, worker_source):
+    mode = environment.get('CORPUS_EXTRACT_MODE') or 'extract'
+    if mode not in ('extract', 'readback'):
+        raise ValueError('INVALID_CONTROLLER_MODE')
     run = str(environment.get('GITHUB_RUN_ID', ''))
     attempt = str(environment.get('GITHUB_RUN_ATTEMPT', ''))
     commit = environment.get('GITHUB_SHA', '')
@@ -591,7 +665,7 @@ def source_payload(environment, worker_source):
     if not isinstance(worker_source, bytes) or not 0 < len(worker_source) <= 200000:
         raise ValueError('WORKER_SOURCE_SIZE')
     compile(worker_source, 'corpus_worker.py', 'exec')
-    return {'run_id': run + '-' + attempt, 'source_commit': commit,
+    return {'run_id': run + '-' + attempt, 'source_commit': commit, 'mode': mode,
             'worker_base64': base64.b64encode(worker_source).decode(),
             'delivery_ack': delivery_ack_from_environment(environment)}
 
@@ -647,7 +721,7 @@ def main():
         except Exception as exc:
             record = {'status': 'configuration_rejected', 'error_class': type(exc).__name__}
         successful = record['status'] == 'remote_result_received' and record.get('extraction', {}).get('status') in (
-            'batch_observed', 'deferred_capacity', 'deferred_capacity_after_dependency',
+            'batch_observed', 'readback_observed', 'deferred_capacity', 'deferred_capacity_after_dependency',
             'deferred_active_extraction_controller', 'deferred_active_worker',
             'deferred_no_complete_uploaded_sources')
         status = {'version': 1, 'status': 'complete' if successful else 'failed',

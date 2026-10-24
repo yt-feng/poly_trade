@@ -39,6 +39,18 @@ class CorpusExtractTests(unittest.TestCase):
             with self.subTest(run=invalid), self.assertRaises(ValueError):
                 extract.source_payload({'GITHUB_RUN_ID': invalid, 'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': 'a'*40}, source)
 
+    def test_mode_does_not_change_worker_bytes_or_cache_identity(self):
+        source = (ROOT / 'tools' / 'corpus_worker.py').read_bytes()
+        env = {'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': 'a'*40}
+        first = extract.source_payload(env, source)
+        second = extract.source_payload(dict(env, CORPUS_EXTRACT_MODE='readback'), source)
+        self.assertEqual(first['mode'], 'extract')
+        self.assertEqual(second['mode'], 'readback')
+        self.assertEqual(first['worker_base64'], second['worker_base64'])
+        self.assertEqual(hashlib.sha256(base64.b64decode(second['worker_base64'])).digest(), hashlib.sha256(source).digest())
+        with self.assertRaisesRegex(ValueError, 'INVALID_CONTROLLER_MODE'):
+            extract.source_payload(dict(env, CORPUS_EXTRACT_MODE='other'), source)
+
     def test_embedded_program_compiles_without_running(self):
         compile(extract.REMOTE_EXTRACT, 'fixed_remote_extract', 'exec')
         tree = ast.parse(extract.REMOTE_EXTRACT)
@@ -256,6 +268,87 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         delivered_keys = {item['unit_key'] for item in first['unit_texts']} | {item['unit_key'] for item in second['unit_texts']}
         self.assertEqual(len(delivered_keys), 6)
         self.assertTrue(second['unit_delivery_complete_for_cloud_snapshot'])
+
+
+class ReadbackTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.worker_raw = b'raise RuntimeError("worker must not execute during readback")\n'
+        self.worker_hash = hashlib.sha256(self.worker_raw).hexdigest()
+        self.output = self.root / 'extracted' / self.worker_hash
+        for path in (self.root / 'bin', self.root / 'extracted', self.output):
+            path.mkdir(mode=0o700)
+        (self.root / 'bin' / ('corpus_worker-' + self.worker_hash + '.py')).write_bytes(self.worker_raw)
+        (self.output / 'coverage.json').write_text('{"source_count_including_discovered_children":2}')
+        names = {'raw_json', 'safe_directory', 'regular', 'read_small', 'worker_lock_busy',
+                 'source_receipts', 'attach_output_snapshot', 'readback_existing_output', 'process', 'process_locked'}
+        nodes = [node for node in ast.parse(extract.REMOTE_EXTRACT).body
+                 if isinstance(node, ast.FunctionDef) and node.name in names]
+        self.ns = {'json': json, 'hashlib': hashlib, 'os': os, 'stat': stat, 're': re, 'fcntl': fcntl,
+                   'base64': base64, 'ROOT': self.root, 'SOURCE_RECEIPT_ROWS': 128,
+                   'SOURCE_RECEIPT_BYTES': 256*1024, 'REPORT_LIMIT': 2*1024*1024,
+                   'payload': {'mode': 'readback', 'run_id': '123-1', 'worker_base64': base64.b64encode(self.worker_raw).decode()},
+                   'report': {}, 'apply_delivery_ack': Mock(return_value={'status': 'not_supplied'}),
+                   'build_unit_delivery': Mock(),
+                   'subprocess': SimpleNamespace(run=Mock(side_effect=AssertionError('no worker or pip'))),
+                   'prepare_tessdata': Mock(side_effect=AssertionError('no dependency download')),
+                   'memory_available': Mock(side_effect=AssertionError('no extraction capacity gate')),
+                   'available_bytes': Mock(side_effect=AssertionError('no extraction capacity gate'))}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), 'isolated_readback_test', 'exec'), self.ns)
+
+    def write_sources(self, count, note=''):
+        rows = [{'source_id': f'{index:064x}', 'total_units': 2, 'cursor': 2, 'status': 'extracted',
+                 'unit_kind': 'pages', 'content_hash': 'a'*64, 'notes': {'detail': note},
+                 'parser_protocol': {'unit': 'page'}} for index in range(count)]
+        (self.output / 'manifest-state.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in rows))
+
+    def test_readback_attaches_source_receipts_without_worker_or_dependency_activity(self):
+        self.write_sources(2)
+        self.ns['process']()
+        report = self.ns['report']
+        self.assertEqual(report['status'], 'readback_observed')
+        self.assertFalse(report['worker_executed'])
+        self.assertFalse(report['extraction_dependencies_installed'])
+        self.assertEqual(report['source_receipts'][0]['total_units'], 2)
+        self.assertEqual(report['source_receipts'][0]['sha256'], 'a'*64)
+        self.assertFalse(report['source_receipts'][0]['semantic_learning_complete'])
+        self.ns['apply_delivery_ack'].assert_called_once_with(self.root, None)
+        self.ns['build_unit_delivery'].assert_called_once_with(self.output, self.worker_hash, '123-1', report)
+        self.ns['subprocess'].run.assert_not_called()
+        self.ns['prepare_tessdata'].assert_not_called()
+        self.ns['memory_available'].assert_not_called()
+        self.assertFalse((self.root / 'metadata-extract-cursor.json').exists())
+
+    def test_source_receipts_limit_rows_and_record_truncation(self):
+        self.write_sources(129)
+        report = {}
+        self.ns['source_receipts'](self.output, report)
+        self.assertEqual(len(report['source_receipts']), 128)
+        bounds = report['source_receipts_bounds']
+        self.assertTrue(bounds['truncated'])
+        self.assertEqual(bounds['input_rows_read'], 128)
+        self.assertLessEqual(bounds['input_bytes_read'], 256*1024)
+        self.assertLessEqual(bounds['serialized_receipt_bytes'], 256*1024)
+
+    def test_source_receipts_enforce_input_and_output_byte_limits(self):
+        self.write_sources(10, 'synthetic')
+        self.ns['SOURCE_RECEIPT_BYTES'] = 700
+        report = {}
+        self.ns['source_receipts'](self.output, report)
+        bounds = report['source_receipts_bounds']
+        self.assertTrue(bounds['truncated'])
+        self.assertLessEqual(bounds['input_bytes_read'], 700)
+        self.assertLessEqual(bounds['serialized_receipt_bytes'], 700)
+
+    def test_readback_rejects_missing_same_hash_output_without_creating_it(self):
+        self.ns['payload']['worker_base64'] = base64.b64encode(b'pass\n').decode()
+        missing = self.root / 'extracted' / hashlib.sha256(b'pass\n').hexdigest()
+        with self.assertRaises(FileNotFoundError):
+            self.ns['process']()
+        self.assertFalse(missing.exists())
+        self.ns['subprocess'].run.assert_not_called()
 
 
 if __name__ == '__main__':
