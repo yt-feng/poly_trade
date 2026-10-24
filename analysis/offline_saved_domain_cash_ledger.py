@@ -18,8 +18,12 @@ from typing import Any, Mapping
 
 import pandas as pd
 
-from analysis.timed_quote_execution import depth_proxy_fraction, entry_price_cap
-from analysis.offline_full_candidate_coverage import FEATURE_FIELDS, SCORE_FIELDS, implied_exit_bid
+try:
+    from analysis.timed_quote_execution import depth_proxy_fraction, entry_price_cap
+    from analysis.offline_full_candidate_coverage import FEATURE_FIELDS, SCORE_FIELDS, implied_exit_bid
+except ModuleNotFoundError:  # Direct CLI execution places this directory first on sys.path.
+    from timed_quote_execution import depth_proxy_fraction, entry_price_cap
+    from offline_full_candidate_coverage import FEATURE_FIELDS, SCORE_FIELDS, implied_exit_bid
 
 
 DOMAIN_FIELDS = {
