@@ -19,6 +19,8 @@ import run_corpus_capacity_probe as probe
 
 REPORT_LIMIT = 2 * 1024 * 1024
 REMOTE_TIMEOUT_SECONDS = 360
+WORKER_MAX_SECONDS = 240
+WORKER_PROCESS_TIMEOUT_SECONDS = WORKER_MAX_SECONDS + 15
 
 REMOTE_EXTRACT = r'''
 import base64, datetime, fcntl, hashlib, importlib.util, json, os, pathlib, re, resource, signal, stat, subprocess, sys, urllib.request
@@ -27,6 +29,8 @@ ROOT = pathlib.Path('/home/ubuntu/quantml-study')
 REPORT_LIMIT = 2 * 1024 * 1024
 MEMORY_LIMIT = 512 * 1024 * 1024
 MAX_METADATA = 64
+WORKER_MAX_SECONDS = 240
+WORKER_PROCESS_TIMEOUT_SECONDS = WORKER_MAX_SECONDS + 15
 SOURCE_RECEIPT_ROWS = 128
 SOURCE_RECEIPT_BYTES = 256 * 1024
 ACK_STATE_LIMIT = 32 * 1024 * 1024
@@ -589,15 +593,15 @@ def process_locked():
     preflight = {'backend': 'aws', 'backend_verified': True,
                  'input_scope_and_bytes': {'current_manifest_files': len(selected), 'current_manifest_bytes': sum(e['size_bytes'] for e in selected),
                                            'existing_private_queue_may_resume': True},
-                 'estimated_cpu_memory_runtime': {'cpu_parallelism': 1, 'max_address_space_mib': 512, 'worker_wall_seconds': 120},
-                 'cache_identity': worker_hash, 'concurrency': 1, 'timeout_seconds': 120,
-                 'cost_or_quota_bound': 'existing_host_only; no provisioning; one worker for at most120seconds',
+                 'estimated_cpu_memory_runtime': {'cpu_parallelism': 1, 'max_address_space_mib': 512, 'worker_wall_seconds': WORKER_MAX_SECONDS},
+                 'cache_identity': worker_hash, 'concurrency': 1, 'timeout_seconds': WORKER_MAX_SECONDS,
+                 'cost_or_quota_bound': 'existing_host_only; no provisioning; one worker for at most240seconds',
                  'private_output_destination': str(output)}
     preflight_path = run_dir / 'preflight.json'
     atomic(preflight_path, raw_json(preflight))
     command = [sys.executable, str(worker), '--manifest', str(manifest), '--input-root', str(ROOT / 'input'),
                '--output-root', str(output), '--preflight', str(preflight_path), '--backend', 'aws',
-               '--max-files', '32', '--max-units', '200', '--max-seconds', '120',
+               '--max-files', '32', '--max-units', '200', '--max-seconds', str(WORKER_MAX_SECONDS),
                '--max-output-bytes', str(64 * 1024**2), '--max-memory-mib', '512',
                '--max-member-bytes', str(64 * 1024**2), '--max-page-pixels', '4000000',
                '--pdf-ocr', '--tessdata', str(tessdata), '--ocr-languages', 'eng+chi_sim',
@@ -606,7 +610,7 @@ def process_locked():
         try:
             report['worker_executed'] = True
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                    env=child_env, timeout=135, preexec_fn=child_limits, check=False)
+                                    env=child_env, timeout=WORKER_PROCESS_TIMEOUT_SECONDS, preexec_fn=child_limits, check=False)
             report.update(status='batch_observed' if result.returncode == 0 else 'worker_failed', worker_returncode=result.returncode)
         except subprocess.TimeoutExpired:
             report.update(status='worker_timeout_checkpoint_recovery_pending', worker_returncode=None,
