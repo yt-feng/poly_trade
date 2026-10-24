@@ -69,6 +69,7 @@ jobs:
           PY
       - name: Publish only encrypted research delivery
         env:
+          GH_TOKEN: ${{ github.token }}
           RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
         run: |
           set -euo pipefail
