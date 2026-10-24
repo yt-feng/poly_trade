@@ -22,6 +22,7 @@ import run_quality_first_research as delivery
 
 SSH_TIMEOUT_SECONDS = 45
 OUTPUT_LIMIT = 256 * 1024
+IDENTITY_CHECK_SECONDS = 5
 
 # Fixed source, sent over stdin. Its only filesystem access is bounded reads,
 # directory existence/statvfs and module/command discovery, never a data scan.
@@ -93,11 +94,23 @@ print(json.dumps(report, sort_keys=True))
 '''
 
 
+def normalize_private_key(value):
+    """Repair only transport formatting, never decode or replace key material."""
+    if not isinstance(value, str) or len(value) > 32768:
+        raise ValueError('SSH_IDENTITY_REQUIRED')
+    value = value.strip().replace('\r\n', '\n')
+    # A one-line escaped secret is distinct from a mixed-format key. Leave
+    # mixed literal/newline content unchanged for the parser to reject.
+    if '\n' not in value and '\\n' in value:
+        value = value.replace('\\n', '\n')
+    return value.rstrip('\n') + '\n' if value else value
+
+
 def configuration(environment):
     host = environment.get('CORPUS_SSH_HOST', '')
     user = environment.get('CORPUS_SSH_USER', '')
     trusted = environment.get('CORPUS_SSH_KNOWN_HOSTS', '')
-    private_key = environment.get('AWS_ADMIN_SSH_KEY', '')
+    private_key = normalize_private_key(environment.get('AWS_ADMIN_SSH_KEY', ''))
     if not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?', host):
         raise ValueError('INVALID_HOST')
     if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', user):
@@ -135,6 +148,27 @@ def ssh_command(host, user, identity, known_hosts):
             user + '@' + host, 'python3 -']
 
 
+def check_identity(identity, execute):
+    """Cloud-only caller; derived public key is discarded, diagnostic sealed."""
+    try:
+        result = execute(['ssh-keygen', '-y', '-P', '', '-f', str(identity)],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         timeout=IDENTITY_CHECK_SECONDS, check=False)
+        error = result.stderr or b''
+        return {'status': 'parseable' if result.returncode == 0 else 'unparseable',
+                'returncode': result.returncode,
+                'stderr_base64': base64.b64encode(error[:4096]).decode(),
+                'stderr_truncated': len(error) > 4096}
+    except subprocess.TimeoutExpired as exc:
+        error = exc.stderr or b''
+        return {'status': 'check_timeout', 'returncode': None,
+                'stderr_base64': base64.b64encode(error[:4096]).decode(),
+                'stderr_truncated': len(error) > 4096}
+    except Exception as exc:
+        return {'status': 'check_unavailable', 'returncode': None,
+                'error_class': type(exc).__name__}
+
+
 def observe(environment=None, execute=None):
     environment = os.environ if environment is None else environment
     if environment.get('GITHUB_ACTIONS') != 'true':
@@ -147,13 +181,19 @@ def observe(environment=None, execute=None):
               'run_id': environment.get('GITHUB_RUN_ID'),
               'host': host, 'user': user, 'strategy_evaluated': False,
               'corpus_uploaded': False, 'host_key_policy': 'strict_preconfigured_pin',
+              'key_format_normalized': private_key != environment.get('AWS_ADMIN_SSH_KEY', ''),
               'budgets': {'ssh_seconds': SSH_TIMEOUT_SECONDS,
+                          'identity_check_seconds': IDENTITY_CHECK_SECONDS,
                           'remote_seconds': 35, 'output_bytes_per_stream': OUTPUT_LIMIT}}
     with tempfile.TemporaryDirectory(prefix='corpus-probe-identity-') as folder:
         private = Path(folder)
         identity, known = private / 'identity', private / 'known_hosts'
         research_vault.write_new(identity, private_key.encode(), 0o600)
         research_vault.write_new(known, trusted.encode(), 0o600)
+        result['identity_check'] = check_identity(identity, execute)
+        if result['identity_check']['status'] != 'parseable':
+            result.update(status='identity_preflight_failed', returncode=None)
+            return result
         try:
             completed = execute(ssh_command(host, user, identity, known),
                                 input=REMOTE_PROBE.encode(), stdout=subprocess.PIPE,

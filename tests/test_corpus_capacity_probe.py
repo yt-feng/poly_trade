@@ -52,6 +52,10 @@ class CapacityProbeTests(unittest.TestCase):
     def test_strict_pin_private_files_fixed_command_and_timeout(self):
         private_paths = []
         def execute(command, **kwargs):
+            if command[0] == 'ssh-keygen':
+                self.assertEqual(command[1:5], ['-y', '-P', '', '-f'])
+                self.assertEqual(kwargs['timeout'], 5)
+                return subprocess.CompletedProcess(command, 0, b'DERIVED_KEY_MUST_BE_DISCARDED', b'')
             identity = Path(command[command.index('-i') + 1])
             known = Path(next(x.split('=', 1)[1] for x in command if x.startswith('UserKnownHostsFile=')))
             private_paths.extend((identity, known))
@@ -68,14 +72,45 @@ class CapacityProbeTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, b'{"scope":"read_only_capacity_no_data_scan"}', b'')
         result = probe.observe(self.env, execute)
         self.assertEqual(result['status'], 'observed')
+        self.assertNotIn('DERIVED_KEY_MUST_BE_DISCARDED', json.dumps(result))
         self.assertTrue(all(not path.exists() for path in private_paths))
 
     def test_timeout_preserves_bounded_private_diagnostics(self):
-        def timeout(*args, **kwargs):
+        def timeout(command, **kwargs):
+            if command[0] == 'ssh-keygen':
+                return subprocess.CompletedProcess(command, 0, b'PUBLIC', b'')
             raise subprocess.TimeoutExpired('ssh', 45, output=b'private-output', stderr=b'private-host-error')
         result = probe.observe(self.env, timeout)
         self.assertEqual(result['status'], 'transport_timeout')
         self.assertEqual(base64.b64decode(result['stderr_base64']), b'private-host-error')
+
+    def test_normalization_repairs_only_whitespace_and_line_encoding(self):
+        canonical = self.env['AWS_ADMIN_SSH_KEY']
+        for value in (canonical, canonical.rstrip('\n'),
+                      ' \t' + canonical + '\n  ',
+                      canonical.replace('\n', '\r\n'),
+                      canonical.replace('\n', '\\n')):
+            with self.subTest(value_type=len(value)):
+                self.assertEqual(probe.normalize_private_key(value), canonical)
+                configured = probe.configuration({**self.env, 'AWS_ADMIN_SSH_KEY': value})
+                self.assertEqual(configured[3], canonical)
+        mixed = canonical.replace('\n', '\\n', 1)
+        self.assertEqual(probe.normalize_private_key(mixed), mixed)
+        self.assertEqual(probe.normalize_private_key(probe.normalize_private_key(canonical)), canonical)
+
+    def test_invalid_identity_stops_before_ssh_and_cleans_private_file(self):
+        calls, paths = [], []
+        def execute(command, **kwargs):
+            calls.append(command)
+            self.assertEqual(command[0], 'ssh-keygen')
+            paths.append(Path(command[-1]))
+            return subprocess.CompletedProcess(command, 255, b'DISCARD_PUBLIC_OUTPUT', b'error in libcrypto')
+        result = probe.observe(self.env, execute)
+        self.assertEqual(result['status'], 'identity_preflight_failed')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result['identity_check']['status'], 'unparseable')
+        self.assertNotIn('DISCARD_PUBLIC_OUTPUT', json.dumps(result))
+        self.assertTrue(all(not path.exists() for path in paths))
 
     def test_only_ciphertext_and_generic_status_are_delivered(self):
         marker = 'PRIVATE_CAPACITY_AND_HOST_DETAILS'
