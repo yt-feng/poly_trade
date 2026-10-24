@@ -89,12 +89,16 @@ def validate_dispatch(mode: str, frozen_input_b64: str | None, initial_cash: flo
     threshold = frozen.get("threshold")
     if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not math.isfinite(threshold):
         raise PreflightError("FROZEN_EPISODE_INVALID")
-    if frozen.get("kind") == "research_challenger":
+    if payload.get("kind") == "research_challenger":
         try:
-            validate_research_challenger(frozen)
+            # The research runner validates the signed payload after removing
+            # its outer sha256 envelope field. Keep the dispatch preflight in
+            # lockstep so a valid challenger is not rejected merely because
+            # the envelope signature is still attached during episode checks.
+            validate_research_challenger(payload)
         except Exception as exc:
             raise PreflightError("FROZEN_EPISODE_INVALID") from exc
-    elif frozen.get("kind") is not None:
+    elif payload.get("kind") is not None:
         raise PreflightError("FROZEN_KIND_INVALID")
     return {"mode": mode, "forward_input_checked": True}
 

@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 
-from quality_first_research import digest, protocol_contract
+from quality_first_research import digest, protocol_contract, research_challenger_payload
 from research_dispatch_preflight import PreflightError, validate_dispatch
 
 
@@ -43,6 +43,12 @@ class DispatchPreflightTests(unittest.TestCase):
 
     def test_forward_accepts_exact_frozen_protocol_payload(self):
         self.assertTrue(validate_dispatch("forward", encode(frozen_payload()))["forward_input_checked"])
+
+    def test_forward_accepts_signed_research_challenger_after_envelope_check(self):
+        challenger = research_challenger_payload(
+            {"family": "spot_residual", "coef": [0.0] * 7, "fit_cutoff_ms": 0},
+            "source", 0, 10.0, 0)
+        self.assertTrue(validate_dispatch("forward", encode(challenger))["forward_input_checked"])
 
     def test_forward_rejects_tampered_payload_without_exposing_details(self):
         payload = frozen_payload()
