@@ -184,9 +184,10 @@ def build_report(features: pd.DataFrame, domains: pd.DataFrame, scores: pd.DataF
             cash += pending[1]
             pending = None
         try:
-            if not (_true(domain["simulation_cash_domain_observed"], "simulation_cash_domain_observed")
-                    and _true(domain["minimum_order_has_pair_capacity"], "minimum_order_has_pair_capacity")):
-                raise ValueError("domain_cash_or_minimum_gate_false")
+            if not _true(domain["simulation_cash_domain_observed"], "simulation_cash_domain_observed"):
+                raise ValueError("simulation_cash_domain_not_observed")
+            if not _true(domain["minimum_order_has_pair_capacity"], "minimum_order_has_pair_capacity"):
+                raise ValueError("minimum_pair_capacity_false")
             if domain["entry_quote_status"] != "selected" or domain["exit_quote_status"] != "selected":
                 raise ValueError("quote_not_selected")
             if not (_true(domain["entry_full_book_valid"], "entry_full_book_valid")
