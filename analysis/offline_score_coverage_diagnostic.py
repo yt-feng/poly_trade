@@ -32,7 +32,8 @@ SCORE_FIELDS = {
     "cash_domain_label_available_ts",
     "net_cash_difference_per_share",
 }
-CANDIDATE_FIELDS = {"market_id", "decision_expected_net_margin"}
+CANDIDATE_ID_FIELD = "market_id"
+CANDIDATE_MARGIN_FIELDS = ("predicted_net_margin_per_share", "decision_expected_net_margin")
 THRESHOLDS = (0.0, 0.01, 0.02, 0.03, 0.05)
 
 
@@ -93,11 +94,16 @@ def _read_candidates(path: Path) -> tuple[list[dict[str, Any]], str]:
             if not line.strip():
                 continue
             value = json.loads(line)
-            if not isinstance(value, dict) or not CANDIDATE_FIELDS.issubset(value):
+            if not isinstance(value, dict) or not value.get(CANDIDATE_ID_FIELD):
                 raise ValueError(f"candidate row {line_number} missing fields")
-            value["decision_expected_net_margin"] = _finite(
-                value["decision_expected_net_margin"], "decision_expected_net_margin"
-            )
+            margin_field = next((field for field in CANDIDATE_MARGIN_FIELDS if field in value), None)
+            if margin_field is None:
+                raise ValueError(f"candidate row {line_number} missing fields")
+            # The frozen producer writes nullable predictions for unsupported or
+            # invalid rows.  Keep those rows in the aggregate population while
+            # excluding their null margin from threshold and min/max counts.
+            margin = value[margin_field]
+            value["_coverage_margin"] = None if margin is None else _finite(margin, margin_field)
             rows.append(value)
     if not rows:
         raise ValueError("candidate rows are empty")
@@ -116,9 +122,9 @@ def build_report(
     candidate_rows = list(candidates)
     margins = [_finite(row["predicted_net_margin_per_share"], "predicted_net_margin_per_share") for row in score_rows]
     score_market_ids = {row["market_id"] for row in score_rows}
-    candidate_market_ids = {str(row["market_id"]) for row in candidate_rows}
+    candidate_market_ids = {str(row[CANDIDATE_ID_FIELD]) for row in candidate_rows}
     overlap = score_market_ids.intersection(candidate_market_ids)
-    candidate_margins = [float(row["decision_expected_net_margin"]) for row in candidate_rows]
+    candidate_margins = [float(row["_coverage_margin"]) for row in candidate_rows if row["_coverage_margin"] is not None]
     threshold_counts = {
         f"ge_{threshold:g}": sum(value >= threshold for value in margins)
         for threshold in THRESHOLDS
@@ -140,8 +146,9 @@ def build_report(
             {row["market_id"] for row in score_rows if _finite(row["predicted_net_margin_per_share"], "predicted_net_margin_per_share") >= edge_floor}
         ),
         "candidate_rows_at_or_above_frozen_edge_floor": sum(value >= edge_floor for value in candidate_margins),
-        "candidate_max_expected_net_margin": max(candidate_margins),
-        "candidate_min_expected_net_margin": min(candidate_margins),
+        "candidate_rows_with_finite_margin": len(candidate_margins),
+        "candidate_max_expected_net_margin": max(candidate_margins) if candidate_margins else None,
+        "candidate_min_expected_net_margin": min(candidate_margins) if candidate_margins else None,
         "edge_floor": edge_floor,
         "model_fit_calls": 0,
         "model_predict_calls": 0,

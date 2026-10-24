@@ -67,3 +67,35 @@ def test_invalid_timestamp_is_rejected(tmp_path: Path) -> None:
         assert "invalid timestamp" in str(exc)
     else:
         raise AssertionError("invalid timestamp was accepted")
+
+
+def test_actual_candidate_gate_schema_and_nullable_predictions(tmp_path: Path) -> None:
+    scores, candidates, output = _write_fixture(tmp_path)
+    candidates.write_text(
+        "\n".join(
+            [
+                json.dumps({
+                    "candidate_index": 0,
+                    "market_id": "m1",
+                    "prediction_status": "available",
+                    "predicted_net_margin_per_share": 0.03,
+                    "passes_margin_veto": True,
+                }),
+                json.dumps({
+                    "candidate_index": 1,
+                    "market_id": "m2",
+                    "prediction_status": "invalid_prediction",
+                    "predicted_net_margin_per_share": None,
+                    "passes_margin_veto": False,
+                }),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert main(["--scores", str(scores), "--candidates", str(candidates), "--output", str(output)]) == 0
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["candidate_rows"] == 2
+    assert report["candidate_rows_with_finite_margin"] == 1
+    assert report["candidate_rows_at_or_above_frozen_edge_floor"] == 1
+    assert report["candidate_max_expected_net_margin"] == 0.03
