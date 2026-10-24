@@ -103,6 +103,7 @@ def _test_cohort(features: pd.DataFrame, scores: pd.DataFrame, domains: pd.DataF
         raise ValueError("test_run_binding_invalid")
     test_runs = runs[minimum:]
     cohort = features[features["run_name"].isin(test_runs)].copy()
+    domains = domains[domains["run_name"].isin(test_runs)].copy()
     if any(frame["market_id"].duplicated().any() for frame in (cohort, scores, domains)):
         raise ValueError("duplicate_market_identity")
     if not (list(cohort.market_id) == list(domains.market_id) == list(scores.market_id)):
