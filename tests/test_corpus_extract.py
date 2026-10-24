@@ -27,6 +27,17 @@ class CorpusExtractTests(unittest.TestCase):
         self.assertNotIn('host', ' '.join(extract.FAILURE_CODES.values()))
         self.assertNotIn('secret', ' '.join(extract.FAILURE_CODES.values()))
 
+    def test_public_evidence_codes_are_fixed_and_content_free(self):
+        completed = extract.public_evidence_codes({'status': 'remote_result_received',
+                                                   'extraction': {'status': 'batch_observed',
+                                                                  'metadata_cursor_committed': True,
+                                                                  'coverage': {}}})
+        self.assertEqual(completed, {'evidence_code': 'worker_completed', 'cursor_code': 'committed', 'coverage_code': 'present'})
+        readback = extract.public_evidence_codes({'status': 'remote_result_received',
+                                                  'extraction': {'status': 'readback_observed', 'coverage': {}}})
+        self.assertEqual(readback['cursor_code'], 'readback_no_advance')
+        self.assertNotIn('host', repr(completed)); self.assertNotIn('secret', repr(completed))
+
     def test_cloud_gate_precedes_identity_source_or_transport(self):
         with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}), \
                 patch.object(extract.probe, 'configuration') as configuration, \

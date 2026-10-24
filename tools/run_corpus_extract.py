@@ -33,6 +33,53 @@ FAILURE_CODES = {
     'remote_result_too_large': 'remote_result_too_large',
     'configuration_rejected': 'configuration_rejected',
 }
+EVIDENCE_CODES = {
+    'worker_completed', 'readback_observed', 'deferred', 'worker_failed',
+    'worker_timeout', 'remote_transport_failed', 'remote_timeout_unknown',
+    'remote_result_too_large', 'remote_report_unclassified',
+    'configuration_rejected', 'unknown',
+}
+CURSOR_CODES = {'committed', 'not_committed', 'readback_no_advance', 'unknown'}
+COVERAGE_CODES = {'present', 'absent', 'unknown'}
+
+
+def public_evidence_codes(record):
+    """Return fixed operational categories without exposing report content."""
+    if not isinstance(record, dict):
+        return {'evidence_code': 'unknown', 'cursor_code': 'unknown', 'coverage_code': 'unknown'}
+    outer = record.get('status')
+    if outer == 'remote_failed':
+        return {'evidence_code': 'remote_transport_failed', 'cursor_code': 'unknown', 'coverage_code': 'unknown'}
+    if outer == 'remote_outcome_unknown_requires_readback':
+        return {'evidence_code': 'remote_timeout_unknown', 'cursor_code': 'unknown', 'coverage_code': 'unknown'}
+    if outer == 'remote_result_too_large':
+        return {'evidence_code': 'remote_result_too_large', 'cursor_code': 'unknown', 'coverage_code': 'unknown'}
+    if outer == 'identity_preflight_failed':
+        return {'evidence_code': 'configuration_rejected', 'cursor_code': 'unknown', 'coverage_code': 'unknown'}
+    if outer != 'remote_result_received' or not isinstance(record.get('extraction'), dict):
+        return {'evidence_code': 'configuration_rejected' if outer == 'configuration_rejected' else 'unknown',
+                'cursor_code': 'unknown', 'coverage_code': 'unknown'}
+    extraction = record['extraction']
+    state = extraction.get('status')
+    evidence = {
+        'batch_observed': 'worker_completed',
+        'readback_observed': 'readback_observed',
+        'worker_failed': 'worker_failed',
+        'worker_timeout_checkpoint_recovery_pending': 'worker_timeout',
+        'deferred_capacity': 'deferred',
+        'deferred_capacity_after_dependency': 'deferred',
+        'deferred_active_extraction_controller': 'deferred',
+        'deferred_active_worker': 'deferred',
+        'deferred_no_complete_uploaded_sources': 'deferred',
+    }.get(state, 'remote_report_unclassified')
+    if state == 'readback_observed':
+        cursor = 'readback_no_advance'
+    elif type(extraction.get('metadata_cursor_committed')) is bool:
+        cursor = 'committed' if extraction['metadata_cursor_committed'] else 'not_committed'
+    else:
+        cursor = 'unknown'
+    coverage = 'present' if isinstance(extraction.get('coverage'), dict) else 'unknown'
+    return {'evidence_code': evidence, 'cursor_code': cursor, 'coverage_code': coverage}
 
 REMOTE_EXTRACT = r'''
 import base64, datetime, fcntl, hashlib, importlib.util, json, os, pathlib, re, resource, signal, stat, subprocess, sys, urllib.request
@@ -1036,6 +1083,7 @@ def main():
         status = {'version': 1, 'status': 'complete' if successful else 'failed',
                   'stage': 'sealed_delivery', 'strategy_evaluated': False,
                   'live_orders_enabled': False, 'plaintext_published': False}
+        status.update(public_evidence_codes(record))
         if not successful:
             status['failed_stage'] = 'acquisition'
             record_status = record.get('status')

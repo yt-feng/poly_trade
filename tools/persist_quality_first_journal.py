@@ -31,6 +31,15 @@ FAILURE_CODES = {
     'configuration_rejected', 'remote_report_not_successful',
     'acquisition_unclassified',
 }
+OPERATIONAL_KEYS = {'evidence_code', 'cursor_code', 'coverage_code'}
+EVIDENCE_CODES = {
+    'worker_completed', 'readback_observed', 'deferred', 'worker_failed',
+    'worker_timeout', 'remote_transport_failed', 'remote_timeout_unknown',
+    'remote_result_too_large', 'remote_report_unclassified',
+    'configuration_rejected', 'unknown',
+}
+CURSOR_CODES = {'committed', 'not_committed', 'readback_no_advance', 'unknown'}
+COVERAGE_CODES = {'present', 'absent', 'unknown'}
 
 
 def validate_status(value):
@@ -38,10 +47,11 @@ def validate_status(value):
         raise ValueError('INVALID_STATUS_SCHEMA')
     outcome = value.get('status')
     expected = STATUS_KEYS | ({'failed_stage'} if outcome == 'failed' else set())
-    allowed = [expected]
+    allowed = [expected, expected | OPERATIONAL_KEYS]
     # Keep old failed envelopes valid while accepting the new bounded category.
     if outcome == 'failed':
         allowed.append(expected | {'failure_code'})
+        allowed.append(expected | OPERATIONAL_KEYS | {'failure_code'})
     if set(value) not in allowed or outcome not in {'complete', 'failed'}:
         raise ValueError('INVALID_STATUS_SCHEMA')
     if type(value['version']) is not int or value['version'] != 1:
@@ -61,10 +71,17 @@ def validate_status(value):
         raise ValueError('INVALID_FAILURE_STAGE')
     if outcome == 'failed' and 'failure_code' in value and value['failure_code'] not in FAILURE_CODES:
         raise ValueError('INVALID_FAILURE_CODE')
+    if 'evidence_code' in value and value['evidence_code'] not in EVIDENCE_CODES:
+        raise ValueError('INVALID_EVIDENCE_CODE')
+    if 'cursor_code' in value and value['cursor_code'] not in CURSOR_CODES:
+        raise ValueError('INVALID_CURSOR_CODE')
+    if 'coverage_code' in value and value['coverage_code'] not in COVERAGE_CODES:
+        raise ValueError('INVALID_COVERAGE_CODE')
     # Return a fresh allowlisted record. No free text, paths, identity or metrics.
     keys = set(expected)
     if outcome == 'failed' and 'failure_code' in value:
         keys.add('failure_code')
+    keys.update(OPERATIONAL_KEYS & set(value))
     return {key: value[key] for key in sorted(keys)}
 
 

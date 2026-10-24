@@ -149,6 +149,17 @@ class SealedJournalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'FAILURE_CODE'):
             self.persist()
 
+    def test_operational_evidence_codes_are_allowlisted(self):
+        self.status.update(evidence_code='worker_completed', cursor_code='committed', coverage_code='present')
+        self.write_status()
+        result = self.persist()
+        stored = json.loads((self.episodes / result['episode_id'] / 'status.json').read_text())
+        self.assertEqual(stored['coverage_code'], 'present')
+        self.status['coverage_code'] = 'private-content'
+        self.write_status()
+        with self.assertRaisesRegex(ValueError, 'COVERAGE_CODE'):
+            self.persist()
+
     def test_manual_work_summary_uses_same_envelope_without_claiming_evaluation(self):
         self.status['strategy_evaluated'] = False
         self.write_status()
