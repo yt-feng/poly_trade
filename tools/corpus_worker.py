@@ -11,12 +11,14 @@ import codecs
 import contextlib
 import csv
 import datetime as dt
+import fcntl
 import hashlib
 import io
 import json
 import math
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import sqlite3
 import stat
@@ -69,8 +71,34 @@ def parser_protocol(extension, args):
                         batch_rows=args.table_rows)
     elif extension == '.pdf':
         protocol['unit'] = 'page'
-        # Adding OCR revisits only explicit OCR gaps; per-page options are recorded.
+        protocol['text_representation'] = 'native_preserved_with_separate_ocr_v2'
+        # Per-page OCR settings/provenance remain explicit; no semantic credit.
     return protocol
+
+
+def explicit_tessdata(value, languages):
+    """Validate explicit task-scoped language files, without a binary dependency."""
+    if not value:
+        raise ValueError('explicit_tessdata_required')
+    path = Path(value)
+    if not path.is_absolute() or not path.is_dir() or path.is_symlink():
+        raise ValueError('invalid_tessdata_directory')
+    for parent in path.parents:
+        if parent.is_symlink():
+            raise ValueError('tessdata_ancestor_symlink')
+    names = languages.split('+') if isinstance(languages, str) else []
+    if not 1 <= len(names) <= 4 or len(names) != len(set(names)):
+        raise ValueError('invalid_ocr_languages')
+    details = []
+    for language in names:
+        if not re.fullmatch('[A-Za-z][A-Za-z0-9_]{0,31}', language):
+            raise ValueError('invalid_ocr_language')
+        file = path / (language + '.traineddata')
+        info = file.lstat()
+        if not stat.S_ISREG(info.st_mode) or file.is_symlink() or not 0 < info.st_size <= 32 * 1024**2:
+            raise ValueError('invalid_tessdata_file')
+        details.append({'language': language, 'bytes': info.st_size})
+    return str(path), details
 
 
 def contained_file(root, relative):
@@ -99,6 +127,21 @@ def atomic(path, data):
 
 class BudgetStop(Exception):
     pass
+
+
+@contextlib.contextmanager
+def worker_lock(path):
+    """The kernel releases ownership even after SIGKILL; retain the lock inode."""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('worker_lock_not_regular')
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.ftruncate(fd, 0)
+        os.write(fd, canonical({'pid': os.getpid(), 'created_utc': now(), 'ownership': 'kernel_flock'}))
+        yield
+    finally:
+        os.close(fd)
 
 
 def cloud_guard(backend, preflight):
@@ -157,6 +200,11 @@ class Worker:
             config TEXT, result TEXT);
           CREATE TABLE IF NOT EXISTS source_protocols (
             source_id TEXT PRIMARY KEY, protocol TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS scheduler_state (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS page_attempts (
+            source_id TEXT PRIMARY KEY, unit_index INTEGER NOT NULL,
+            capability_id TEXT NOT NULL, attempt_id TEXT NOT NULL, status TEXT NOT NULL);
         ''')
         self.db.row_factory = sqlite3.Row
         self.run_id = str(time.time_ns())
@@ -166,6 +214,82 @@ class Worker:
                             'max_seconds': args.max_seconds, 'max_output_bytes': args.max_output_bytes,
                             'max_memory_mib': args.max_memory_mib,
                             'max_page_pixels': args.max_page_pixels}).decode(), None))
+        self.db.commit()
+        self.recover_interrupted_pages()
+
+    def pdf_capability(self):
+        return sha(canonical({'version': 1, 'backend_capability': getattr(self.args, 'capability_id', ''),
+                              'ocr': self.args.pdf_ocr, 'languages': self.args.ocr_languages,
+                              'tessdata': getattr(self.args, 'tessdata', None), 'pixels': min(self.args.max_page_pixels, 4000000),
+                              'memory_mib': getattr(self.args, 'max_memory_mib', 2048),
+                              'seconds': getattr(self.args, 'max_seconds', 1800)}))
+
+    def recover_interrupted_pages(self):
+        # Called only while the process owns the worker flock. An unfinished
+        # page is a retained gap, never a reason to loop forever on that page.
+        for attempt in self.db.execute("SELECT * FROM page_attempts WHERE status='started'").fetchall():
+            sid, number = attempt['source_id'], attempt['unit_index']
+            previous = self.db.execute('SELECT * FROM units WHERE source_id=? AND unit_index=?', (sid, number)).fetchone()
+            metadata = json.loads(previous['metadata']) if previous else {}
+            committed = metadata.get('page_attempt_id') == attempt['attempt_id']
+            if not committed:
+                metadata.update(interruption_reason='previous_worker_did_not_finalize_page',
+                                interrupted_capability_id=attempt['capability_id'],
+                                interrupted_attempt_id=attempt['attempt_id'], semantic_read=False)
+                if previous:
+                    self.db.execute("UPDATE units SET status='pending_page_interrupted',metadata=? WHERE source_id=? AND unit_index=?",
+                                    (canonical(metadata).decode(), sid, number))
+                else:
+                    self.db.execute('INSERT INTO units VALUES (?,?,?,?,?,?,?)',
+                                    (sid, number, 'page', None, None, 'pending_page_interrupted', canonical(metadata).decode()))
+            self.db.execute("UPDATE sources SET cursor=MAX(cursor,?),status='extracting',updated_utc=? WHERE source_id=?",
+                            (number + 1, now(), sid))
+            self.db.execute("UPDATE page_attempts SET status=? WHERE source_id=?",
+                            ('recovered_committed' if committed else 'recovered_pending', sid))
+        self.db.commit()
+
+    def pending_page_retryable(self, unit):
+        metadata = json.loads(unit['metadata']) if isinstance(unit['metadata'], str) else unit['metadata']
+        pixels = min(self.args.max_page_pixels, 4000000)
+        if unit['status'] == 'pending_visual_resolution':
+            required = metadata.get('visual_required_pixels')
+            return isinstance(required, (int, float)) and required <= pixels
+        if unit['status'] == 'pending_page_interrupted':
+            return metadata.get('interrupted_capability_id') != self.pdf_capability()
+        if unit['status'] != 'pending_ocr' or not self.args.pdf_ocr:
+            return False
+        if metadata.get('ocr_status') == 'pending_ocr_render_capacity':
+            required = metadata.get('ocr_required_pixels')
+            return isinstance(required, (int, float)) and required <= pixels
+        return metadata.get('ocr_capability_id') != self.pdf_capability()
+
+    def retryable_pages(self, sid):
+        rows = self.db.execute("SELECT * FROM units WHERE source_id=? AND status IN ('pending_ocr','pending_visual_resolution','pending_page_interrupted')", (sid,)).fetchall()
+        return [row['unit_index'] for row in rows if self.pending_page_retryable(row)]
+
+    def source_retryable(self, row):
+        if row['status'] in ('inventoried', 'transferred', 'extracting', 'pending_transfer'):
+            return True
+        if row['status'] == 'partial_pending_page_capability':
+            return bool(self.retryable_pages(row['source_id']))
+        notes = json.loads(row['notes'])
+        if row['status'] == 'pending_pdf_dependency':
+            return notes.get('attempted_capability_id') != self.pdf_capability()
+        if row['status'] == 'pending_memory_capacity':
+            return self.args.max_memory_mib > notes.get('max_memory_mib', self.args.max_memory_mib)
+        return False
+
+    def next_source(self, visited):
+        rows = self.db.execute("SELECT * FROM sources WHERE status IN ('inventoried','transferred','extracting','pending_transfer','partial_pending_page_capability','pending_pdf_dependency','pending_memory_capacity') ORDER BY archive_depth,source_id").fetchall()
+        rows = [row for row in rows if row['source_id'] not in visited and self.source_retryable(row)]
+        previous = self.db.execute("SELECT value FROM scheduler_state WHERE key='last_source'").fetchone()
+        last = tuple(json.loads(previous[0])) if previous else (-1, '')
+        following = [row for row in rows if (row['archive_depth'], row['source_id']) > last]
+        return next(iter(following or rows), None)
+
+    def mark_scheduled(self, row):
+        self.db.execute('INSERT OR REPLACE INTO scheduler_state VALUES (?,?)',
+                        ('last_source', canonical([row['archive_depth'], row['source_id']]).decode()))
         self.db.commit()
 
     def check(self, more_bytes=0):
@@ -206,7 +330,9 @@ class Worker:
         self.check(0 if raw is None else len(raw))
         artifact = None
         if raw is not None:
-            p = self.out / 'units' / sha(sid.encode()) / (f'{index:09d}.{suffix}')
+            # Preserve the previous committed artifact if a process dies after
+            # writing new evidence but before the SQLite transaction commits.
+            p = self.out / 'units' / sha(sid.encode()) / (f'{index:09d}-{sha(raw)}.{suffix}')
             atomic(p, raw)
             artifact = str(p.relative_to(self.out))
             self.bytes_written += len(raw)
@@ -304,7 +430,8 @@ class Worker:
         try:
             import pymupdf
         except ImportError:
-            self.state(row['source_id'], status='pending_pdf_dependency')
+            self.state(row['source_id'], status='pending_pdf_dependency',
+                       notes={'attempted_capability_id': self.pdf_capability()})
             return
         sid = row['source_id']
         with pymupdf.open(path) as doc:
@@ -312,26 +439,40 @@ class Worker:
                 self.state(sid, status='blocked_encrypted_pdf')
                 return
             self.state(sid, total_units=len(doc), unit_kind='pages')
-            pending_indices = [r[0] for r in self.db.execute("SELECT unit_index FROM units WHERE source_id=? AND status IN ('pending_ocr','pending_visual_resolution')", (sid,))] if self.args.retry_pending else []
+            pending_indices = self.retryable_pages(sid)
             indices = sorted(set(pending_indices) | set(range(row['cursor'], len(doc))))
             for number in indices:
                 self.check()
+                attempt_id = self.run_id + ':' + str(number)
+                self.db.execute('INSERT OR REPLACE INTO page_attempts VALUES (?,?,?,?,?)',
+                                (sid, number, self.pdf_capability(), attempt_id, 'started'))
+                self.db.commit()
                 page = doc[number]
-                text = page.get_text('text', sort=True)
+                native_text = page.get_text('text', sort=True)
+                ocr_text = None
+                text = native_text
                 raster_images = len(page.get_images())
                 drawings = len(page.get_drawings())
                 area = max(1.0, float(page.rect.width) * float(page.rect.height))
-                needs_ocr = len(text.strip()) < 40 or raster_images > 0
+                needs_ocr = len(native_text.strip()) < 40 or raster_images > 0 or drawings > 0
                 ocr_status = 'not_required'
+                ocr_full = None
+                tessdata_files = None
                 if needs_ocr:
-                    if area * (150 / 72) ** 2 > self.args.max_page_pixels:
+                    if area * (150 / 72) ** 2 > min(self.args.max_page_pixels, 4000000):
                         ocr_status = 'pending_ocr_render_capacity'
-                    elif self.args.pdf_ocr and shutil.which('tesseract'):
+                    elif self.args.pdf_ocr:
                         self.check(int(area * (150 / 72) ** 2 * 4) + 65536)
                         try:
-                            tp = page.get_textpage_ocr(language=self.args.ocr_languages, dpi=150, full=True)
-                            text = page.get_text('text', textpage=tp, sort=True)
-                            ocr_status = 'performed_unverified'
+                            tessdata, tessdata_files = explicit_tessdata(getattr(self.args, 'tessdata', None), self.args.ocr_languages)
+                            # MuPDF embeds Tesseract; only language data is external.
+                            # Preserve native text and expose OCR as separate evidence.
+                            ocr_full = not bool(native_text.strip())
+                            tp = page.get_textpage_ocr(language=self.args.ocr_languages, dpi=150,
+                                                      full=ocr_full, tessdata=tessdata)
+                            ocr_text = page.get_text('text', textpage=tp, sort=True)
+                            text = native_text if native_text.strip() else ocr_text
+                            ocr_status = 'performed_unverified' if ocr_text.strip() else 'pending_ocr_empty_result'
                         except Exception as exc:
                             ocr_status = 'pending_ocr_' + type(exc).__name__
                     else:
@@ -339,23 +480,33 @@ class Worker:
                 visual_path = None
                 render_scale = None
                 if raster_images or drawings or needs_ocr:
-                    render_scale = min(1.0, math.sqrt(self.args.max_page_pixels / area))
+                    render_scale = min(1.0, math.sqrt(min(self.args.max_page_pixels, 4000000) / area))
                     # Check the uncompressed allocation estimate before creating a pixmap.
                     self.check(int(area * render_scale * render_scale * 4) + 65536)
                     rendered = page.get_pixmap(matrix=pymupdf.Matrix(render_scale, render_scale), alpha=False).tobytes('png')
                     self.check(len(rendered))
-                    visual = self.out / 'visuals' / sha(sid.encode()) / f'page-{number+1:06d}.png'
+                    visual = self.out / 'visuals' / sha(sid.encode()) / f'page-{number+1:06d}-{sha(rendered)}.png'
                     atomic(visual, rendered)
                     self.bytes_written += len(rendered)
                     visual_path = str(visual.relative_to(self.out))
-                self.unit(sid, number, 'page', {'page': number + 1, 'text': text},
+                self.unit(sid, number, 'page', {'page': number + 1, 'text': text,
+                                              'native_text': native_text, 'ocr_text': ocr_text,
+                                              'text_primary_source': 'native' if native_text.strip() else 'ocr' if ocr_text is not None else 'native_empty'},
                           {'page': number + 1, 'ocr_status': ocr_status, 'raster_images': raster_images,
                            'vector_drawings': drawings, 'visual_artifact': visual_path,
                            'render_scale': render_scale, 'full_resolution_visual_pending': bool(render_scale is not None and render_scale < 1),
                            'ocr_languages': self.args.ocr_languages if self.args.pdf_ocr else None,
+                           'ocr_full_page': ocr_full, 'tessdata_files': tessdata_files,
+                           'ocr_required_pixels': math.ceil(area * (150 / 72) ** 2),
+                           'visual_required_pixels': math.ceil(area),
+                           'ocr_capability_id': self.pdf_capability(), 'page_attempt_id': attempt_id,
+                           'ocr_text_semantics': 'partial_mode_includes_native_text_and_ocr_additions; separate_evidence_not_merged_or_verified',
+                           'native_text_preserved': True, 'ocr_quality_verified': False,
                            'visual_review_required': bool(visual_path), 'formula_validation_complete': False},
                           status='pending_ocr' if ocr_status.startswith('pending') else 'pending_visual_resolution' if render_scale is not None and render_scale < 1 else 'extracted')
                 self.state(sid, cursor=max(row['cursor'], number + 1), status='extracting')
+                self.db.execute("UPDATE page_attempts SET status='complete' WHERE source_id=?", (sid,))
+                self.db.commit()
             pending = self.db.execute("SELECT count(*) FROM units WHERE source_id=? AND status!='extracted'", (sid,)).fetchone()[0]
             self.state(sid, status='partial_pending_page_capability' if pending else 'extracted',
                        notes={'pages_with_extraction_gap': pending, 'visual_and_formula_semantic_review': 'not_performed'})
@@ -582,12 +733,11 @@ class Worker:
         try:
             while processed < self.args.max_files:
                 self.check()
-                selection = "status NOT IN ('extracted','duplicate_linked','container_expanded','container_expanded_with_gaps')" if self.args.retry_pending else "status IN ('inventoried','transferred','extracting','pending_transfer')"
-                rows = self.db.execute('SELECT * FROM sources WHERE ' + selection + ' ORDER BY archive_depth, source_id').fetchall()
-                row = next((r for r in rows if r['source_id'] not in visited), None)
+                row = self.next_source(visited)
                 if row is None:
                     break
                 visited.add(row['source_id'])
+                self.mark_scheduled(row)
                 try:
                     source_path = contained_file(Path(row['source_root']), row['relative_path'])
                     if not source_path.is_file():
@@ -610,6 +760,10 @@ class Worker:
                 reason = 'file_budget'
         except BudgetStop as exc:
             reason = str(exc)
+            # A cooperative budget exit is resumable at the same page; it is
+            # distinct from an abruptly terminated page attempt.
+            self.db.execute("UPDATE page_attempts SET status='deferred_budget' WHERE status='started'")
+            self.db.commit()
         return self.export(reason)
 
 
@@ -657,9 +811,11 @@ def main():
     parser.add_argument('--table-rows', type=int, default=10000)
     parser.add_argument('--pdf-ocr', action='store_true')
     parser.add_argument('--ocr-languages', default='eng+chi_sim')
-    parser.add_argument('--max-page-pixels', type=int, default=8000000)
+    parser.add_argument('--tessdata', help='Explicit private cloud directory containing required traineddata files')
+    parser.add_argument('--max-page-pixels', type=int, default=4000000)
     parser.add_argument('--max-memory-mib', type=int, default=2048)
-    parser.add_argument('--retry-pending', action='store_true', help='Retry explicit dependency/capacity/format failures after their cause has been repaired')
+    parser.add_argument('--capability-id', default='', help='Verified dependency and runtime capability fingerprint from the cloud controller')
+    parser.add_argument('--retry-pending', action='store_true', help='Compatibility option; retries require changed capability or a resolved capacity gap')
     args = parser.parse_args()
     if min(args.max_files, args.max_units, args.max_seconds, args.max_output_bytes,
            args.max_member_bytes, args.archive_depth, args.text_chunk_chars, args.table_rows,
@@ -668,6 +824,8 @@ def main():
     os.umask(0o077)
     preflight = json.loads(Path(args.preflight).read_text())
     cloud_guard(args.backend, preflight)
+    os.environ['OMP_THREAD_LIMIT'] = '1'
+    os.environ['OMP_NUM_THREADS'] = '1'
     # Cloud-only process ceiling catches decompressor/parser allocations that
     # cannot expose their final size before parsing. Never set on the laptop.
     import resource
@@ -678,20 +836,16 @@ def main():
     resource.setrlimit(resource.RLIMIT_AS, (ceiling, ceiling))
     output = Path(args.output_root)
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock = output / 'worker.lock'
-    fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, 'w') as handle:
-        json.dump({'pid': os.getpid(), 'created_utc': now()}, handle)
-    worker = None
-    try:
-        worker = Worker(args, preflight)
-        result = worker.run()
-        print(json.dumps({'status': 'checkpointed', 'source_count': result['source_count_including_discovered_children'],
-                          'units_written': result['units_written_this_run'], 'stop_reason': result['stop_reason']}))
-    finally:
-        if worker:
-            worker.db.close()
-        lock.unlink()
+    with worker_lock(output / 'worker.lock'):
+        worker = None
+        try:
+            worker = Worker(args, preflight)
+            result = worker.run()
+            print(json.dumps({'status': 'checkpointed', 'source_count': result['source_count_including_discovered_children'],
+                              'units_written': result['units_written_this_run'], 'stop_reason': result['stop_reason']}))
+        finally:
+            if worker:
+                worker.db.close()
 
 
 if __name__ == '__main__':

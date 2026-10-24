@@ -23,6 +23,8 @@ jobs:
         run: |
           python -m py_compile tools/run_corpus_extract.py tools/corpus_worker.py
           python -m unittest discover -s tests -p 'test_corpus_extract.py' -v
+          python -m unittest discover -s tests -p 'test_corpus_worker_ocr.py' -v
+          python -m unittest discover -s tests -p 'test_corpus_worker_recovery.py' -v
       - name: Bounded private cloud extraction and sealed evidence
         env:
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
@@ -30,6 +32,7 @@ jobs:
           CORPUS_SSH_HOST: ${{ secrets.CORPUS_SSH_HOST }}
           CORPUS_SSH_USER: ${{ secrets.CORPUS_SSH_USER }}
           CORPUS_SSH_KNOWN_HOSTS: ${{ secrets.CORPUS_SSH_KNOWN_HOSTS }}
+          CORPUS_DELIVERY_ACK_B64: ${{ secrets.CORPUS_DELIVERY_ACK_B64 }}
           AWS_ADMIN_SSH_KEY: ${{ secrets.AWS_ADMIN_SSH_KEY }}
         run: python tools/run_corpus_extract.py --output sealed-delivery
       - name: Deliver ciphertext and generic operational status only

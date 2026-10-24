@@ -21,12 +21,15 @@ REPORT_LIMIT = 2 * 1024 * 1024
 REMOTE_TIMEOUT_SECONDS = 360
 
 REMOTE_EXTRACT = r'''
-import base64, datetime, fcntl, hashlib, importlib.util, json, os, pathlib, re, resource, signal, stat, subprocess, sys
+import base64, datetime, fcntl, hashlib, importlib.util, json, os, pathlib, re, resource, signal, stat, subprocess, sys, urllib.request
 payload = json.loads(PAYLOAD_LITERAL)
 ROOT = pathlib.Path('/home/ubuntu/quantml-study')
 REPORT_LIMIT = 2 * 1024 * 1024
 MEMORY_LIMIT = 512 * 1024 * 1024
 MAX_METADATA = 64
+ACK_STATE_LIMIT = 32 * 1024 * 1024
+TESSDATA_REVISION = '87416418657359cb625c412a48b6e1d6d41c29bd'
+MAX_TESSDATA_BYTES = 32 * 1024 * 1024
 report = {'version': 1, 'scope': 'bounded_private_cloud_extraction',
           'created_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
           'run_id': payload['run_id'], 'source_commit': payload['source_commit'],
@@ -92,6 +95,287 @@ def available_bytes():
     st = os.statvfs(ROOT)
     return st.f_bavail * st.f_frsize
 
+def worker_lock_busy(path):
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('worker_lock_not_regular')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        return False
+    finally:
+        os.close(fd)
+
+def tessdata_digest(path):
+    info = regular(path, MAX_TESSDATA_BYTES)
+    if info.st_size <= 0:
+        raise ValueError('empty_tessdata')
+    digest = hashlib.sha256()
+    read_bytes = 0
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as source:
+        for block in iter(lambda: source.read(262144), b''):
+            read_bytes += len(block)
+            if read_bytes > MAX_TESSDATA_BYTES:
+                raise ValueError('tessdata_cached_file_limit')
+            digest.update(block)
+    if read_bytes != info.st_size:
+        raise ValueError('tessdata_cached_file_changed')
+    return info.st_size, digest.hexdigest()
+
+class NoTessdataRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError('tessdata_redirect_rejected')
+
+def download_tessdata(path, url):
+    # Only immutable HTTPS URLs constructed below reach this function. A signal
+    # caps the entire transfer, not just individual socket reads.
+    allowed = {'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/' + TESSDATA_REVISION + '/' + language + '.traineddata' for language in ('eng', 'chi_sim')}
+    if url not in allowed:
+        raise ValueError('tessdata_source_not_pinned')
+    def expired(signum, frame):
+        raise TimeoutError('tessdata_download_deadline')
+    old = signal.signal(signal.SIGALRM, expired)
+    signal.alarm(20)
+    size, digest = 0, hashlib.sha256()
+    try:
+        opener = urllib.request.build_opener(NoTessdataRedirect())
+        with opener.open(url, timeout=15) as response:
+            if response.geturl() != url or not url.startswith('https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/' + TESSDATA_REVISION + '/'):
+                raise ValueError('tessdata_source_changed')
+            length = response.headers.get('Content-Length')
+            if length is not None and not 0 < int(length) <= MAX_TESSDATA_BYTES:
+                raise ValueError('tessdata_content_length')
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'wb') as target:
+                while True:
+                    block = response.read(min(262144, MAX_TESSDATA_BYTES - size + 1))
+                    if not block:
+                        break
+                    size += len(block)
+                    if size > MAX_TESSDATA_BYTES:
+                        raise ValueError('tessdata_download_limit')
+                    target.write(block); digest.update(block)
+                if size == 0:
+                    raise ValueError('empty_tessdata_download')
+                if length is not None and size != int(length):
+                    raise ValueError('incomplete_tessdata_download')
+                target.flush(); os.fsync(target.fileno())
+        path.chmod(0o400)
+        return size, digest.hexdigest()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+def prepare_tessdata(run_dir):
+    directory = ROOT / 'deps' / ('tessdata-fast-' + TESSDATA_REVISION)
+    safe_directory(directory, create=True)
+    provenance = []
+    for language in ('eng', 'chi_sim'):
+        url = 'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/' + TESSDATA_REVISION + '/' + language + '.traineddata'
+        target = directory / (language + '.traineddata')
+        marker = directory / (language + '.source.json')
+        if target.exists() or target.is_symlink() or marker.exists() or marker.is_symlink():
+            if not target.exists() or not marker.exists():
+                raise ValueError('tessdata_unconfirmed_file_requires_review')
+            record = json.loads(read_small(marker, 4096))
+            size, digest = tessdata_digest(target)
+            if record.get('source_url') != url or record.get('source_commit') != TESSDATA_REVISION or record.get('language') != language or record.get('sha256') != digest or record.get('bytes') != size:
+                raise ValueError('tessdata_cache_identity_mismatch')
+        else:
+            staging = run_dir / (language + '.traineddata.download')
+            size, digest = download_tessdata(staging, url)
+            record = {'language': language, 'source_url': url, 'source_commit': TESSDATA_REVISION,
+                      'bytes': size, 'sha256': digest, 'downloaded_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+            staging.rename(target)
+            atomic(marker, raw_json(record))
+        provenance.append(record)
+    return directory, provenance
+
+def unit_delivery_identity(unit, evidence_kind='unit', artifact_hash=None):
+    sid, index = unit.get('source_id'), unit.get('unit_index')
+    if not isinstance(sid, str) or not re.fullmatch('[0-9a-f]{64}', sid) or type(index) is not int or not 0 <= index < 10**12:
+        raise ValueError('invalid_unit_delivery_identity')
+    if evidence_kind not in ('unit', 'visual'):
+        raise ValueError('invalid_delivery_evidence_kind')
+    key = sid + ':' + str(index).zfill(12) + ':' + evidence_kind
+    # The unit includes the artifact SHA and all extraction metadata/status.
+    # Actual artifact bytes are verified before this identity can be acknowledged.
+    digest = hashlib.sha256(raw_json({'version': 1, 'unit': unit,
+                                    'evidence_kind': evidence_kind, 'artifact_hash': artifact_hash})).hexdigest()
+    return key, digest
+
+def validate_acknowledged_units(units):
+    if not isinstance(units, dict):
+        raise ValueError('invalid_acknowledged_units')
+    for key, digest in units.items():
+        if not isinstance(key, str) or not re.fullmatch('[0-9a-f]{64}:[0-9]{12}:(unit|visual)', key) or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
+            raise ValueError('invalid_acknowledged_unit_digest')
+
+def load_acknowledged(output, worker_hash):
+    path = output / 'acknowledged-units.json'
+    if not path.exists() and not path.is_symlink():
+        return {'version': 1, 'worker_hash': worker_hash, 'units': {}, 'proposals': {}}
+    state = json.loads(read_small(path, ACK_STATE_LIMIT))
+    if state.get('version') != 1 or state.get('worker_hash') != worker_hash or not isinstance(state.get('proposals'), dict):
+        raise ValueError('acknowledged_state_identity_mismatch')
+    validate_acknowledged_units(state.get('units'))
+    for source_run, receipt in state['proposals'].items():
+        if not re.fullmatch('[0-9]{1,25}-[0-9]{1,5}', source_run) or not isinstance(receipt, dict) or not isinstance(receipt.get('proposal_hash'), str) or not re.fullmatch('[0-9a-f]{64}', receipt['proposal_hash']) or not isinstance(receipt.get('evidence_kinds'), list) or not receipt['evidence_kinds'] or not set(receipt['evidence_kinds']) <= {'unit', 'visual'}:
+            raise ValueError('invalid_acknowledged_proposal')
+    return state
+
+def apply_delivery_ack(root, ack):
+    if ack is None:
+        return {'status': 'not_supplied', 'semantic_read_credited': False}
+    required = {'worker_hash', 'source_run', 'proposal_hash'}
+    if not isinstance(ack, dict) or not required <= set(ack) or not set(ack) <= required | {'evidence_kinds'}:
+        raise ValueError('invalid_delivery_ack_fields')
+    kinds = ack.get('evidence_kinds', ['unit'])
+    if not isinstance(kinds, list) or not 1 <= len(kinds) <= 2 or not all(isinstance(kind, str) for kind in kinds) or len(set(kinds)) != len(kinds) or not set(kinds) <= {'unit', 'visual'}:
+        raise ValueError('invalid_delivery_ack_evidence_kinds')
+    worker_hash, source_run, proposal_hash = ack['worker_hash'], ack['source_run'], ack['proposal_hash']
+    if not isinstance(worker_hash, str) or not re.fullmatch('[0-9a-f]{64}', worker_hash) or not isinstance(source_run, str) or not re.fullmatch('[0-9]{1,25}-[0-9]{1,5}', source_run) or not isinstance(proposal_hash, str) or not re.fullmatch('[0-9a-f]{64}', proposal_hash):
+        raise ValueError('invalid_delivery_ack_identity')
+    output = root / 'extracted' / worker_hash
+    for directory in (root / 'extracted', output, output / 'delivery-proposals'):
+        safe_directory(directory)
+    raw = read_small(output / 'delivery-proposals' / (source_run + '.json'), REPORT_LIMIT)
+    if hashlib.sha256(raw).hexdigest() != proposal_hash:
+        raise ValueError('delivery_ack_proposal_hash_mismatch')
+    proposal = json.loads(raw)
+    if proposal.get('version') != 1 or proposal.get('worker_hash') != worker_hash or proposal.get('source_run') != source_run:
+        raise ValueError('delivery_ack_proposal_identity_mismatch')
+    validate_acknowledged_units(proposal.get('units'))
+    state = load_acknowledged(output, worker_hash)
+    previous = state['proposals'].get(source_run)
+    if previous is not None:
+        if previous['proposal_hash'] != proposal_hash:
+            raise ValueError('delivery_ack_replay_conflict')
+        if set(kinds) <= set(previous['evidence_kinds']):
+            return {'status': 'already_acknowledged', 'source_run': source_run,
+                    'worker_hash': worker_hash, 'proposal_hash': proposal_hash, 'semantic_read_credited': False}
+    selected = {key: digest for key, digest in proposal['units'].items() if key.rsplit(':', 1)[1] in kinds}
+    state['units'].update(selected)
+    state['proposals'][source_run] = {'proposal_hash': proposal_hash,
+                                    'evidence_kinds': sorted(set(kinds) | set(previous['evidence_kinds'] if previous else []))}
+    raw_state = raw_json(state)
+    if len(raw_state) > ACK_STATE_LIMIT:
+        raise ValueError('acknowledged_state_capacity')
+    atomic(output / 'acknowledged-units.json', raw_state)
+    return {'status': 'acknowledged', 'source_run': source_run, 'worker_hash': worker_hash,
+            'proposal_hash': proposal_hash, 'acknowledged_evidence_count': len(selected),
+            'evidence_kinds_acknowledged': kinds, 'semantic_read_credited': False, 'visual_review_credited': False}
+
+def save_delivery_proposal(output, worker_hash, source_run, units):
+    validate_acknowledged_units(units)
+    proposal = {'version': 1, 'worker_hash': worker_hash, 'source_run': source_run, 'units': units,
+                'semantics': 'verified_evidence_transport_only; semantic_and_visual_read_not_credited'}
+    raw = raw_json(proposal)
+    if len(raw) > REPORT_LIMIT:
+        raise ValueError('delivery_proposal_capacity')
+    directory = output / 'delivery-proposals'
+    safe_directory(directory, create=True)
+    path = directory / (source_run + '.json')
+    if path.exists() or path.is_symlink():
+        if read_small(path, REPORT_LIMIT) != raw:
+            raise ValueError('delivery_proposal_immutable_conflict')
+    else:
+        atomic(path, raw)
+    return {'worker_hash': worker_hash, 'source_run': source_run,
+            'proposal_hash': hashlib.sha256(raw).hexdigest(), 'evidence_count': len(units),
+            'ack_required_after_verified_ciphertext_readback': True,
+            'ack_evidence_kinds_default': ['unit'], 'visual_ack_requires_explicit_evidence_kinds': True,
+            'semantic_read_credited': False}
+
+def delivery_artifact(output, artifact, cap):
+    relative = checked_relative(artifact)
+    path = output.joinpath(*relative.parts)
+    check = output
+    for part in relative.parts:
+        check = check / part
+        if check.is_symlink():
+            raise ValueError('unit_artifact_symlink')
+    info = regular(path)
+    return (read_small(path, cap) if info.st_size <= cap else None), info.st_size
+
+def unit_delivery_items(output, unit):
+    artifact = unit.get('artifact')
+    item = {'unit': unit, 'evidence_kind': 'unit', 'artifact_complete': False,
+            'unit_evidence_complete': not artifact, 'semantic_read_credited': False}
+    actual_hash = None
+    if artifact:
+        raw, size = delivery_artifact(output, artifact, 262144)
+        if raw is not None:
+            actual_hash = hashlib.sha256(raw).hexdigest()
+            if actual_hash != unit.get('content_hash'):
+                raise ValueError('unit_artifact_hash_mismatch')
+            item.update(artifact_utf8=raw.decode('utf-8'), artifact_complete=True,
+                        artifact_sha256=actual_hash, unit_evidence_complete=True)
+        else:
+            item.update(delivery_state='pending_larger_private_unit_transfer', artifact_bytes=size)
+    key, digest = unit_delivery_identity(unit, 'unit', actual_hash)
+    item.update(unit_key=key, evidence_digest=digest)
+    yield item
+    visual = unit.get('metadata', {}).get('visual_artifact')
+    if visual:
+        item = {'unit': unit, 'evidence_kind': 'visual', 'artifact': visual,
+                'artifact_complete': False, 'unit_evidence_complete': False,
+                'semantic_read_credited': False, 'visual_review_credited': False}
+        raw, size = delivery_artifact(output, visual, 512 * 1024)
+        actual_hash = None
+        if raw is not None:
+            if not raw.startswith(b'\x89PNG\r\n\x1a\n'):
+                raise ValueError('visual_png_signature')
+            actual_hash = hashlib.sha256(raw).hexdigest()
+            item.update(artifact_base64=base64.b64encode(raw).decode(), artifact_complete=True,
+                        artifact_sha256=actual_hash, artifact_bytes=size,
+                        artifact_mime_type='image/png', unit_evidence_complete=True)
+        else:
+            item.update(delivery_state='pending_bounded_cloud_visual_or_private_transfer', artifact_bytes=size)
+        key, digest = unit_delivery_identity(unit, 'visual', actual_hash)
+        item.update(unit_key=key, evidence_digest=digest)
+        yield item
+
+def build_unit_delivery(output, worker_hash, source_run, report):
+    report['unit_texts'] = []
+    report['unit_delivery_complete_for_cloud_snapshot'] = False
+    units_path = output / 'unit-state.jsonl'
+    acknowledged = load_acknowledged(output, worker_hash)['units']
+    proposed, exhausted, pending_large_units, skipped = {}, True, False, 0
+    report['unit_delivery_protocol'] = 'per_unit_evidence_kind_and_digest_v1'
+    report['legacy_delivery_cursor_ignored'] = (output / 'delivery-cursor.json').exists()
+    if units_path.exists():
+        regular(units_path)
+        with units_path.open() as units:
+            for line in units:
+                if len(line) > 65536:
+                    raise ValueError('unit_metadata_line_limit')
+                unit = json.loads(line)
+                for item in unit_delivery_items(output, unit):
+                    key, digest = item['unit_key'], item['evidence_digest']
+                    complete = item['unit_evidence_complete']
+                    if complete and acknowledged.get(key) == digest:
+                        skipped += 1
+                        continue
+                    report['unit_texts'].append(item)
+                    if len(raw_json(report)) > REPORT_LIMIT - 131072:
+                        report['unit_texts'].pop()
+                        exhausted = False
+                        break
+                    if complete:
+                        proposed[key] = digest
+                    else:
+                        pending_large_units = True
+                if not exhausted:
+                    break
+    report.update(unit_delivery_complete_for_cloud_snapshot=exhausted and not pending_large_units,
+                  unit_delivery_acknowledged_unchanged_skipped=skipped,
+                  unit_delivery_count_semantics='unit_and_visual_evidence_are_separate; not_page_or_learning_counts',
+                  unit_delivery_semantics='whole_unit_artifacts_and_separate_small_PNGs; no_semantic_or_visual_review_credit')
+    report['unit_delivery_proposal'] = save_delivery_proposal(output, worker_hash, source_run, proposed)
+
 def process():
     os.umask(0o077)
     for ancestor in list(ROOT.parents)[:-1] + [ROOT]:
@@ -107,6 +391,7 @@ def process():
         report['status'] = 'deferred_active_extraction_controller'
         return
     # Keep the descriptor open until the complete worker/readback operation ends.
+    report['delivery_ack_result'] = apply_delivery_ack(ROOT, payload.get('delivery_ack'))
     report['capacity_before'] = {'mem_available_bytes': memory_available(), 'free_bytes': available_bytes()}
     if report['capacity_before']['mem_available_bytes'] is None or report['capacity_before']['mem_available_bytes'] < 600 * 1024**2 or report['capacity_before']['free_bytes'] < 8 * 1024**3:
         report['status'] = 'deferred_capacity'
@@ -132,12 +417,12 @@ def process():
     safe_directory(output, create=True)
     dependencies = ROOT / 'deps' / 'pymupdf-v1'
     report.update(worker_sha256=worker_hash, private_output_root=str(output))
-    if (output / 'worker.lock').exists() or (output / 'worker.lock').is_symlink():
-        report['status'] = 'deferred_worker_lock_requires_reconciliation'
+    if worker_lock_busy(output / 'worker.lock'):
+        report['status'] = 'deferred_active_worker'
         return
     install_marker = dependencies / 'install-complete.json'
     child_env = dict(os.environ, QUANTML_VERIFIED_CLOUD_BACKEND='aws', PYTHONPATH=str(dependencies),
-                     OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1', NUMEXPR_NUM_THREADS='1')
+                     OMP_THREAD_LIMIT='1', OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1', NUMEXPR_NUM_THREADS='1')
     if not install_marker.exists():
         if dependencies.exists() or dependencies.is_symlink():
             report['status'] = 'dependency_directory_unconfirmed_requires_review'
@@ -167,7 +452,14 @@ def process():
     else:
         safe_directory(dependencies)
         regular(install_marker, 16384)
-    report['private_dependency_distributions'] = [p.name for p in dependencies.glob('*.dist-info')][:10]
+    report['private_dependency_distributions'] = sorted(p.name for p in dependencies.glob('*.dist-info'))[:10]
+    tessdata, tessdata_provenance = prepare_tessdata(run_dir)
+    report['ocr_language_data'] = tessdata_provenance
+    report['ocr_engine'] = 'PyMuPDF_embedded_Tesseract; no_external_executable'
+    capability_id = hashlib.sha256(raw_json({'distributions': report['private_dependency_distributions'],
+                                            'language_data': [{key: item[key] for key in ('language', 'source_commit', 'sha256', 'bytes')}
+                                                              for item in tessdata_provenance]})).hexdigest()
+    report['extraction_capability_id'] = capability_id
     if memory_available() < 600 * 1024**2 or available_bytes() < 8 * 1024**3:
         report['status'] = 'deferred_capacity_after_dependency'
         return
@@ -235,70 +527,21 @@ def process():
                '--output-root', str(output), '--preflight', str(preflight_path), '--backend', 'aws',
                '--max-files', '32', '--max-units', '200', '--max-seconds', '120',
                '--max-output-bytes', str(64 * 1024**2), '--max-memory-mib', '512',
-               '--max-member-bytes', str(64 * 1024**2), '--max-page-pixels', '2000000']
+               '--max-member-bytes', str(64 * 1024**2), '--max-page-pixels', '4000000',
+               '--pdf-ocr', '--tessdata', str(tessdata), '--ocr-languages', 'eng+chi_sim',
+               '--capability-id', capability_id]
     with (run_dir / 'worker-private.log').open('wb') as log:
         try:
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                     env=child_env, timeout=135, preexec_fn=child_limits, check=False)
             report.update(status='batch_observed' if result.returncode == 0 else 'worker_failed', worker_returncode=result.returncode)
         except subprocess.TimeoutExpired:
-            report.update(status='worker_timeout_requires_lock_reconciliation', worker_returncode=None)
+            report.update(status='worker_timeout_checkpoint_recovery_pending', worker_returncode=None,
+                          recovery='next_worker_reconciles_unfinished_page_attempts_under_kernel_lock')
+    report['coverage_snapshot_may_precede_failed_worker'] = report.get('worker_returncode') != 0
     if (output / 'coverage.json').exists():
         report['coverage'] = json.loads(read_small(output / 'coverage.json', 65536))
-    report['unit_texts'] = []
-    report['unit_delivery_cursor'] = None
-    report['unit_delivery_complete_for_cloud_snapshot'] = False
-    # Deliver whole unit files only. No truncated page is called a complete unit.
-    # Larger files and units beyond this2MiB transport budget stay in private cloud.
-    units_path = output / 'unit-state.jsonl'
-    delivery_cursor = output / 'delivery-cursor.json'
-    previous_key = ''
-    if delivery_cursor.exists():
-        previous_key = json.loads(read_small(delivery_cursor, 4096)).get('last_key', '')
-    last_key, exhausted, pending_large_units = previous_key, True, False
-    if units_path.exists():
-        regular(units_path)
-        with units_path.open() as units:
-            for line in units:
-                if len(line) > 65536:
-                    raise ValueError('unit_metadata_line_limit')
-                unit = json.loads(line)
-                key = str(unit['source_id']) + ':' + str(unit['unit_index']).zfill(12)
-                if key <= previous_key:
-                    continue
-                item = {'unit': unit, 'unit_key': key, 'artifact_complete': False}
-                artifact = unit.get('artifact')
-                if artifact:
-                    relative = checked_relative(artifact)
-                    path = output.joinpath(*relative.parts)
-                    check = output
-                    for part in relative.parts:
-                        check = check / part
-                        if check.is_symlink():
-                            raise ValueError('unit_artifact_symlink')
-                    info = regular(path)
-                    if info.st_size <= 262144:
-                        raw = read_small(path, 262144)
-                        actual_hash = hashlib.sha256(raw).hexdigest()
-                        if actual_hash != unit.get('content_hash'):
-                            raise ValueError('unit_artifact_hash_mismatch')
-                        item.update(artifact_utf8=raw.decode('utf-8'), artifact_complete=True,
-                                    artifact_sha256=actual_hash)
-                    else:
-                        item['delivery_state'] = 'pending_larger_private_unit_transfer'
-                        item['artifact_bytes'] = info.st_size
-                        pending_large_units = True
-                report['unit_texts'].append(item)
-                if len(raw_json(report)) > REPORT_LIMIT - 131072:
-                    report['unit_texts'].pop()
-                    exhausted = False
-                    break
-                last_key = key
-    report.update(unit_delivery_cursor=last_key, unit_delivery_complete_for_cloud_snapshot=exhausted and not pending_large_units,
-                  unit_delivery_semantics='whole_extracted_units_only; semantic_read_not_credited; visual_assets_remain_private_cloud')
-    # This cursor is only a proposal. It is not committed before downstream
-    # ciphertext delivery/readback, avoiding lost units after an SSH interruption.
-    report['unit_delivery_cursor_commit_required_after_verified_readback'] = True
+    build_unit_delivery(output, worker_hash, payload['run_id'], report)
     report['worker_log_tail_base64'] = base64.b64encode(read_small(run_dir / 'worker-private.log', 512*1024)[-32768:]).decode()
     report['capacity_after'] = {'mem_available_bytes': memory_available(), 'free_bytes': available_bytes()}
     if len(raw_json(report)) > REPORT_LIMIT:
@@ -310,9 +553,31 @@ except Exception as exc:
     report.update(status='orchestration_failed', error_class=type(exc).__name__, error=str(exc)[:500])
 if len(raw_json(report)) > REPORT_LIMIT:
     report.pop('unit_texts', None)
+    report.pop('unit_delivery_proposal', None)
     report['delivery_omitted_requires_private_cloud_readback'] = True
 print(raw_json(report).decode())
 '''
+
+
+def delivery_ack_from_environment(environment):
+    encoded = environment.get('CORPUS_DELIVERY_ACK_B64', '')
+    if not encoded:
+        return None
+    if not isinstance(encoded, str) or len(encoded) > 4096:
+        raise ValueError('DELIVERY_ACK_SIZE')
+    ack = json.loads(base64.b64decode(encoded, validate=True))
+    required = {'worker_hash', 'source_run', 'proposal_hash'}
+    if not isinstance(ack, dict) or not required <= set(ack) or not set(ack) <= required | {'evidence_kinds'}:
+        raise ValueError('DELIVERY_ACK_FIELDS')
+    kinds = ack.get('evidence_kinds', ['unit'])
+    if not isinstance(kinds, list) or not 1 <= len(kinds) <= 2 or not all(isinstance(kind, str) for kind in kinds) or len(set(kinds)) != len(kinds) or not set(kinds) <= {'unit', 'visual'}:
+        raise ValueError('DELIVERY_ACK_EVIDENCE_KINDS')
+    for name in ('worker_hash', 'proposal_hash'):
+        if not isinstance(ack[name], str) or not re.fullmatch(r'[0-9a-f]{64}', ack[name]):
+            raise ValueError('DELIVERY_ACK_HASH')
+    if not isinstance(ack['source_run'], str) or not re.fullmatch(r'[0-9]{1,25}-[0-9]{1,5}', ack['source_run']):
+        raise ValueError('DELIVERY_ACK_SOURCE_RUN')
+    return ack
 
 
 def source_payload(environment, worker_source):
@@ -327,7 +592,8 @@ def source_payload(environment, worker_source):
         raise ValueError('WORKER_SOURCE_SIZE')
     compile(worker_source, 'corpus_worker.py', 'exec')
     return {'run_id': run + '-' + attempt, 'source_commit': commit,
-            'worker_base64': base64.b64encode(worker_source).decode()}
+            'worker_base64': base64.b64encode(worker_source).decode(),
+            'delivery_ack': delivery_ack_from_environment(environment)}
 
 
 def extract():
@@ -382,7 +648,7 @@ def main():
             record = {'status': 'configuration_rejected', 'error_class': type(exc).__name__}
         successful = record['status'] == 'remote_result_received' and record.get('extraction', {}).get('status') in (
             'batch_observed', 'deferred_capacity', 'deferred_capacity_after_dependency',
-            'deferred_active_extraction_controller', 'deferred_worker_lock_requires_reconciliation',
+            'deferred_active_extraction_controller', 'deferred_active_worker',
             'deferred_no_complete_uploaded_sources')
         status = {'version': 1, 'status': 'complete' if successful else 'failed',
                   'stage': 'sealed_delivery', 'strategy_evaluated': False,
