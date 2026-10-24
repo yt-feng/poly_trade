@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 import math
+from numbers import Real
 from pathlib import Path
 import sys
+from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -41,6 +43,9 @@ UNAVAILABLE_REASONS = frozenset({"target_at_or_after_close", "missing_book", "no
     "unknown_quote_conflict", "invalid_quote_price"})
 NOT_REACHED = "not_reached_entry_quote_unknown"
 IDENTITY_FIELDS = ("market_id", "run_name", "slug", "side", "decision_ts", "market_close_ts")
+DECISION_VETO_FIELDS = (*IDENTITY_FIELDS, "decision_ask_price", "decision_sell_size", "predicted_exit_bid_price")
+DECISION_VETO_REASONS = {"available": "prediction_available", "not_fitted": "model_not_fitted",
+    "unsupported": "prediction_unsupported", "invalid_prediction": "prediction_invalid"}
 CACHE_FIELDS = (*IDENTITY_FIELDS, *(f"{kind}_{name}" for kind in ("entry", "exit")
     for name in ("target_ts", "quote_status", "quote_ts", *BOOK_FIELDS)))
 
@@ -241,10 +246,52 @@ def _finalized_result(cash, pending, available_ts, chain, attempts, locked_share
             "actual_fills": 0, "verified_canary_fills": 0, "live_orders_enabled": False}
 
 
+def _decision_veto_evidence(callback, row, decision, close, decision_ask, decision_depth,
+                            prediction, edge_floor):
+    """Expose only immutable decision-prefix scalars, then verify the forecast.
+
+    The callback supplies a signed forecast/status, never a cash operation,
+    replacement price, execution quote, or caller-chosen admission threshold.
+    Missing forecasts must be explicitly marked unavailable with a null value.
+    """
+    frozen = MappingProxyType({"market_id": str(row.market_id), "run_name": str(row.run_name),
+        "slug": str(row.slug), "side": str(row.side), "decision_ts": decision, "market_close_ts": close,
+        "decision_ask_price": decision_ask, "decision_sell_size": decision_depth,
+        "predicted_exit_bid_price": prediction})
+    response = callback(frozen)
+    if (not isinstance(response, Mapping)
+            or set(response) != {"prediction_status", "predicted_net_margin_per_share", "reason"}):
+        raise ValueError("invalid_decision_veto_response")
+    status, reason = response["prediction_status"], response["reason"]
+    if (not isinstance(status, str) or status not in DECISION_VETO_REASONS or not isinstance(reason, str)
+            or reason != DECISION_VETO_REASONS[status]):
+        raise ValueError("invalid_decision_veto_status_or_reason")
+    value = response["predicted_net_margin_per_share"]
+    if status == "available":
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+            raise ValueError("invalid_decision_veto_signed_margin")
+        try:
+            value = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("invalid_decision_veto_signed_margin") from exc
+        if not math.isfinite(value):
+            raise ValueError("invalid_decision_veto_signed_margin")
+        allowed = value >= edge_floor
+    else:
+        if value is not None:
+            raise ValueError("unavailable_decision_veto_margin_must_be_null")
+        allowed = False
+    return {"prediction_status": status, "predicted_net_margin_per_share": value,
+        "reason": reason, "edge_floor": edge_floor, "allowed": allowed,
+        "frozen_at_decision_ts": decision.isoformat(),
+        "basis": "decision_prefix_signed_net_margin_forecast_veto_not_execution_capacity"}
+
+
 def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
                          quote_source: CachedQuoteSource, *,
                          capacity_cap_by_id: Mapping[str, float] | None = None,
                          exit_resolver: Callable[..., ExitResolution] | None = None,
+                         decision_veto: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
                          hold_seconds: float = 30.,
                         entry_delay_seconds: float = 4., latency_seconds: float = 8.,
                         max_quote_delay_seconds: float = 3., edge_floor: float = .02,
@@ -266,6 +313,9 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
     prefix before the next candidate starts. Live pending funds stay reserved.
     Processed candidates count every in-scope loop begun, including rejections;
     stream exhaustion does not imply all entered positions could be resolved.
+    An opt-in decision veto sees only the nine immutable candidate fields and
+    runs before cost checks, pending cash release, or selector requests. A veto
+    appends evidence without changing cash/pending or removing candidate IDs.
     """
     hold, entry_delay, latency, tolerance, release_delay = map(_number, (
         hold_seconds, entry_delay_seconds, latency_seconds, max_quote_delay_seconds,
@@ -283,6 +333,8 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
         raise ValueError("duplicate_run_scope")
     if exit_resolver is not None and not callable(exit_resolver):
         raise ValueError("invalid_exit_resolver")
+    if decision_veto is not None and not callable(decision_veto):
+        raise ValueError("invalid_decision_veto")
     if (type(continue_after_required_fills) is not bool
             or (continue_after_required_fills and not callable(required_prefix_observer))
             or (not continue_after_required_fills and required_prefix_observer is not None)):
@@ -314,12 +366,26 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
             row.decision_ask_price, row.decision_sell_size, row.predicted_exit_bid_price))
         if side not in ("up", "down") or not 0 < decision_ask < 1 or decision_depth < 0 or decision >= close:
             raise ValueError("invalid_frozen_candidate")
+        veto_evidence = None
+        if decision_veto is not None:
+            veto_evidence = _decision_veto_evidence(decision_veto, row, decision, close,
+                decision_ask, decision_depth, prediction, floor)
+            if not veto_evidence["allowed"]:
+                target = decision + pd.Timedelta(seconds=entry_delay + latency)
+                attempts.append({"market_id": str(row.market_id), "decision_ts": decision.isoformat(),
+                    "entry_target_ts": target.isoformat(),
+                    "status": ("decision_net_margin_below_floor" if veto_evidence["prediction_status"] == "available"
+                        else "decision_net_margin_unavailable"),
+                    "decision_veto_evidence": veto_evidence, "cash_unchanged": cash})
+                continue
         limit = entry_price_cap(prediction, edge_floor=floor, fee_rate=fee, slippage=slip)
         predicted_sell = prediction - slip
         predicted_net = predicted_sell - fee * predicted_sell * (1 - predicted_sell)
         target = decision + pd.Timedelta(seconds=entry_delay + latency)
         attempt = {"market_id": str(row.market_id), "decision_ts": decision.isoformat(),
                    "entry_target_ts": target.isoformat()}
+        if veto_evidence is not None:
+            attempt["decision_veto_evidence"] = veto_evidence
         decision_price = decision_ask + slip
         if not 0 < decision_price < 1 or limit <= 0 or decision_price > limit + 1e-12:
             attempts.append({**attempt, "status": "decision_cost_floor_not_met",
@@ -403,6 +469,8 @@ def replay_cached_quotes(candidates: pd.DataFrame, run_names: Sequence[str],
                  "status": "open"}
         if cap_evidence is not None:
             event["quantity_cap_evidence"] = cap_evidence
+        if veto_evidence is not None:
+            event["decision_veto_evidence"] = veto_evidence
         chain.append(event)
         exit_quote, reason = quote_source.select(str(row.market_id), exit_target, close, side=side, kind="exit",
                                               max_quote_delay_seconds=tolerance)
