@@ -1,0 +1,151 @@
+name: h696-score-coverage-diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      descriptor_sha256:
+        description: SHA-256 of the encrypted H696 score-bundle descriptor
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - analysis/offline_score_coverage_diagnostic.py
+      - tools/seal_score_coverage_outcomes.py
+      - tests/test_offline_score_coverage_diagnostic.py
+      - tests/test_seal_score_coverage_outcomes.py
+      - tests/test_scoped_research_dataset.py
+      - tools/scoped_research_dataset.py
+      - .github/workflows/h696-score-coverage-diagnostic.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: h696-score-coverage-${{ github.event_name == 'workflow_dispatch' && github.ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install fixed vault dependencies
+        run: python -m pip install -r requirements-vault.txt pytest
+      - name: Run aggregate-only contracts
+        run: >-
+          python -m pytest -q
+          tests/test_offline_score_coverage_diagnostic.py
+          tests/test_seal_score_coverage_outcomes.py
+          tests/test_scoped_research_dataset.py
+      - name: Compile aggregate-only code
+        run: >-
+          python -m py_compile
+          analysis/offline_score_coverage_diagnostic.py
+          tools/seal_score_coverage_outcomes.py
+
+  diagnostic:
+    needs: contracts
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install fixed vault dependencies
+        run: python -m pip install -r requirements-vault.txt
+      - name: Restore one registered encrypted score bundle
+        id: restore
+        env:
+          H696_SCORE_BUNDLE_CAPABILITY_B64: ${{ secrets.H696_SCORE_BUNDLE_CAPABILITY_B64 }}
+          EXPECTED_DESCRIPTOR_SHA256: ${{ inputs.descriptor_sha256 }}
+        run: |
+          python - <<'PY'
+          import base64, binascii, os
+          from pathlib import Path
+          import re
+          value = os.environ['EXPECTED_DESCRIPTOR_SHA256']
+          if not re.fullmatch(r'[0-9a-f]{64}', value):
+              raise SystemExit('descriptor_sha256_format')
+          raw = base64.b64decode(os.environ['H696_SCORE_BUNDLE_CAPABILITY_B64'], validate=True)
+          if len(raw) > 16384:
+              raise SystemExit('capability_size')
+          root = Path(os.environ['RUNNER_TEMP']) / 'h696-score-bundle'
+          root.mkdir(mode=0o700)
+          (root / 'capability.json').write_bytes(raw)
+          PY
+          git fetch origin refs/heads/sealed-research-journal:refs/remotes/origin/sealed-research-journal --depth=1
+          ROOT="$RUNNER_TEMP/h696-score-bundle"
+          git show "origin/sealed-research-journal:research_vault/h696-score-bundle/${EXPECTED_DESCRIPTOR_SHA256}/envelope.json" > "$ROOT/envelope.json"
+          git show "origin/sealed-research-journal:research_vault/h696-score-bundle/${EXPECTED_DESCRIPTOR_SHA256}/descriptor.json" > "$ROOT/descriptor.json"
+          PYTHONPATH=tools python tools/scoped_research_dataset.py restore \
+            --envelope "$ROOT/envelope.json" \
+            --capability "$ROOT/capability.json" \
+            --expected-descriptor-sha256 "$EXPECTED_DESCRIPTOR_SHA256" \
+            --output "$ROOT/plaintext"
+      - name: Run aggregate saved-score coverage diagnostic
+        id: evaluate
+        run: |
+          ROOT="$RUNNER_TEMP/h696-score-bundle"
+          mkdir -m 700 "$RUNNER_TEMP/h696-report"
+          python analysis/offline_score_coverage_diagnostic.py \
+            --scores "$ROOT/plaintext/scores.csv" \
+            --candidates "$ROOT/plaintext/candidate-gate-predictions.jsonl" \
+            --output "$RUNNER_TEMP/h696-report/score-coverage.json" \
+            --edge-floor 0.02
+      - name: Seal aggregate report
+        id: seal
+        if: always() && steps.evaluate.outcome == 'success'
+        env:
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          python tools/seal_score_coverage_outcomes.py \
+            --report "$RUNNER_TEMP/h696-report/score-coverage.json" \
+            --descriptor "$RUNNER_TEMP/h696-score-bundle/descriptor.json" \
+            --output sealed-delivery
+      - name: Retain encrypted report before publication
+        id: retain
+        if: always() && steps.seal.outputs.delivery_complete == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sealed-h696-score-coverage
+          path: sealed-delivery/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Persist encrypted report
+        id: persist
+        if: always() && steps.seal.outputs.delivery_complete == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: >-
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py
+          --source sealed-delivery
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$GITHUB_RUN_ID"
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
+          --recipient-id "$RECIPIENT_ID"
+      - name: Require full encrypted evidence
+        if: always() && steps.seal.outputs.delivery_complete == 'true'
+        env:
+          RETAIN_OUTCOME: ${{ steps.retain.outcome }}
+          PERSIST_OUTCOME: ${{ steps.persist.outcome }}
+          FULL_EVIDENCE: ${{ steps.seal.outputs.full_evidence }}
+        run: |
+          test "$RETAIN_OUTCOME" = success
+          test "$PERSIST_OUTCOME" = success
+          test "$FULL_EVIDENCE" = true
+      - name: Remove runner plaintext and bundle
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/h696-score-bundle" "$RUNNER_TEMP/h696-report" sealed-delivery
