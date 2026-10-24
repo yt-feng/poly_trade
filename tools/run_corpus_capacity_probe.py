@@ -27,7 +27,7 @@ IDENTITY_CHECK_SECONDS = 5
 # Fixed source, sent over stdin. Its only filesystem access is bounded reads,
 # directory existence/statvfs and module/command discovery, never a data scan.
 REMOTE_PROBE = r'''
-import datetime, importlib.util, json, os, shutil, signal
+import datetime, importlib.util, json, os, shutil, signal, stat
 
 def deadline(signum, frame):
     raise TimeoutError('REMOTE_PROBE_DEADLINE')
@@ -37,6 +37,56 @@ report = {'version': 1, 'scope': 'read_only_capacity_no_data_scan',
           'observed_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
           'cpu_count': os.cpu_count(), 'memory': {}, 'paths': {},
           'commands': {}, 'modules': {}, 'aws': {'status': 'not_checked'}}
+
+def bounded_text(path, limit=4096):
+    try:
+        with open(path, 'rb') as source:
+            raw = source.read(limit + 1)
+        if len(raw) > limit:
+            return {'truncated': True}
+        return {'text': raw.decode('utf-8', 'replace').replace('\\x00', ' ').strip(), 'truncated': False}
+    except Exception as exc:
+        return {'error_class': type(exc).__name__}
+
+def controller_diagnostics(root):
+    """Observe only process/lock metadata; never read corpus objects or source text."""
+    result = {'root': root, 'lock': {}, 'kernel_lock_records': [], 'candidate_processes': []}
+    try:
+        root_stat = os.stat(root)
+        lock = os.path.join(root, '.extract-controller.lock')
+        result['lock']['path_exists'] = os.path.exists(lock)
+        if result['lock']['path_exists']:
+            lock_stat = os.stat(lock)
+            result['lock'].update(inode=lock_stat.st_ino, device=os.major(lock_stat.st_dev),
+                                  device_minor=os.minor(lock_stat.st_dev), bytes=lock_stat.st_size,
+                                  mode=stat.S_IMODE(lock_stat.st_mode))
+            inode_token = str(lock_stat.st_ino)
+            for line in bounded_text('/proc/locks', 262144).get('text', '').splitlines():
+                fields = line.split()
+                if len(fields) >= 6 and fields[5].rsplit(':', 1)[-1] == inode_token:
+                    result['kernel_lock_records'].append({
+                        'lock_type': fields[1], 'advisory': fields[2], 'mode': fields[3],
+                        'pid': fields[4], 'device_inode': fields[5],
+                        'range': fields[6:8],
+                    })
+                    if len(result['kernel_lock_records']) >= 8:
+                        break
+    except Exception as exc:
+        result['lock_error_class'] = type(exc).__name__
+    try:
+        for name in os.listdir('/proc'):
+            if not name.isdigit() or len(result['candidate_processes']) >= 64:
+                continue
+            cmd = bounded_text('/proc/' + name + '/cmdline', 2048).get('text', '')
+            if not any(token in cmd for token in ('quantml-study', 'run_corpus_extract', 'corpus_worker')):
+                continue
+            state = bounded_text('/proc/' + name + '/stat', 4096).get('text', '')
+            result['candidate_processes'].append({'pid': name, 'cmdline': cmd, 'stat_prefix': state[:256]})
+    except Exception as exc:
+        result['process_scan_error_class'] = type(exc).__name__
+    return result
+
+report['controller'] = controller_diagnostics('/home/ubuntu/quantml-study')
 try:
     with open('/proc/meminfo') as f:
         for line in f.read(16384).splitlines():
