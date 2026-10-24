@@ -4,7 +4,8 @@ H90 selected by total selection cash and overfit.  H91 freezes a stronger
 selection rule before looking at holdout: the 20-run selection window is split
 into four chronological five-run blocks, and every block must end at or above
 $5 with non-negative PnL while the overall selection has at least ten fills.
-The untouched 59-run holdout is then evaluated once.
+The untouched 59-run holdout is then evaluated at both frozen slippages and
+five chronological blocks before any promotion decision.
 """
 from __future__ import annotations
 
@@ -31,6 +32,8 @@ THRESHOLDS = (0.55, 0.60, 0.65, 0.70, 0.75)
 PRICE_CAPS = (0.50, 0.55, 0.60)
 SPREAD_CAPS = (0.04, 0.06)
 SELECTION_BLOCK_SIZE = 5
+SLIPPAGES = (0.005, 0.01)
+HOLDOUT_BLOCK_SIZES = (12, 12, 12, 12, 11)
 
 
 def expanding_probabilities(frame: pd.DataFrame, runs: list[str], features: list[str], leaf: int) -> pd.Series:
@@ -58,12 +61,27 @@ def expanding_probabilities(frame: pd.DataFrame, runs: list[str], features: list
     return pd.Series(probabilities, index=ordered.index)
 
 
-def selection_blocks(events: pd.DataFrame, selection_runs: list[str]) -> list[dict[str, object]]:
+def selection_blocks(events: pd.DataFrame, selection_runs: list[str], slippage: float) -> list[dict[str, object]]:
+    if len(selection_runs) != 4 * SELECTION_BLOCK_SIZE:
+        raise ValueError("selection_block_scope_must_be_exactly_20_runs")
     rows: list[dict[str, object]] = []
     for block in range(4):
         names = selection_runs[block * SELECTION_BLOCK_SIZE : (block + 1) * SELECTION_BLOCK_SIZE]
-        metrics, _ = replay(events, names, 0.005)
+        metrics, _ = replay(events, names, slippage)
         rows.append({"block": block + 1, "run_count": len(names), **metrics})
+    return rows
+
+
+def holdout_blocks(events: pd.DataFrame, holdout_runs: list[str], slippage: float) -> list[dict[str, object]]:
+    if len(holdout_runs) != sum(HOLDOUT_BLOCK_SIZES):
+        raise ValueError("holdout_block_scope_must_match_frozen_59_runs")
+    rows: list[dict[str, object]] = []
+    cursor = 0
+    for block, size in enumerate(HOLDOUT_BLOCK_SIZES, 1):
+        names = holdout_runs[cursor : cursor + size]
+        cursor += size
+        metrics, _ = replay(events, names, slippage)
+        rows.append({"block": block, "run_count": len(names), **metrics})
     return rows
 
 
@@ -82,12 +100,15 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, o
             for price_cap in PRICE_CAPS:
                 for spread_cap in SPREAD_CAPS:
                     events = make_events(scored, threshold, price_cap, spread_cap)
-                    selection, _ = replay(events, selection_runs, 0.005)
-                    blocks = selection_blocks(events, selection_runs)
-                    holdout, _ = replay(events, holdout_runs, 0.005)
+                    selection, _ = replay(events, selection_runs, SLIPPAGES[0])
+                    selection_blocks_005 = selection_blocks(events, selection_runs, SLIPPAGES[0])
+                    holdout_005, _ = replay(events, holdout_runs, SLIPPAGES[0])
+                    holdout_blocks_005 = holdout_blocks(events, holdout_runs, SLIPPAGES[0])
+                    holdout_001, _ = replay(events, holdout_runs, SLIPPAGES[1])
+                    holdout_blocks_001 = holdout_blocks(events, holdout_runs, SLIPPAGES[1])
                     stable = (
                         selection["trades"] >= 10
-                        and all(block["ending_cash"] >= 5.0 and block["net_pnl"] >= 0.0 for block in blocks)
+                        and all(block["ending_cash"] >= 5.0 and block["net_pnl"] >= 0.0 for block in selection_blocks_005)
                     )
                     rows.append({
                         "min_samples_leaf": leaf,
@@ -97,13 +118,23 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, o
                         "signals": len(events),
                         "selection_trades": selection["trades"],
                         "selection_cash": selection["ending_cash"],
-                        "selection_min_block_cash": min(block["ending_cash"] for block in blocks),
-                        "selection_min_block_net_pnl": min(block["net_pnl"] for block in blocks),
+                        "selection_min_block_cash": min(block["ending_cash"] for block in selection_blocks_005),
+                        "selection_min_block_net_pnl": min(block["net_pnl"] for block in selection_blocks_005),
                         "selection_stable": stable,
-                        "holdout_trades": holdout["trades"],
-                        "holdout_cash": holdout["ending_cash"],
-                        "holdout_net_pnl": holdout["net_pnl"],
-                        "selection_block_cash": ",".join(f"{block['ending_cash']:.6f}" for block in blocks),
+                        "holdout_trades": holdout_005["trades"],
+                        "holdout_cash": holdout_005["ending_cash"],
+                        "holdout_net_pnl": holdout_005["net_pnl"],
+                        "holdout_trades_005": holdout_005["trades"],
+                        "holdout_cash_005": holdout_005["ending_cash"],
+                        "holdout_min_block_cash_005": min(block["ending_cash"] for block in holdout_blocks_005),
+                        "holdout_min_block_net_pnl_005": min(block["net_pnl"] for block in holdout_blocks_005),
+                        "holdout_block_cash_005": ",".join(f"{block['ending_cash']:.6f}" for block in holdout_blocks_005),
+                        "holdout_trades_001": holdout_001["trades"],
+                        "holdout_cash_001": holdout_001["ending_cash"],
+                        "holdout_min_block_cash_001": min(block["ending_cash"] for block in holdout_blocks_001),
+                        "holdout_min_block_net_pnl_001": min(block["net_pnl"] for block in holdout_blocks_001),
+                        "holdout_block_cash_001": ",".join(f"{block['ending_cash']:.6f}" for block in holdout_blocks_001),
+                        "selection_block_cash": ",".join(f"{block['ending_cash']:.6f}" for block in selection_blocks_005),
                     })
     grid = pd.DataFrame(rows)
     eligible = grid[grid["selection_stable"]].copy()
@@ -114,10 +145,20 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, o
             ["selection_min_block_cash", "selection_cash", "holdout_trades"],
             ascending=[False, False, False],
         ).iloc[0].to_dict()
+    promotion_gate = False
+    if best is not None:
+        promotion_gate = (
+            int(best["holdout_trades_005"]) >= 10
+            and int(best["holdout_trades_001"]) >= 10
+            and float(best["holdout_min_block_cash_005"]) >= 5.0
+            and float(best["holdout_min_block_cash_001"]) >= 5.0
+            and float(best["holdout_min_block_net_pnl_005"]) >= 0.0
+            and float(best["holdout_min_block_net_pnl_001"]) >= 0.0
+        )
     output.mkdir(parents=True, exist_ok=True)
     grid.to_csv(output / "grid.csv", index=False)
     summary = {
-        "format": "old-clean-h91-random-forest-stability-first-v1",
+        "format": "old-clean-h91-random-forest-stability-first-v2",
         "source_root": str(source_root),
         "source_snapshot": source_commit,
         "complete_runs": len(runs),
@@ -137,8 +178,16 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, o
         "initial_cash": 10.0,
         "minimum_order": 5.0,
         "fee_rate": 0.07,
-        "slippage": 0.005,
+        "slippages": list(SLIPPAGES),
         "settlement_plus_release_seconds": 900,
+        "selection_block_size": SELECTION_BLOCK_SIZE,
+        "selection_block_count": 4,
+        "holdout_block_sizes": list(HOLDOUT_BLOCK_SIZES),
+        "promotion_gate": promotion_gate,
+        "gate_reason": (
+            "selected stable cell must have >=10 holdout trades at both slippages and every holdout block >=$5 with nonnegative PnL"
+            if best is not None else "no selection-stable cell"
+        ),
         "paper_only": True,
         "actual_fills": 0,
         "verified_canary_fills": 0,
