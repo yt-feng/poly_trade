@@ -134,7 +134,10 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         (self.root / 'extracted').mkdir(mode=0o700)
         self.output.mkdir(mode=0o700)
         names = {'raw_json', 'safe_directory', 'regular', 'read_small', 'atomic', 'checked_relative',
-                 'unit_delivery_identity', 'validate_acknowledged_units', 'load_acknowledged',
+                 'unit_delivery_identity', 'validate_acknowledged_units', 'validate_cross_worker_content_hashes',
+                 'validate_cross_worker_content_workers', 'load_acknowledged',
+                 'load_cross_worker_acknowledged', 'record_cross_worker_acknowledged',
+                 'derive_delivery_content_hashes',
                  'apply_delivery_ack', 'save_delivery_proposal', 'delivery_artifact',
                  'unit_delivery_items', 'build_unit_delivery'}
         nodes = [node for node in ast.parse(extract.REMOTE_EXTRACT).body
@@ -151,9 +154,13 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
                 'content_hash': hashlib.sha256(text).hexdigest(), 'status': 'extracted', 'metadata': {}}
 
     def deliver(self, units, source_run):
-        (self.output / 'unit-state.jsonl').write_text(''.join(json.dumps(unit) + '\n' for unit in units))
+        return self.deliver_at(self.output, self.worker_hash, units, source_run)
+
+    def deliver_at(self, output, worker_hash, units, source_run):
+        output.mkdir(mode=0o700, exist_ok=True)
+        (output / 'unit-state.jsonl').write_text(''.join(json.dumps(unit) + '\n' for unit in units))
         report = {}
-        self.ns['build_unit_delivery'](self.output, self.worker_hash, source_run, report)
+        self.ns['build_unit_delivery'](output, worker_hash, source_run, report)
         return report
 
     def ack(self, report, kinds=None):
@@ -209,6 +216,76 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'proposal_hash_mismatch'):
             self.ns['apply_delivery_ack'](self.root, dict(request, proposal_hash='0'*64))
         self.assertEqual(path.read_bytes(), before)
+
+    def test_acknowledged_unit_is_deduped_across_worker_hashes(self):
+        old_unit = self.unit()
+        first = self.deliver([old_unit], '40066237080-1')
+        self.ns['apply_delivery_ack'](self.root, self.ack(first))
+        new_hash = 'b' * 64
+        new_output = self.root / 'extracted' / new_hash
+        (new_output / old_unit['artifact']).parent.mkdir(mode=0o700, exist_ok=True)
+        (new_output / old_unit['artifact']).write_bytes(b'native')
+        second = self.deliver_at(new_output, new_hash, [old_unit], '40090131316-1')
+        self.assertEqual(second['unit_texts'], [])
+        self.assertEqual(second['unit_delivery_acknowledged_unchanged_skipped'], 1)
+        shared = json.loads((self.root / 'extracted' / 'acknowledged-units.json').read_text())
+        self.assertEqual(shared['version'], 1)
+        self.assertEqual(len(shared['units']), 1)
+
+    def test_same_content_hash_with_new_worker_metadata_is_deduped(self):
+        old_unit = self.unit()
+        first = self.deliver([old_unit], '40072774055-1')
+        self.ns['apply_delivery_ack'](self.root, self.ack(first))
+        new_hash = 'b' * 64
+        new_output = self.root / 'extracted' / new_hash
+        new_unit = json.loads(json.dumps(old_unit))
+        new_unit['metadata']['page_attempt_id'] = 'new-worker-run:0'
+        (new_output / new_unit['artifact']).parent.mkdir(mode=0o700, exist_ok=True)
+        (new_output / new_unit['artifact']).write_bytes(b'native')
+        second = self.deliver_at(new_output, new_hash, [new_unit], '40090131316-1')
+        self.assertEqual(second['unit_texts'], [])
+        self.assertEqual(second['unit_delivery_cross_worker_skipped'], 1)
+
+    def test_legacy_proposal_without_content_hash_is_migrated_for_cross_worker_dedupe(self):
+        old_unit = self.unit()
+        first = self.deliver([old_unit], '40066237080-1')
+        proposal_path = self.output / 'delivery-proposals' / '40066237080-1.json'
+        proposal = json.loads(proposal_path.read_text())
+        proposal.pop('content_hashes')
+        proposal_path.write_bytes(self.ns['raw_json'](proposal))
+        request = {'worker_hash': self.worker_hash, 'source_run': '40066237080-1',
+                   'proposal_hash': hashlib.sha256(proposal_path.read_bytes()).hexdigest()}
+        self.ns['apply_delivery_ack'](self.root, request)
+        new_hash = 'b' * 64
+        new_output = self.root / 'extracted' / new_hash
+        new_unit = json.loads(json.dumps(old_unit))
+        new_unit['metadata']['page_attempt_id'] = 'legacy-migration-run:0'
+        (new_output / new_unit['artifact']).parent.mkdir(mode=0o700, exist_ok=True)
+        (new_output / new_unit['artifact']).write_bytes(b'native')
+        second = self.deliver_at(new_output, new_hash, [new_unit], '40090131316-1')
+        self.assertEqual(second['unit_texts'], [])
+        self.assertEqual(second['unit_delivery_cross_worker_skipped'], 1)
+
+    def test_cross_worker_digest_conflict_redelivers_and_ack_fails_closed(self):
+        first = self.deliver([self.unit()], '1-1')
+        self.ns['apply_delivery_ack'](self.root, self.ack(first))
+        new_hash = 'b' * 64
+        new_output = self.root / 'extracted' / new_hash
+        changed = self.unit(text=b'changed')
+        (new_output / changed['artifact']).parent.mkdir(mode=0o700, exist_ok=True)
+        (new_output / changed['artifact']).write_bytes(b'changed')
+        second = self.deliver_at(new_output, new_hash, [changed], '2-1')
+        self.assertEqual(len(second['unit_texts']), 1)
+        request = self.ack(second)
+        with self.assertRaisesRegex(ValueError, 'cross_worker_acknowledged_digest_conflict'):
+            self.ns['apply_delivery_ack'](self.root, request)
+        self.assertFalse((new_output / 'acknowledged-units.json').exists())
+
+    def test_malformed_cross_worker_index_fails_closed(self):
+        (self.root / 'extracted' / 'acknowledged-units.json').write_text(
+            json.dumps({'version': 1, 'units': {'not-a-unit-key': '0' * 64}}))
+        with self.assertRaisesRegex(ValueError, 'invalid_acknowledged_unit_digest'):
+            self.deliver([self.unit()], '1-1')
 
     def test_text_ack_does_not_acknowledge_visual_png(self):
         unit = self.unit()

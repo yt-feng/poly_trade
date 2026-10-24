@@ -230,6 +230,20 @@ def validate_acknowledged_units(units):
         if not isinstance(key, str) or not re.fullmatch('[0-9a-f]{64}:[0-9]{12}:(unit|visual)', key) or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
             raise ValueError('invalid_acknowledged_unit_digest')
 
+def validate_cross_worker_content_hashes(values):
+    if not isinstance(values, dict):
+        raise ValueError('invalid_cross_worker_content_hashes')
+    for key, digest in values.items():
+        if not isinstance(key, str) or not re.fullmatch('[0-9a-f]{64}:[0-9]{12}:(unit|visual)', key) or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
+            raise ValueError('invalid_cross_worker_content_hash')
+
+def validate_cross_worker_content_workers(values):
+    if not isinstance(values, dict):
+        raise ValueError('invalid_cross_worker_content_workers')
+    for key, worker_hash in values.items():
+        if not isinstance(key, str) or not re.fullmatch('[0-9a-f]{64}:[0-9]{12}:(unit|visual)', key) or not isinstance(worker_hash, str) or not re.fullmatch('[0-9a-f]{64}', worker_hash):
+            raise ValueError('invalid_cross_worker_content_worker')
+
 def load_acknowledged(output, worker_hash):
     path = output / 'acknowledged-units.json'
     if not path.exists() and not path.is_symlink():
@@ -242,6 +256,99 @@ def load_acknowledged(output, worker_hash):
         if not re.fullmatch('[0-9]{1,25}-[0-9]{1,5}', source_run) or not isinstance(receipt, dict) or not isinstance(receipt.get('proposal_hash'), str) or not re.fullmatch('[0-9a-f]{64}', receipt['proposal_hash']) or not isinstance(receipt.get('evidence_kinds'), list) or not receipt['evidence_kinds'] or not set(receipt['evidence_kinds']) <= {'unit', 'visual'}:
             raise ValueError('invalid_acknowledged_proposal')
     return state
+
+def load_cross_worker_acknowledged(output):
+    """Load the root acknowledgement index shared by all worker hashes.
+
+    Per-worker acknowledgement files remain the audit record for a specific
+    worker.  This index is only a conservative transport dedupe: a unit is
+    skipped by another worker only when its exact delivery digest or verified
+    artifact hash matches an acknowledgement.  Any malformed index is
+    rejected so a bad state can never cause evidence to be silently omitted.
+    """
+    path = output.parent.parent / 'extracted' / 'acknowledged-units.json'
+    if not path.exists() and not path.is_symlink():
+        return {'version': 1, 'units': {}, 'content_hashes': {}, 'content_workers': {}}
+    state = json.loads(read_small(path, ACK_STATE_LIMIT))
+    if state.get('version') != 1 or not isinstance(state.get('units'), dict):
+        raise ValueError('cross_worker_acknowledged_state_identity_mismatch')
+    validate_acknowledged_units(state['units'])
+    content_hashes = state.get('content_hashes', {})
+    content_workers = state.get('content_workers', {})
+    validate_cross_worker_content_hashes(content_hashes)
+    validate_cross_worker_content_workers(content_workers)
+    if not set(content_workers) <= set(content_hashes):
+        raise ValueError('cross_worker_content_worker_without_hash')
+    if not set(content_hashes) <= set(state['units']):
+        raise ValueError('cross_worker_content_hash_without_unit')
+    state['content_hashes'] = content_hashes
+    state['content_workers'] = content_workers
+    return state
+
+def record_cross_worker_acknowledged(root, selected, content_hashes=None, worker_hash=None):
+    """Record exact acknowledged unit digests for subsequent worker hashes."""
+    content_hashes = content_hashes or {}
+    validate_cross_worker_content_hashes(content_hashes)
+    if not set(content_hashes) <= set(selected):
+        raise ValueError('cross_worker_content_hash_without_unit')
+    if content_hashes and (not isinstance(worker_hash, str) or not re.fullmatch('[0-9a-f]{64}', worker_hash)):
+        raise ValueError('cross_worker_content_worker_required')
+    path = root / 'extracted' / 'acknowledged-units.json'
+    if not path.exists() and not path.is_symlink():
+        state = {'version': 1, 'units': {}, 'content_hashes': {}, 'content_workers': {}}
+    else:
+        state = json.loads(read_small(path, ACK_STATE_LIMIT))
+        if state.get('version') != 1 or not isinstance(state.get('units'), dict):
+            raise ValueError('cross_worker_acknowledged_state_identity_mismatch')
+        validate_acknowledged_units(state['units'])
+        state['content_hashes'] = state.get('content_hashes', {})
+        state['content_workers'] = state.get('content_workers', {})
+        validate_cross_worker_content_hashes(state['content_hashes'])
+        validate_cross_worker_content_workers(state['content_workers'])
+        if not set(state['content_workers']) <= set(state['content_hashes']):
+            raise ValueError('cross_worker_content_worker_without_hash')
+        if not set(state['content_hashes']) <= set(state['units']):
+            raise ValueError('cross_worker_content_hash_without_unit')
+    for key, digest in selected.items():
+        previous = state['units'].get(key)
+        if previous is not None and previous != digest:
+            raise ValueError('cross_worker_acknowledged_digest_conflict')
+    for key, digest in content_hashes.items():
+        previous = state['content_hashes'].get(key)
+        if previous is not None and previous != digest:
+            raise ValueError('cross_worker_acknowledged_content_hash_conflict')
+    state['units'].update(selected)
+    state['content_hashes'].update(content_hashes)
+    if worker_hash is not None:
+        state['content_workers'].update({key: worker_hash for key in content_hashes})
+    raw = raw_json(state)
+    if len(raw) > ACK_STATE_LIMIT:
+        raise ValueError('cross_worker_acknowledged_state_capacity')
+    if selected:
+        atomic(path, raw)
+
+def derive_delivery_content_hashes(output, units):
+    """Recover content hashes from a legacy proposal that omitted them."""
+    path = output / 'unit-state.jsonl'
+    if not path.exists() or path.is_symlink():
+        return {}
+    regular(path)
+    found, consumed = {}, 0
+    with path.open() as source:
+        for line in source:
+            if len(line) > 65536:
+                raise ValueError('unit_metadata_line_limit')
+            consumed += len(line)
+            if consumed > REPORT_LIMIT:
+                break
+            unit = json.loads(line)
+            for item in unit_delivery_items(output, unit):
+                key = item['unit_key']
+                if key in units and units[key] == item['evidence_digest'] and item.get('artifact_sha256'):
+                    found[key] = item['artifact_sha256']
+            if len(found) == len(units):
+                break
+    return found
 
 def apply_delivery_ack(root, ack):
     if ack is None:
@@ -265,15 +372,30 @@ def apply_delivery_ack(root, ack):
     if proposal.get('version') != 1 or proposal.get('worker_hash') != worker_hash or proposal.get('source_run') != source_run:
         raise ValueError('delivery_ack_proposal_identity_mismatch')
     validate_acknowledged_units(proposal.get('units'))
+    content_hashes = proposal.get('content_hashes', {})
+    if 'content_hashes' not in proposal:
+        content_hashes = derive_delivery_content_hashes(output, proposal['units'])
+    validate_cross_worker_content_hashes(content_hashes)
+    if not set(content_hashes) <= set(proposal['units']):
+        raise ValueError('cross_worker_content_hash_without_unit')
+    selected = {key: digest for key, digest in proposal['units'].items() if key.rsplit(':', 1)[1] in kinds}
+    selected_content_hashes = {key: digest for key, digest in content_hashes.items() if key.rsplit(':', 1)[1] in kinds}
     state = load_acknowledged(output, worker_hash)
     previous = state['proposals'].get(source_run)
     if previous is not None:
         if previous['proposal_hash'] != proposal_hash:
             raise ValueError('delivery_ack_replay_conflict')
+        # A state created before cross-worker indexing may already contain a
+        # successful local acknowledgement.  Reconcile it into the shared
+        # index before treating a replay as idempotent.
+        record_cross_worker_acknowledged(root, selected, selected_content_hashes, worker_hash)
         if set(kinds) <= set(previous['evidence_kinds']):
             return {'status': 'already_acknowledged', 'source_run': source_run,
                     'worker_hash': worker_hash, 'proposal_hash': proposal_hash, 'semantic_read_credited': False}
-    selected = {key: digest for key, digest in proposal['units'].items() if key.rsplit(':', 1)[1] in kinds}
+    # Validate and publish the cross-worker index before mutating the local
+    # acknowledgement.  A conflicting digest must not leave a local state
+    # that would suppress the conflicting evidence on a later run.
+    record_cross_worker_acknowledged(root, selected, selected_content_hashes, worker_hash)
     state['units'].update(selected)
     state['proposals'][source_run] = {'proposal_hash': proposal_hash,
                                     'evidence_kinds': sorted(set(kinds) | set(previous['evidence_kinds'] if previous else []))}
@@ -285,9 +407,14 @@ def apply_delivery_ack(root, ack):
             'proposal_hash': proposal_hash, 'acknowledged_evidence_count': len(selected),
             'evidence_kinds_acknowledged': kinds, 'semantic_read_credited': False, 'visual_review_credited': False}
 
-def save_delivery_proposal(output, worker_hash, source_run, units):
+def save_delivery_proposal(output, worker_hash, source_run, units, content_hashes=None):
     validate_acknowledged_units(units)
+    content_hashes = content_hashes or {}
+    validate_cross_worker_content_hashes(content_hashes)
+    if not set(content_hashes) <= set(units):
+        raise ValueError('cross_worker_content_hash_without_unit')
     proposal = {'version': 1, 'worker_hash': worker_hash, 'source_run': source_run, 'units': units,
+                'content_hashes': content_hashes,
                 'semantics': 'verified_evidence_transport_only; semantic_and_visual_read_not_credited'}
     raw = raw_json(proposal)
     if len(raw) > REPORT_LIMIT:
@@ -360,7 +487,12 @@ def build_unit_delivery(output, worker_hash, source_run, report):
     report['unit_delivery_complete_for_cloud_snapshot'] = False
     units_path = output / 'unit-state.jsonl'
     acknowledged = load_acknowledged(output, worker_hash)['units']
-    proposed, exhausted, pending_large_units, skipped = {}, True, False, 0
+    cross_worker_state = load_cross_worker_acknowledged(output)
+    cross_worker_acknowledged = cross_worker_state['units']
+    cross_worker_content_hashes = cross_worker_state['content_hashes']
+    cross_worker_content_workers = cross_worker_state['content_workers']
+    proposed, proposed_content_hashes = {}, {}
+    exhausted, pending_large_units, skipped, cross_worker_skipped = True, False, 0, 0
     report['unit_delivery_protocol'] = 'per_unit_evidence_kind_and_digest_v1'
     report['legacy_delivery_cursor_ignored'] = (output / 'delivery-cursor.json').exists()
     if units_path.exists():
@@ -373,8 +505,15 @@ def build_unit_delivery(output, worker_hash, source_run, report):
                 for item in unit_delivery_items(output, unit):
                     key, digest = item['unit_key'], item['evidence_digest']
                     complete = item['unit_evidence_complete']
-                    if complete and acknowledged.get(key) == digest:
+                    content_hash = item.get('artifact_sha256')
+                    exact_ack = acknowledged.get(key) == digest or cross_worker_acknowledged.get(key) == digest
+                    cross_content_ack = (complete and isinstance(content_hash, str)
+                                         and cross_worker_content_hashes.get(key) == content_hash
+                                         and cross_worker_content_workers.get(key) != worker_hash)
+                    if complete and (exact_ack or cross_content_ack):
                         skipped += 1
+                        if cross_content_ack and not exact_ack:
+                            cross_worker_skipped += 1
                         continue
                     report['unit_texts'].append(item)
                     if len(raw_json(report)) > REPORT_LIMIT - 131072:
@@ -383,15 +522,18 @@ def build_unit_delivery(output, worker_hash, source_run, report):
                         break
                     if complete:
                         proposed[key] = digest
+                        if isinstance(content_hash, str):
+                            proposed_content_hashes[key] = content_hash
                     else:
                         pending_large_units = True
                 if not exhausted:
                     break
     report.update(unit_delivery_complete_for_cloud_snapshot=exhausted and not pending_large_units,
                   unit_delivery_acknowledged_unchanged_skipped=skipped,
+                  unit_delivery_cross_worker_skipped=cross_worker_skipped,
                   unit_delivery_count_semantics='unit_and_visual_evidence_are_separate; not_page_or_learning_counts',
                   unit_delivery_semantics='whole_unit_artifacts_and_separate_small_PNGs; no_semantic_or_visual_review_credit')
-    report['unit_delivery_proposal'] = save_delivery_proposal(output, worker_hash, source_run, proposed)
+    report['unit_delivery_proposal'] = save_delivery_proposal(output, worker_hash, source_run, proposed, proposed_content_hashes)
 
 def source_receipts(output, report):
     path = output / 'manifest-state.jsonl'
