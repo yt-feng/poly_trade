@@ -1,0 +1,147 @@
+name: H717 owner trade to public L2 orderbook join
+
+on:
+  workflow_dispatch:
+    inputs:
+      pmxt_base_url:
+        description: Fixed PMXT v2 hourly archive prefix (read-only)
+        required: false
+        default: https://r2v2.pmxt.dev
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  join:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install vault, DuckDB and latest official SDK
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements-vault.txt duckdb
+          sdk_commit="$(git ls-remote https://github.com/Polymarket/py-sdk.git refs/heads/main | cut -f1)"
+          test "${#sdk_commit}" -eq 40
+          echo "POLY_SDK_COMMIT=$sdk_commit" >> "$GITHUB_ENV"
+          python -m pip install "git+https://github.com/Polymarket/py-sdk.git@$sdk_commit"
+      - name: Capture existing authenticated activity and join public L2
+        env:
+          POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
+          BTC5M_POLYMARKET_PRIVATE_KEY: ${{ secrets.BTC5M_POLYMARKET_PRIVATE_KEY }}
+          PMXT_BASE_URL: ${{ inputs.pmxt_base_url }}
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          private_dir="$RUNNER_TEMP/h717"
+          mkdir -m 700 "$private_dir"
+          python - "$private_dir/keys.json" <<'PY'
+          import json, os, sys
+          rows=[]
+          for label, env_name in (("polymarket", "POLYMARKET_PRIVATE_KEY"), ("btc5m", "BTC5M_POLYMARKET_PRIVATE_KEY")):
+              value=os.environ.get(env_name, "").strip()
+              if value:
+                  rows.append({"label": label, "private_key": value})
+          json.dump(rows, open(sys.argv[1], "w"), separators=(",", ":"))
+          PY
+          set +e
+          python -u analysis/h279_authenticated_lifecycle_capture.py \
+            --keys-file "$private_dir/keys.json" \
+            --sdk-commit "$POLY_SDK_COMMIT" \
+            --output "$private_dir/h279.json" \
+            > "$private_dir/h279.stdout" 2> "$private_dir/h279.stderr"
+          h279_rc=$?
+          set -e
+          if [ "$h279_rc" -eq 0 ]; then
+            python -u analysis/h717_owner_orderbook_join.py \
+              --h279 "$private_dir/h279.json" \
+              --base-url "$PMXT_BASE_URL" \
+              --output "$private_dir/h717.json" \
+              > "$private_dir/h717.stdout"
+          else
+            python - "$private_dir/h717.json" "$h279_rc" <<'PY'
+          import json, sys
+          json.dump({
+              "format": "h717-owner-orderbook-join-failure-v1",
+              "failure_code": "authenticated_capture_failed",
+              "h279_return_code": int(sys.argv[2]),
+              "actual_fills": 0,
+              "verified_canary_fills": 0,
+              "live_orders_enabled": False,
+              "strategy_evaluated": False,
+              "new_data_collected": False,
+          }, open(sys.argv[1], "w"), indent=2)
+          PY
+          fi
+          export H279_RC="$h279_rc"
+          python - "$private_dir" <<'PY'
+          import base64, hashlib, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private=Path(sys.argv[1])
+          encoded=os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64','')
+          recipient_id=os.environ.get('QUALITY_FIRST_RECIPIENT_ID','')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient=research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          h279=json.loads((private/'h279.json').read_text()) if (private/'h279.json').exists() else {}
+          h717=json.loads((private/'h717.json').read_text()) if (private/'h717.json').exists() else {}
+          payload={
+              'format':'h717-owner-orderbook-join-sealed-v1',
+              'h279':h279,
+              'h717':h717,
+              'workflow':{
+                  'run_id':os.environ['GITHUB_RUN_ID'],
+                  'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],
+                  'ref':os.environ['GITHUB_REF'],
+                  'source_commit':os.environ['GITHUB_SHA'],
+                  'pmxt_base_url_sha256':hashlib.sha256(os.environ.get('PMXT_BASE_URL','').encode()).hexdigest(),
+              },
+          }
+          delivery=Path('sealed-delivery'); delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery/'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          complete=int(os.environ.get('H279_RC','1')) == 0 and h717.get('format') == 'h717-owner-orderbook-join-v1'
+          status={'version':1,'status':'complete' if complete else 'failed','stage':'sealed_delivery',
+                  'strategy_evaluated':False,'live_orders_enabled':False,'plaintext_published':False,
+                  'sealed_parts':1}
+          if not complete:
+              status['failed_stage']='capture_or_join'
+          research_vault.write_new(delivery/'status.json', research_vault.canonical(status)+b'\n', 0o644)
+          PY
+      - name: Publish only encrypted H717 evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+      - name: Write redacted summary and cleanup
+        if: always()
+        run: |
+          echo '## H717 owner trade to public L2 orderbook join' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Read-only authenticated activity capture joined to a fixed PMXT v2 public hourly book source.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Displayed-book coverage is an evidence audit only; it is not an authenticated fill, strategy result, canary, or live order.' >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          for name in ('h717', 'sealed-delivery'):
+              path=Path(os.environ.get('RUNNER_TEMP','/tmp'))/name if name == 'h717' else Path(name)
+              if path.exists(): shutil.rmtree(path)
+          PY
