@@ -30,6 +30,7 @@ SOURCE_COMMIT = "bbda5f2050685f63153621a54641ebdfab943487"
 HYPOTHESIS_ID = "H707_QML_TEMPORAL_CAUSAL_BOUNDARY_AUDIT"
 RESULT_FORMAT = "old-clean-h707-temporal-contract-audit-v1"
 DECISION_OFFSET_SECONDS = float(frozen.ENTRY_SECONDS_AFTER_START)
+MARKET_DURATION_SECONDS = 300.0
 
 # The feature builder's snapshot ages are measured backwards from these
 # declared cutoffs.  The map is intentionally explicit so a newly added
@@ -76,6 +77,12 @@ def _feature_timestamp(features: pd.DataFrame, name: str) -> pd.Series:
     return first + pd.to_timedelta(120.0, unit="s") - pd.to_timedelta(age, unit="s")
 
 
+def _label_timestamp(features: pd.DataFrame) -> pd.Series:
+    """Return the label-availability boundary, not the slug's start time."""
+    start = features["slug"].astype(str).map(study.base.parse_close_ts_from_slug)
+    return start + pd.to_timedelta(MARKET_DURATION_SECONDS, unit="s")
+
+
 def _identity_hash(features: pd.DataFrame) -> str:
     columns = [
         "market_id", "run_name", "slug", "first_quote_ts",
@@ -96,7 +103,7 @@ def _run_boundary_audit(features: pd.DataFrame, runs: list[str]) -> dict[str, An
     """Check that labels from training runs precede each scored run's decisions."""
     first = pd.to_datetime(features["first_quote_ts"], utc=True, errors="coerce")
     decision = first + pd.to_timedelta(DECISION_OFFSET_SECONDS, unit="s")
-    close = features["slug"].astype(str).map(study.base.parse_close_ts_from_slug)
+    close = _label_timestamp(features)
     violations: list[dict[str, Any]] = []
     for index, run_name in enumerate(runs):
         if index < 4:
@@ -122,7 +129,7 @@ def _run_boundary_audit(features: pd.DataFrame, runs: list[str]) -> dict[str, An
 
 def _label_visibility_audit(features: pd.DataFrame, decision: pd.Series) -> dict[str, Any]:
     """Check that the outcome label is not available at or before entry."""
-    close = features["slug"].astype(str).map(study.base.parse_close_ts_from_slug)
+    close = _label_timestamp(features)
     invalid = close.isna() | close.le(decision)
     samples = features.loc[invalid, ["market_id", "run_name", "slug", "first_quote_ts"]].head(5)
     return {

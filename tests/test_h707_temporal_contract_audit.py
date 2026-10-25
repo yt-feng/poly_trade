@@ -29,6 +29,12 @@ class H707TemporalContractTests(unittest.TestCase):
     def test_unmapped_feature_is_explicit(self):
         self.assertNotIn("not_a_feature", audit.FEATURE_CUTOFF_SECONDS)
 
+    def test_slug_epoch_is_market_start_and_label_is_after_five_minutes(self):
+        frame = self._frame(0.0)
+        label = audit._label_timestamp(frame).iloc[0]
+        close = pd.Timestamp("2023-11-14T22:23:20Z")
+        self.assertEqual(label, close)
+
 
 if __name__ == "__main__":
     unittest.main()
