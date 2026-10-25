@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tarfile
 import tempfile
@@ -258,7 +259,13 @@ class PublicFeedProbeTests(unittest.TestCase):
         self.assertNotIn('GH_TOKEN:', workflow)
         self.assertIn('vars.QUALITY_FIRST_RECIPIENT_JSON_B64', workflow)
         self.assertIn('quality-first-sealed-${{ github.run_id }}-${{ github.run_attempt }}', workflow)
-        self.assertIn('quality-first-research, sealed-feed-probe]', publisher)
+        # The allowlist is intentionally extensible; assert that the existing
+        # publisher subscribes to sealed-feed-probe without depending on the
+        # probe being the final item in the inline YAML list.
+        self.assertRegex(
+            publisher,
+            r'workflows:\s*\[[^\]]*\bsealed-feed-probe\b[^\]]*\]',
+        )
         self.assertIn('quality-first-sealed-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}', publisher)
 
     def test_market_constraints_mode_is_bounded_and_seals_identity_bound_real_schema_fields(self):
