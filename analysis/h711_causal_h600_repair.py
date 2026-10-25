@@ -94,6 +94,9 @@ def evaluate(source_root: Path, *, source_commit: str = SOURCE_COMMIT, output: P
             "live_orders_enabled": False,
             "actual_fills": 0,
             "verified_canary_fills": 0,
+            "evaluation_validated": False,
+            "promotion_eligible": False,
+            "legacy_diagnostic_requires_independent_contract_review": True,
             "evidence_boundary": "strict-quality pinned old-clean causal H600 paper replay; no authenticated order, fill, settlement, released-cash, or balance receipt",
             "next_action": "promote only if every tested stress cell has independent holdout ten-fill same-ledger passage; otherwise quarantine and do not retune on holdout",
         }

@@ -12,108 +12,89 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: h712-private-research
+  cancel-in-progress: false
+
 jobs:
   repair:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    env:
+      RESEARCH_RECIPIENT_ID: 5d68eb70893219fd4281958caf0072d145babc30123714f070a3ba058956e7a9
+      SOURCE_DATA_COMMIT: ${{ inputs.source_commit }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install sealing dependencies
+        id: vault_dependencies
+        run: python -m pip install -r requirements-vault.txt
       - uses: actions/checkout@v4
         with:
           repository: yt-feng/poly
           path: source_poly
           fetch-depth: 1
+          persist-credentials: false
           ref: ${{ inputs.source_commit }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
       - name: Install research dependencies
-        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy scikit-learn pytest
-      - name: Validate H712 causal H549 contract
-        run: python -m pytest -q tests/test_h712_causal_h549_repair.py tests/test_h542_adaptive_cash_policy.py tests/test_h506_h452_execution_depth_stress.py tests/test_h508_cash_fraction_depth_tradeoff.py
-      - name: Run causal H549 repair on pinned old-clean source
+        run: python -m pip install -r requirements.txt pytest
+      - name: Validate research and delivery contracts
+        run: python -m pytest -q tests/test_h712_causal_h549_repair.py tests/test_h542_adaptive_cash_policy.py tests/test_h506_h452_execution_depth_stress.py tests/test_h508_cash_fraction_depth_tradeoff.py tests/test_research_step_delivery.py
+      - name: Execute registered research privately
+        id: evaluate
         env:
           PYTHONUNBUFFERED: '1'
         run: |
-          set -euo pipefail
-          PRIVATE_DIR="$RUNNER_TEMP/old-data-h712"
-          mkdir -m 700 "$PRIVATE_DIR"
-          python -u analysis/h712_causal_h549_repair.py \
+          python tools/research_step_delivery.py run \
+            --private "$RUNNER_TEMP/old-data-h712" --timeout-seconds 9900 -- \
+            python -u analysis/h712_causal_h549_repair.py \
             --source-root source_poly/data/monthly_runs \
-            --source-commit "${{ inputs.source_commit }}" \
-            --output "$PRIVATE_DIR/results" > "$PRIVATE_DIR/analysis-output.txt"
-      - name: Seal H712 result
+            --source-commit "$SOURCE_DATA_COMMIT" \
+            --output "$RUNNER_TEMP/old-data-h712/results"
+      - name: Seal execution outcome including failures
+        id: seal
+        if: always() && steps.vault_dependencies.outcome == 'success'
         env:
-          SOURCE_DATA_COMMIT: ${{ inputs.source_commit }}
+          EVALUATION_OUTCOME: ${{ steps.evaluate.outcome }}
+          SETUP_OUTCOMES: ${{ toJSON(steps) }}
         run: |
-          set -euo pipefail
-          python - "$RUNNER_TEMP/old-data-h712" <<'PY'
-          import json, os, sys
-          from pathlib import Path
-          sys.path.insert(0, 'tools')
-          import research_vault
-          private = Path(sys.argv[1])
-          recipient = research_vault.load_json_bytes(Path('research_vault/recipient.json').read_bytes(), 4096)
-          recipient_id = recipient['recipient_id']
-          research_vault.validate_recipient(recipient, recipient_id)
-          results = private / 'results'
-          payload = research_vault.canonical({
-              'format': 'old-clean-h712-causal-h549-adaptive-cash-boost-repair-sealed-v1',
-              'preregistration': {
-                  'hypothesis_id': 'H712_CAUSAL_H549_ADAPTIVE_CASH_BOOST_REPAIR',
-                  'parent_hypothesis_id': 'H549_BOOST_05875_AFTER_ONE_PROFIT',
-                  'removed_feature': 'btc_move_4m',
-                  'settlement_clock': 'slug_epoch_plus_300_seconds',
-                  'base_fraction': 0.55,
-                  'boost_fraction': 0.5875,
-                  'boost_after_profitable_released_exits': 1,
-                  'source_commit': os.environ['SOURCE_DATA_COMMIT'],
-              },
-              'summary': json.loads((results / 'summary.json').read_text()),
-              'analysis_output': (private / 'analysis-output.txt').read_text(),
-              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'ref': os.environ['GITHUB_REF'], 'source_commit': os.environ['SOURCE_DATA_COMMIT']},
-              'actual_fills': 0,
-              'verified_canary_fills': 0,
-              'live_orders_enabled': False,
-              'plaintext_published': False,
-          })
-          delivery = Path('sealed-delivery'); delivery.mkdir(mode=0o700)
-          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(payload, recipient, recipient_id), 0o600)
-          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version':1,'status':'complete','stage':'sealed_delivery','strategy_evaluated':True,'live_orders_enabled':False,'plaintext_published':False,'sealed_parts':1}) + b'\n', 0o644)
-          PY
-      - name: Publish encrypted H712 journal
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          RECIPIENT_ID="$(python -c 'import json; print(json.load(open("research_vault/recipient.json"))["recipient_id"])')"
-          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
-            --source sealed-delivery \
-            --repository yt-feng/poly_trade \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --recipient-id "$RECIPIENT_ID" \
-            --cell-id h712-causal-h549-repair
-      - name: Upload ciphertext and generic status only
-        if: ${{ !cancelled() }}
+          python tools/research_step_delivery.py seal \
+            --private "$RUNNER_TEMP/old-data-h712" --output sealed-delivery \
+            --profile h712 --source-commit "$SOURCE_DATA_COMMIT"
+      - name: Retain ciphertext for recovery
+        if: always() && steps.seal.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: h712-causal-h549-repair-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            sealed-delivery/part-0000.vault
+            sealed-delivery/part-*.vault
             sealed-delivery/status.json
           if-no-files-found: error
           retention-days: 14
-      - name: Write redacted summary
+      - name: Persist encrypted outcome
+        if: always() && steps.seal.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID" --cell-id h712-causal-h549-repair
+      - name: Require valid delivered execution
+        if: always() && steps.seal.outcome == 'success' && steps.evaluate.outcome == 'success'
+        env:
+          EVALUATION_COMPLETE: ${{ steps.seal.outputs.evaluation_complete }}
+        run: test "$EVALUATION_COMPLETE" = 'true'
+      - name: Public delivery summary
         if: always()
         run: |
-          echo '## H712 causal H549 repair' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Reused the pinned old-clean source and H549 0.55 -> 0.5875 after one profitable released exit.' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Removed the post-decision four-minute feature and anchored settlement at market-start plus 300 seconds.' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Detailed metrics remain encrypted; no orders, transfers, or canary fills were created.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Research execution and diagnostics are retained through encrypted delivery.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Workflow completion does not establish strategy qualification or actual fills.' >> "$GITHUB_STEP_SUMMARY"
       - name: Remove runner-local plaintext
         if: always()
         run: |

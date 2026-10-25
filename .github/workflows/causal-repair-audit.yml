@@ -1,0 +1,115 @@
+name: Causal research contract audit
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Pinned source commit
+        required: true
+        type: string
+      request_sha256:
+        description: Frozen private request digest
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: causal-research-contract-audit
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      SOURCE_DATA_COMMIT: ${{ inputs.source_commit }}
+      REQUEST_SHA256: ${{ inputs.request_sha256 }}
+      RESEARCH_RECIPIENT_ID: 5d68eb70893219fd4281958caf0072d145babc30123714f070a3ba058956e7a9
+      OMP_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install delivery dependencies
+        id: vault_dependencies
+        run: python -m pip install -r requirements-vault.txt
+      - name: Restore registered private request
+        id: input
+        env:
+          PRIVATE_CONFIG_B64: ${{ secrets.CAUSAL_REPAIR_CONFIG_B64 }}
+        run: |
+          python - <<'PY'
+          import base64, hashlib, json, os
+          from pathlib import Path
+          try:
+              raw = base64.b64decode(os.environ['PRIVATE_CONFIG_B64'], validate=True)
+              if len(raw) > 65536 or hashlib.sha256(raw).hexdigest() != os.environ['REQUEST_SHA256']:
+                  raise ValueError()
+              config = json.loads(raw)
+              if config['source_commit'] != os.environ['SOURCE_DATA_COMMIT'] or config['live_orders_enabled'] is not False:
+                  raise ValueError()
+              private = Path(os.environ['RUNNER_TEMP']) / 'causal-audit'
+              private.mkdir(mode=0o700)
+              with (private / 'frozen_input.json').open('xb') as handle: handle.write(raw)
+              (private / 'frozen_input.json').chmod(0o600)
+          except Exception:
+              raise SystemExit('Private request validation failed') from None
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ inputs.source_commit }}
+      - name: Install pinned research dependencies
+        run: python -m pip install numpy==2.3.5 pandas==2.2.3 scikit-learn==1.8.0 pytest==9.1.1
+      - name: Validate synthetic research contracts
+        run: python -m pytest -q tests/test_causal_prefix_dataset.py tests/test_causal_cash_ledger.py tests/test_causal_repair_audit.py tests/test_research_step_delivery.py
+      - name: Execute registered audit privately
+        id: evaluate
+        run: |
+          python tools/research_step_delivery.py run --private "$RUNNER_TEMP/causal-audit" --timeout-seconds 9900 -- \
+            python -u analysis/causal_repair_audit.py --source-root source_poly/data/monthly_runs \
+            --config "$RUNNER_TEMP/causal-audit/frozen_input.json" --output "$RUNNER_TEMP/causal-audit/results"
+      - name: Seal completed or failed research evidence
+        id: seal
+        if: always() && steps.vault_dependencies.outcome == 'success'
+        env:
+          EVALUATION_OUTCOME: ${{ steps.evaluate.outcome }}
+          SETUP_OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          python tools/research_step_delivery.py seal --private "$RUNNER_TEMP/causal-audit" \
+            --output sealed-delivery --summary-output sealed-summary \
+            --contract "$RUNNER_TEMP/causal-audit/frozen_input.json" --source-commit "$SOURCE_DATA_COMMIT"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.seal.outcome == 'success'
+        with:
+          name: causal-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            sealed-delivery/part-*.vault
+            sealed-delivery/status.json
+            sealed-summary/part-*.vault
+            sealed-summary/status.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Persist full encrypted evidence
+        if: always() && steps.seal.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PYTHONPATH=tools python tools/publish_quality_first_journal.py --source sealed-delivery --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --recipient-id "$RESEARCH_RECIPIENT_ID" --cell-id causal-audit-full
+      - name: Persist compact encrypted readback
+        if: always() && steps.seal.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PYTHONPATH=tools python tools/publish_quality_first_journal.py --source sealed-summary --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --recipient-id "$RESEARCH_RECIPIENT_ID" --cell-id causal-audit-summary
+      - name: Require valid delivered execution
+        if: always() && steps.seal.outcome == 'success' && steps.evaluate.outcome == 'success'
+        env:
+          EVALUATION_COMPLETE: ${{ steps.seal.outputs.evaluation_complete }}
+        run: test "$EVALUATION_COMPLETE" = 'true'
+      - name: Public summary
+        if: always()
+        run: echo 'Execution and delivery outcomes are distinct. Findings are encrypted. No trading actions were performed.' >> "$GITHUB_STEP_SUMMARY"
