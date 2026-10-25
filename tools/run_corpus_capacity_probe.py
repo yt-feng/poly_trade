@@ -23,6 +23,13 @@ import run_quality_first_research as delivery
 SSH_TIMEOUT_SECONDS = 45
 OUTPUT_LIMIT = 256 * 1024
 IDENTITY_CHECK_SECONDS = 5
+# The extraction controller can remain quiet while the cloud worker parses a
+# bounded batch.  Keep the SSH session alive during that quiet period and
+# allow one bounded connection retry for transient runner-to-host handshakes.
+SSH_CONNECT_TIMEOUT_SECONDS = 30
+SSH_CONNECTION_ATTEMPTS = 2
+SSH_SERVER_ALIVE_INTERVAL_SECONDS = 15
+SSH_SERVER_ALIVE_COUNT_MAX = 4
 
 # Fixed source, sent over stdin. Its only filesystem access is bounded reads,
 # directory existence/statvfs and module/command discovery, never a data scan.
@@ -189,7 +196,11 @@ def configuration(environment):
 def ssh_command(host, user, identity, known_hosts):
     return ['ssh', '-F', '/dev/null', '-i', str(identity),
             '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
-            '-o', 'ConnectTimeout=15', '-o', 'ConnectionAttempts=1',
+            '-o', f'ConnectTimeout={SSH_CONNECT_TIMEOUT_SECONDS}',
+            '-o', f'ConnectionAttempts={SSH_CONNECTION_ATTEMPTS}',
+            '-o', f'ServerAliveInterval={SSH_SERVER_ALIVE_INTERVAL_SECONDS}',
+            '-o', f'ServerAliveCountMax={SSH_SERVER_ALIVE_COUNT_MAX}',
+            '-o', 'TCPKeepAlive=yes',
             '-o', 'StrictHostKeyChecking=yes',
             '-o', 'UserKnownHostsFile=' + str(known_hosts),
             '-o', 'GlobalKnownHostsFile=/dev/null',
