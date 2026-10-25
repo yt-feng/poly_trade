@@ -280,6 +280,7 @@ def replay_cash_ledger(
             exit_order_trigger_ts=(resolution["exit_order_trigger_ts"].isoformat()
                                    if resolution.get("exit_order_trigger_ts") else None),
             cash_after_release=cash,
+            unresolved_reason=None,
         )
         pending = None
 
@@ -347,6 +348,28 @@ def replay_cash_ledger(
             max_exit_quote_wait_seconds=max_exit_quote_wait_seconds,
             diagnostics=chain[-1],
         )
+        # Post-entry telemetry only: none of these fields participates in
+        # admission, sizing, resolution selection, release, or PnL arithmetic.
+        label_outcome = _finite(row.get("outcome_up"))
+        label_available = _timestamp(row.get("label_available_ts"))
+        label_status = row.get("label_status")
+        if label_status is None or str(label_status) in {"nan", "NaT", "<NA>"}:
+            label_status = None
+        else:
+            label_status = str(label_status)
+        if resolution is None:
+            unresolved_reason = "settlement_evidence_missing"
+        elif horizon is not None and resolution["release_ts"] > horizon:
+            unresolved_reason = "cash_release_after_evidence_horizon"
+        else:
+            unresolved_reason = "cash_release_pending"
+        chain[-1].update(
+            outcome_up=label_outcome if label_outcome in (0.0, 1.0) else None,
+            label_available_ts=label_available.isoformat() if label_available else None,
+            label_status=label_status,
+            unresolved_reason=unresolved_reason,
+            evidence_end_ts=horizon.isoformat() if horizon else None,
+        )
         pending = {"position_index": len(chain) - 1, "resolution": resolution}
 
     if pending is not None and pending["resolution"] is not None:
@@ -385,6 +408,7 @@ def replay_cash_ledger(
         "elapsed_seconds": (last_release - first_entry).total_seconds() if last_release and first_entry else None,
         "failure_reason": failure, "skipped": dict(skips), "chain": chain,
         "cash_release_is_simulated_assumption": True,
+        "evidence_end_ts": horizon.isoformat() if horizon else None,
         "exit_latency_seconds": float(exit_latency_seconds),
         "max_exit_quote_wait_seconds": float(max_exit_quote_wait_seconds),
         "exit_order_attempts": sum(item["exit_order_attempts"] for item in chain),

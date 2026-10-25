@@ -251,3 +251,28 @@ def test_missing_arrival_times_out_instead_of_using_late_profitable_quote():
     assert report["chain"][0]["resolution_kind"] == "observed_label_settlement"
     assert report["chain"][0]["payout"] == 0
     assert report["exit_order_attempts"] == 2
+
+
+def test_pending_diagnostics_distinguish_missing_evidence_from_release_boundary():
+    row = candidate(label_status="estimated_close_time_sample_proxy")
+    before_release = row["cash_release_ts"] - timedelta(microseconds=1)
+    delayed = replay_cash_ledger([row], {}, evidence_end_ts=before_release)
+    missing = replay_cash_ledger(
+        [dict(row, outcome_up=None, label_available_ts=None, label_status=None)],
+        {}, evidence_end_ts=before_release,
+    )
+    released = replay_cash_ledger([row], {}, evidence_end_ts=row["cash_release_ts"])
+    delayed_position = delayed["chain"][0]
+    assert delayed_position["unresolved_reason"] == "cash_release_after_evidence_horizon"
+    assert delayed_position["outcome_up"] == 1.0
+    assert delayed_position["label_available_ts"] == row["label_available_ts"].isoformat()
+    assert delayed_position["label_status"] == row["label_status"]
+    assert delayed_position["evidence_end_ts"] == before_release.isoformat()
+    assert missing["chain"][0]["unresolved_reason"] == "settlement_evidence_missing"
+    assert missing["chain"][0]["outcome_up"] is None
+    assert missing["chain"][0]["label_available_ts"] is None
+    assert missing["chain"][0]["label_status"] is None
+    assert released["chain"][0]["unresolved_reason"] is None
+    assert delayed["entries"] == missing["entries"] == released["entries"] == 1
+    assert delayed["ending_cash"] == missing["ending_cash"]
+    assert released["ending_cash"] == pytest.approx(15.3075)
