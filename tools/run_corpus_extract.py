@@ -116,6 +116,11 @@ MAX_TESSDATA_BYTES = 32 * 1024 * 1024
 report = {'version': 1, 'scope': 'bounded_private_cloud_extraction',
           'created_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
           'run_id': payload['run_id'], 'source_commit': payload['source_commit'], 'mode': payload['mode'],
+          # Every invocation is a bounded tranche over already-uploaded
+          # objects.  Keep this explicit in the sealed report so a successful
+          # worker run cannot be mistaken for full-corpus learning.
+          'manifest_scope': 'rotating_uploaded_objects_tranche_not_full_corpus',
+          'full_corpus_complete': False,
           'semantic_learning_complete': False, 'strategy_evaluations': 0,
           'actual_orders': 0, 'trading_services_changed': False,
           'source_publication': False, 'errors': []}
@@ -934,7 +939,8 @@ def process_locked():
             report['recovery_source_ids_missing'] = [value for value in recovery_source_ids if value not in names]
     report.update(metadata_records_read=metadata_read, metadata_names_seen=len(names),
                   selected_manifest=selected, deferred_sources=deferred,
-                  manifest_scope='rotating_uploaded_objects_tranche_not_full_corpus')
+                  manifest_scope='rotating_uploaded_objects_tranche_not_full_corpus',
+                  full_corpus_complete=False)
     if not selected and not (output / 'state.sqlite3').exists():
         report['status'] = 'deferred_no_complete_uploaded_sources'
         return

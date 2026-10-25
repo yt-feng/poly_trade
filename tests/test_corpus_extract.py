@@ -40,6 +40,11 @@ class CorpusExtractTests(unittest.TestCase):
         self.assertEqual(readback['cursor_code'], 'readback_no_advance')
         self.assertNotIn('host', repr(completed)); self.assertNotIn('secret', repr(completed))
 
+    def test_remote_report_cannot_claim_full_corpus_from_a_bounded_tranche(self):
+        self.assertIn("'manifest_scope': 'rotating_uploaded_objects_tranche_not_full_corpus'", extract.REMOTE_EXTRACT)
+        self.assertIn("'full_corpus_complete': False", extract.REMOTE_EXTRACT)
+        self.assertIn("full_corpus_complete=False", extract.REMOTE_EXTRACT)
+
     def test_cloud_gate_precedes_identity_source_or_transport(self):
         with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}), \
                 patch.object(extract.probe, 'configuration') as configuration, \
