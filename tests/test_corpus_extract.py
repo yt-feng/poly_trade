@@ -1,6 +1,7 @@
 """Controller validation only; never processes corpus data or opens SSH."""
 import ast
 import base64
+from contextlib import redirect_stdout
 import fcntl
 import hashlib
 import io
@@ -18,6 +19,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import run_corpus_extract as extract
+import persist_quality_first_journal as journal
 
 
 class CorpusExtractTests(unittest.TestCase):
@@ -504,6 +506,153 @@ class ReadbackTests(unittest.TestCase):
         (self.root / 'objects' / sid).unlink()
         self.ns['source_availability_snapshot'](self.root, self.ns['report'])
         self.assertEqual(self.ns['report']['source_availability']['sources'][0]['status'], 'unavailable_or_rejected')
+
+
+class DirectJsonDeliveryTests(unittest.TestCase):
+    """Use tiny synthetic reports; no SSH, corpus reads, or archive extraction."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.archive = self.root / 'archive'
+        self.direct = self.root / 'direct'
+        self.key = extract.vault.X25519PrivateKey.generate()
+        self.recipient = extract.vault.recipient_for(self.key)
+        self.recipient_id = self.recipient['recipient_id']
+        self.environment = {
+            'GITHUB_ACTIONS': 'true',
+            'QUALITY_FIRST_RECIPIENT_JSON_B64': base64.b64encode(
+                extract.vault.canonical(self.recipient)).decode(),
+            'QUALITY_FIRST_RECIPIENT_ID': self.recipient_id,
+        }
+        self.archived_raw = None
+
+    def fake_bundle(self, private):
+        self.archived_raw = (private / 'results' / 'extraction.json').read_bytes()
+        return b'synthetic bundle'
+
+    def fake_archive_delivery(self, bundle, output, recipient, recipient_id):
+        self.assertEqual(bundle, b'synthetic bundle')
+        extract.vault.write_new(output / 'part-0000.vault',
+                                extract.vault.seal(bundle, recipient, recipient_id))
+        return 1
+
+    def run_main(self, record=None, *, extract_error=None, archive_error=None, direct=True):
+        stdout = io.StringIO()
+        argv = ['--output', str(self.archive)]
+        if direct:
+            argv += ['--direct-json-output', str(self.direct)]
+        with patch.dict(os.environ, self.environment, clear=True), \
+                patch.object(extract, 'extract', return_value=record, side_effect=extract_error) as remote, \
+                patch.object(extract.delivery, 'make_bundle', side_effect=self.fake_bundle), \
+                patch.object(extract.delivery, 'deliver_bundle',
+                             side_effect=archive_error or self.fake_archive_delivery), \
+                redirect_stdout(stdout):
+            code = extract.main(argv)
+        return code, stdout.getvalue(), remote
+
+    def read_direct(self):
+        return extract.vault.unseal((self.direct / 'part-0000.vault').read_bytes(), self.key)
+
+    def test_direct_json_matches_archive_report_without_unpacking(self):
+        record = {'status': 'remote_result_received', 'extraction': {
+            'status': 'readback_observed', 'private_note': 'synthetic private evidence',
+            'semantic_learning_complete': False, 'coverage': {}}}
+        code, stdout, remote = self.run_main(record)
+        self.assertEqual(code, 0)
+        remote.assert_called_once_with()
+        self.assertEqual(self.read_direct(), self.archived_raw)
+        self.assertEqual(json.loads(self.read_direct()), record)
+        status = json.loads((self.direct / 'status.json').read_text())
+        journal.validate_status(status)
+        self.assertEqual(status['status'], 'complete')
+        self.assertEqual(status['sealed_parts'], 1)
+        self.assertEqual(status['cursor_code'], 'readback_no_advance')
+        self.assertFalse(status['strategy_evaluated'])
+        self.assertNotIn('synthetic private evidence', stdout + json.dumps(status))
+        self.assertEqual({path.name for path in self.direct.iterdir()},
+                         {'part-0000.vault', 'status.json'})
+
+    def test_remote_failure_is_delivered_without_hiding_primary_failure(self):
+        record = {'status': 'remote_failed', 'returncode': 7,
+                  'stderr_base64': base64.b64encode(b'synthetic private diagnostic').decode()}
+        code, stdout, _ = self.run_main(record)
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(self.read_direct()), record)
+        status = json.loads((self.direct / 'status.json').read_text())
+        journal.validate_status(status)
+        self.assertEqual(status['status'], 'failed')
+        self.assertEqual(status['failure_code'], 'remote_transport_failed')
+        self.assertNotIn(record['stderr_base64'], stdout)
+
+    def test_configuration_failure_is_sealed_as_failed(self):
+        code, stdout, _ = self.run_main(extract_error=ValueError('private configuration detail'))
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(self.read_direct()),
+                         {'status': 'configuration_rejected', 'error_class': 'ValueError'})
+        status = json.loads((self.direct / 'status.json').read_text())
+        self.assertEqual(status['status'], 'failed')
+        self.assertEqual(status['failure_code'], 'configuration_rejected')
+        self.assertNotIn('private configuration detail', stdout)
+
+    def test_archive_failure_still_delivers_json_but_keeps_nonzero_exit(self):
+        record = {'status': 'remote_result_received', 'extraction': {'status': 'readback_observed'}}
+        code, stdout, _ = self.run_main(record, archive_error=OSError('private delivery detail'))
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(self.read_direct()), record)
+        self.assertEqual(json.loads((self.direct / 'status.json').read_text())['status'], 'failed')
+        self.assertFalse((self.archive / 'status.json').exists())
+        self.assertNotIn('private delivery detail', stdout)
+
+    def test_direct_failure_does_not_replace_failed_research_with_success(self):
+        with patch.object(extract, 'deliver_direct_json', side_effect=OSError('private delivery detail')):
+            code, stdout, _ = self.run_main({'status': 'remote_failed', 'returncode': 9})
+        self.assertEqual(code, 2)
+        status = json.loads((self.archive / 'status.json').read_text())
+        self.assertEqual(status['status'], 'failed')
+        self.assertEqual(status['failure_code'], 'remote_transport_failed')
+        self.assertFalse((self.direct / 'status.json').exists())
+        self.assertNotIn('private delivery detail', stdout)
+
+    def test_existing_archive_prevents_remote_execution_and_is_not_success(self):
+        self.archive.mkdir()
+        marker = self.archive / 'existing.txt'
+        marker.write_text('existing delivery')
+        code, _, remote = self.run_main()
+        self.assertEqual(code, 2)
+        remote.assert_not_called()
+        self.assertEqual(marker.read_text(), 'existing delivery')
+        self.assertEqual(json.loads((self.direct / 'status.json').read_text())['status'], 'failed')
+
+    def test_optional_channel_and_recipient_preflight_are_preserved(self):
+        record = {'status': 'remote_result_received', 'extraction': {'status': 'readback_observed'}}
+        code, _, _ = self.run_main(record, direct=False)
+        self.assertEqual(code, 0)
+        self.assertFalse(self.direct.exists())
+        self.environment['QUALITY_FIRST_RECIPIENT_ID'] = '0' * 64
+        code, _, remote = self.run_main(record)
+        self.assertEqual(code, 2)
+        remote.assert_not_called()
+        self.assertFalse(self.direct.exists())
+
+    def test_direct_ciphertext_uses_existing_persistence_contract(self):
+        record = {'status': 'remote_failed', 'returncode': 7}
+        code, _, _ = self.run_main(record)
+        self.assertEqual(code, 2)
+        receipt = journal.persist_delivery(
+            self.direct, self.root / 'journal', 'yt-feng/poly_trade', '123', '1',
+            self.recipient_id, cell_id='corpus-direct-readback')
+        episode = self.root / 'journal' / receipt['episode_id']
+        self.assertEqual((episode / 'part-0000.vault').read_bytes(),
+                         (self.direct / 'part-0000.vault').read_bytes())
+
+    def test_partial_direct_write_has_no_publication_marker(self):
+        with patch.object(extract.vault, 'write_new', side_effect=OSError('synthetic write failure')):
+            with self.assertRaises(OSError):
+                extract.deliver_direct_json(b'{"synthetic":true}', {}, self.direct,
+                                            self.recipient, self.recipient_id)
+        self.assertFalse((self.direct / 'status.json').exists())
 
 
 if __name__ == '__main__':

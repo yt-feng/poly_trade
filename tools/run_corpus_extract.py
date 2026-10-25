@@ -1064,11 +1064,23 @@ def extract():
                     'stderr_base64': base64.b64encode((exc.stderr or b'')[:65536]).decode()}
 
 
-def main():
+def deliver_direct_json(raw, status, output, recipient, recipient_id):
+    """Seal the same private JSON report without requiring archive extraction."""
+    vault.load_json_bytes(raw, vault.MAX_PLAINTEXT)
+    envelope = vault.seal(raw, recipient, recipient_id)
+    output = Path(output)
+    output.mkdir(mode=0o700)
+    vault.write_new(output / 'part-0000.vault', envelope)
+    # Write the completion marker last. A partial directory must not publish.
+    vault.write_new(output / 'status.json', vault.canonical(dict(status, sealed_parts=1)), 0o644)
+
+
+def main(argv=None):
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', default='sealed-delivery')
-    args = parser.parse_args()
+    parser.add_argument('--direct-json-output', help='Additional sealed JSON delivery directory')
+    args = parser.parse_args(argv)
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         print('CORPUS_EXTRACT_CLOUD_ONLY; PLAINTEXT_PUBLISHED=false')
         return 2
@@ -1076,8 +1088,15 @@ def main():
         rid = os.environ.get('QUALITY_FIRST_RECIPIENT_ID')
         recipient = delivery.load_recipient(os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64'), rid)
         output = Path(args.output)
-        output.mkdir(mode=0o700)
+        output_ready = False
         try:
+            if args.direct_json_output and Path(args.direct_json_output).resolve() == output.resolve():
+                raise ValueError('DELIVERY_PATHS_MUST_DIFFER')
+            if args.direct_json_output and (Path(args.direct_json_output).exists()
+                                            or Path(args.direct_json_output).is_symlink()):
+                raise ValueError('DIRECT_OUTPUT_EXISTS')
+            output.mkdir(mode=0o700)
+            output_ready = True
             record = extract()
         except Exception as exc:
             record = {'status': 'configuration_rejected', 'error_class': type(exc).__name__}
@@ -1098,11 +1117,30 @@ def main():
                 status['failure_code'] = 'remote_report_not_successful'
             else:
                 status['failure_code'] = FAILURE_CODES.get(record_status, 'acquisition_unclassified')
-        with tempfile.TemporaryDirectory() as folder:
-            private = Path(folder)
-            vault.write_new(private / 'results' / 'extraction.json', vault.canonical(record))
-            status['sealed_parts'] = delivery.deliver_bundle(delivery.make_bundle(private), output, recipient, rid)
-        vault.write_new(output / 'status.json', vault.canonical(status), 0o644)
+        raw = vault.canonical(record)
+        delivery_failed = False
+        try:
+            if not output_ready:
+                raise ValueError('OUTPUT_UNAVAILABLE')
+            with tempfile.TemporaryDirectory() as folder:
+                private = Path(folder)
+                vault.write_new(private / 'results' / 'extraction.json', raw)
+                status['sealed_parts'] = delivery.deliver_bundle(delivery.make_bundle(private), output, recipient, rid)
+            vault.write_new(output / 'status.json', vault.canonical(status), 0o644)
+        except Exception:
+            delivery_failed = True
+        if args.direct_json_output:
+            direct_status = dict(status)
+            if delivery_failed and successful:
+                direct_status.update(status='failed', failed_stage='acquisition',
+                                     failure_code='acquisition_unclassified')
+            try:
+                deliver_direct_json(raw, direct_status, args.direct_json_output, recipient, rid)
+            except Exception:
+                delivery_failed = True
+        if delivery_failed:
+            print('CORPUS_EXTRACT_DELIVERY_BLOCKED; PLAINTEXT_PUBLISHED=false')
+            return 2
         print(json.dumps(status))
         return 0 if successful else 2
     except Exception:

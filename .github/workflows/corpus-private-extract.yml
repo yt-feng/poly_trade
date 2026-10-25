@@ -55,7 +55,7 @@ on:
           - '120'
           - '200'
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: corpus-private-extract
   cancel-in-progress: false
@@ -92,7 +92,7 @@ jobs:
           CORPUS_SSH_KNOWN_HOSTS: ${{ secrets.CORPUS_SSH_KNOWN_HOSTS }}
           CORPUS_DELIVERY_ACK_B64: ${{ secrets.CORPUS_DELIVERY_ACK_B64 }}
           AWS_ADMIN_SSH_KEY: ${{ secrets.AWS_ADMIN_SSH_KEY }}
-        run: python tools/run_corpus_extract.py --output sealed-delivery
+        run: python tools/run_corpus_extract.py --output sealed-delivery --direct-json-output sealed-direct-json
       - name: Deliver ciphertext and generic operational status only
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -104,3 +104,20 @@ jobs:
           retention-days: 14
           compression-level: 0
           if-no-files-found: error
+      - name: Deliver direct encrypted JSON readback
+        if: ${{ !cancelled() && hashFiles('sealed-direct-json/status.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-direct-readback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            sealed-direct-json/part-*.vault
+            sealed-direct-json/status.json
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
+      - name: Persist direct encrypted JSON readback
+        if: ${{ !cancelled() && hashFiles('sealed-direct-json/status.json') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: PYTHONPATH=tools python tools/publish_quality_first_journal.py --source sealed-direct-json --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --recipient-id "$RESEARCH_RECIPIENT_ID" --cell-id corpus-direct-readback
