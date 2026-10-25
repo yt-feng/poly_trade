@@ -27,7 +27,7 @@ import tarfile
 import time
 import zipfile
 
-VERSION = 'quantml-private-cloud-extractor-v1'
+VERSION = 'quantml-private-cloud-extractor-v2'
 TEXT = {'.txt', '.md', '.py', '.json', '.jsonl', '.ipynb', '.r', '.js', '.ts',
         '.html', '.htm', '.xml', '.yaml', '.yml', '.toml', '.sql', '.tex'}
 MEDIA = {'.mp4', '.m4v', '.mov', '.mkv', '.avi', '.mp3', '.wav', '.m4a'}
@@ -44,6 +44,37 @@ def sha(data):
 
 def canonical(data):
     return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+
+
+def detect_text_encoding(path, requested=None):
+    """Select a deterministic encoding without loading the file into memory.
+
+    The corpus contains legacy Chinese text files alongside UTF-8 sources. A
+    bounded incremental probe keeps the decision reproducible and cloud-only;
+    an explicit encoding remains authoritative for a recovery task.
+    """
+    if requested and requested != 'auto':
+        return requested
+    with path.open('rb') as stream:
+        prefix = stream.read(4)
+    if prefix.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return 'utf-16'
+    if prefix.startswith(codecs.BOM_UTF8):
+        return 'utf-8-sig'
+    for candidate in ('utf-8-sig', 'gb18030'):
+        decoder = codecs.getincrementaldecoder(candidate)(errors='strict')
+        try:
+            with path.open('rb') as stream:
+                while True:
+                    chunk = stream.read(64 * 1024)
+                    if not chunk:
+                        break
+                    decoder.decode(chunk, final=False)
+                decoder.decode(b'', final=True)
+            return candidate
+        except UnicodeError:
+            continue
+    raise UnicodeError('no_supported_text_encoding')
 
 
 def safe_relative(value):
@@ -65,7 +96,7 @@ def parser_protocol(extension, args):
     """Cursor units cannot be reinterpreted by a later parameter change."""
     protocol = {'version': VERSION, 'extension': extension}
     if extension in TEXT:
-        protocol.update(encoding=args.text_encoding, chunk_chars=args.text_chunk_chars)
+        protocol.update(encoding=args.text_encoding or 'auto', chunk_chars=args.text_chunk_chars)
     elif extension in ('.csv', '.tsv', '.pq', '.parquet'):
         protocol.update(encoding=args.text_encoding if extension in ('.csv', '.tsv') else None,
                         batch_rows=args.table_rows)
@@ -429,9 +460,7 @@ class Worker:
 
     def text(self, row, path):
         sid = row['source_id']
-        with path.open('rb') as stream:
-            prefix = stream.read(4)
-        encoding = self.args.text_encoding or ('utf-16' if prefix.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)) else 'utf-8-sig')
+        encoding = detect_text_encoding(path, self.args.text_encoding)
         # On resume re-read previous chunks in cloud so character offsets remain exact.
         offset = 0
         count = 0
