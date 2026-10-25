@@ -9,6 +9,7 @@ def test_causal_feature_contract_removes_post_decision_feature() -> None:
     assert repair.REMOVED_FEATURE == "btc_move_4m"
     assert repair.REMOVED_FEATURE not in repair.CAUSAL_FEATURES
     assert len(repair.CAUSAL_FEATURES) + 1 == len(repair.h432.FEATURES)
+    assert repair.h561._fit.__globals__ is repair.h432.__dict__
 
 
 def test_candidate_wrapper_uses_market_duration_before_cash_release(monkeypatch) -> None:

@@ -12,6 +12,7 @@ not alter the frozen H600 manifest or its historical result.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -21,10 +22,16 @@ import pandas as pd
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR.parent) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR.parent))
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
 
-from analysis import h432_old_clean_extratrees_compound as h432
 from analysis import h561_online_depth_proxy as h561
 from analysis import h600_favorite_side_depth as h600
+
+# h561 imports H432 by its historical top-level module name.  Patch that exact
+# module object; patching only analysis.h432_old_clean_extratrees_compound would
+# leave the fitted estimator on the leaked feature set.
+h432 = importlib.import_module("h432_old_clean_extratrees_compound")
 
 
 REMOVED_FEATURE = "btc_move_4m"
