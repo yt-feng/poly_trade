@@ -13,6 +13,11 @@ on:
         required: false
         default: '200'
         type: string
+      sizing_fractions:
+        description: Optional cloud-only first-ten cash-floor diagnostic fractions
+        required: false
+        default: '1.0,0.9,0.8,0.7,0.6,0.5'
+        type: string
 
 permissions:
   contents: write
@@ -45,6 +50,7 @@ jobs:
           BTC5M_POLYMARKET_PRIVATE_KEY: ${{ secrets.BTC5M_POLYMARKET_PRIVATE_KEY }}
           RPC_URL: ${{ inputs.rpc_url }}
           MAX_TRANSACTIONS: ${{ inputs.max_transactions }}
+          SIZING_FRACTIONS: ${{ inputs.sizing_fractions }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
         run: |
@@ -105,7 +111,8 @@ jobs:
                 --input "$private_dir/h300-input.json" \
                 --output "$private_dir/h300.json" \
                 --rpc-url "$RPC_URL" \
-                --max-transactions "$MAX_TRANSACTIONS"
+                --max-transactions "$MAX_TRANSACTIONS" \
+                --sizing-fractions "$SIZING_FRACTIONS"
               h300_rc=$?
           else
               h300_rc=1

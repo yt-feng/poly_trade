@@ -9,6 +9,7 @@ from h300_owner_scoped_payout_transfer_capture import (  # noqa: E402
     TRANSFER_TOPIC,
     capture,
     capture_account,
+    sizing_sensitivity,
 )
 
 
@@ -19,6 +20,19 @@ COLLATERAL = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"
 CTF = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
 PUSD = next(iter(DEFAULT_PAYOUT_CASH_TOKENS))
 ZERO = "0x" + "00" * 20
+
+
+def test_sizing_sensitivity_is_first_ten_single_ledger_and_respects_floor():
+    rows = [
+        {"type": "TRADE", "side": "BUY", "timestamp": i, "transaction_ref": str(i), "usdc_size": "5.0"}
+        for i in range(1, 11)
+    ]
+    rows[5] = {**rows[5], "type": "REDEEM", "side": "", "usdc_size": "5.5"}
+    report = sizing_sensitivity(rows, fractions=["1.0", "0.5"], initial_cash="10", minimum_order_usd="5")
+    assert report[0]["trades_evaluated"] == 9
+    assert report[0]["eligible"] is False
+    assert report[1]["minimum_order_violations"] >= 1
+    assert report[1]["eligible"] is False
 
 
 def word(value: int) -> str:

@@ -158,6 +158,79 @@ def is_btc_five_minute(row: dict[str, Any]) -> bool:
     return bool(re.search(r"(?:^|[-_])(btc|bitcoin)[-_](?:updown|up_down)[-_]5m(?:[-_]|$)", slug))
 
 
+def sizing_sensitivity(
+    activity_rows: Iterable[dict[str, Any]],
+    *,
+    fractions: Iterable[Any],
+    initial_cash: Any = "10",
+    minimum_order_usd: Any = "5",
+    required_fills: int = 10,
+) -> list[dict[str, Any]]:
+    """Run a compact, read-only cash-floor diagnostic on one observed path.
+
+    This deliberately does not infer edge or change the authenticated
+    activity. It scales the observed trade/redeem notionals together, keeps
+    the event order and one evolving ledger, and reports only whether the
+    first ``required_fills`` trades can be funded from ``initial_cash``.
+    The full activity and transaction identifiers stay in the runner-private
+    H300 report; only aggregate diagnostics are returned.
+    """
+    rows = [row for row in activity_rows if isinstance(row, dict)]
+    ordered = sorted(rows, key=lambda row: (int(row.get("timestamp", 0)), _text(row.get("transaction_ref")), _text(row.get("type"))))
+    output: list[dict[str, Any]] = []
+    opening = Decimal(str(initial_cash))
+    minimum_order = Decimal(str(minimum_order_usd))
+    if not opening.is_finite() or opening < 0 or not minimum_order.is_finite() or minimum_order < 0:
+        raise ValueError("sizing_cash_parameters_invalid")
+    for raw_fraction in fractions:
+        fraction = Decimal(str(raw_fraction))
+        if not fraction.is_finite() or fraction <= 0 or fraction > 1:
+            raise ValueError("sizing_fraction_must_be_in_0_to_1")
+        cash = opening
+        minimum = opening
+        first_negative: int | None = None
+        trade_count = 0
+        minimum_order_violations = 0
+        first_prefix_end = None
+        for index, row in enumerate(ordered):
+            kind = _text(row.get("type")).upper()
+            amount = Decimal(str(row.get("usdc_size", "0"))) * fraction
+            if not amount.is_finite() or amount < 0:
+                raise ValueError("sizing_activity_amount_invalid")
+            if kind == "TRADE":
+                trade_count += 1
+                if amount < minimum_order:
+                    minimum_order_violations += 1
+                if trade_count == required_fills:
+                    first_prefix_end = index + 1
+            delta = amount if kind == "REDEEM" or _text(row.get("side")).upper() == "SELL" else -amount
+            cash += delta
+            minimum = min(minimum, cash)
+            if cash < 0 and first_negative is None:
+                first_negative = index + 1
+            if first_prefix_end is not None and index + 1 >= first_prefix_end:
+                break
+        eligible = (
+            trade_count >= required_fills
+            and minimum >= 0
+            and minimum_order_violations == 0
+            and first_negative is None
+        )
+        output.append({
+            "fraction": format(fraction, "f"),
+            "initial_cash_usd": format(opening, "f"),
+            "minimum_order_usd": format(minimum_order, "f"),
+            "required_fills": required_fills,
+            "trades_evaluated": trade_count,
+            "minimum_cash_usd": format(minimum, "f"),
+            "ending_cash_usd": format(cash, "f"),
+            "first_negative_event_index": first_negative,
+            "minimum_order_violations": minimum_order_violations,
+            "eligible": eligible,
+        })
+    return output
+
+
 def _word(value: str) -> int:
     text = _text(value)
     if text.startswith("0x"):
@@ -329,6 +402,7 @@ def capture_account(
     *,
     receipt_fetcher: Callable[[str], dict[str, Any]],
     max_transactions: int = MAX_TRANSACTIONS,
+    sizing_fractions: Iterable[Any] = (),
 ) -> dict[str, Any]:
     owner = _lower_address(account.get("owner"))
     if not owner:
@@ -368,7 +442,7 @@ def capture_account(
             except Exception as exc:
                 reconciliations[token] = {"error": type(exc).__name__}
     single_reconciliation = next(iter(reconciliations.values())) if len(reconciliations) == 1 else None
-    return {
+    result = {
         "label": _text(account.get("label")),
         "owner_address_sha256": _owner_digest(owner),
         "normalized_activity_rows": len(normalized),
@@ -386,13 +460,29 @@ def capture_account(
         "same_ledger_compounding_rows": 0,
         "live_orders_enabled": False,
     }
+    fractions = list(sizing_fractions)
+    if fractions:
+        result["sizing_sensitivity"] = sizing_sensitivity(
+            btc_rows,
+            fractions=fractions,
+            initial_cash="10",
+            minimum_order_usd="5",
+            required_fills=10,
+        )
+    return result
 
 
-def capture(accounts: Iterable[dict[str, Any]], *, receipt_fetcher: Callable[[str], dict[str, Any]], max_transactions: int = MAX_TRANSACTIONS) -> dict[str, Any]:
+def capture(
+    accounts: Iterable[dict[str, Any]],
+    *,
+    receipt_fetcher: Callable[[str], dict[str, Any]],
+    max_transactions: int = MAX_TRANSACTIONS,
+    sizing_fractions: Iterable[Any] = (),
+) -> dict[str, Any]:
     rows = list(accounts)
     if not 1 <= len(rows) <= MAX_ACCOUNTS:
         raise ValueError("one to four accounts are required")
-    reports = [capture_account(row, receipt_fetcher=receipt_fetcher, max_transactions=max_transactions) for row in rows]
+    reports = [capture_account(row, receipt_fetcher=receipt_fetcher, max_transactions=max_transactions, sizing_fractions=sizing_fractions) for row in rows]
     return {
         "format": "h300-owner-scoped-payout-transfer-capture-v2",
         "accounts": reports,
@@ -419,14 +509,17 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--rpc-url", required=True)
     parser.add_argument("--max-transactions", type=int, default=MAX_TRANSACTIONS)
+    parser.add_argument("--sizing-fractions", default="", help="Optional comma-separated fractions for the first-ten cash-floor diagnostic")
     args = parser.parse_args()
     document = json.loads(args.input.read_text(encoding="utf-8"))
     if not 1 <= args.max_transactions <= MAX_TRANSACTIONS:
         raise SystemExit(f"max-transactions must be between 1 and {MAX_TRANSACTIONS}")
+    fractions = [item.strip() for item in args.sizing_fractions.split(",") if item.strip()]
     result = capture(
         document.get("accounts") or [],
         receipt_fetcher=lambda tx: _rpc_fetch(args.rpc_url, tx),
         max_transactions=args.max_transactions,
+        sizing_fractions=fractions,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
