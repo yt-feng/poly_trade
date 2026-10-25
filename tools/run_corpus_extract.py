@@ -123,6 +123,12 @@ report = {'version': 1, 'scope': 'bounded_private_cloud_extraction',
 def raw_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
 
+def delivery_report_size(value):
+    # The journal seals ASCII-canonical JSON. Count that representation here:
+    # CJK and non-BMP text can expand after the UTF-8 SSH response is received.
+    # Keep raw_json unchanged because it also defines stored evidence digests.
+    return len(json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('ascii'))
+
 def safe_directory(path, create=False):
     if create:
         path.mkdir(mode=0o700, exist_ok=True)
@@ -582,7 +588,7 @@ def build_unit_delivery(output, worker_hash, source_run, report):
                             cross_worker_skipped += 1
                         continue
                     report['unit_texts'].append(item)
-                    if len(raw_json(report)) > REPORT_LIMIT - 131072:
+                    if delivery_report_size(report) > REPORT_LIMIT - 131072:
                         report['unit_texts'].pop()
                         exhausted = False
                         break
@@ -962,14 +968,14 @@ def process_locked():
     attach_output_snapshot(output, worker_hash, payload['run_id'], report)
     report['worker_log_tail_base64'] = base64.b64encode(read_small(run_dir / 'worker-private.log', 512*1024)[-32768:]).decode()
     report['capacity_after'] = {'mem_available_bytes': memory_available(), 'free_bytes': available_bytes()}
-    if len(raw_json(report)) > REPORT_LIMIT:
+    if delivery_report_size(report) > REPORT_LIMIT:
         raise ValueError('compact_delivery_limit')
 
 try:
     process()
 except Exception as exc:
     report.update(status='orchestration_failed', error_class=type(exc).__name__, error=str(exc)[:500])
-if len(raw_json(report)) > REPORT_LIMIT:
+if delivery_report_size(report) > REPORT_LIMIT:
     report.pop('unit_texts', None)
     report.pop('unit_delivery_proposal', None)
     report['delivery_omitted_requires_private_cloud_readback'] = True

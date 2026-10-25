@@ -181,7 +181,7 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         self.output = self.root / 'extracted' / self.worker_hash
         (self.root / 'extracted').mkdir(mode=0o700)
         self.output.mkdir(mode=0o700)
-        names = {'raw_json', 'safe_directory', 'regular', 'read_small', 'atomic', 'checked_relative',
+        names = {'raw_json', 'delivery_report_size', 'safe_directory', 'regular', 'read_small', 'atomic', 'checked_relative',
                  'unit_delivery_identity', 'validate_acknowledged_units', 'validate_cross_worker_content_hashes',
                  'validate_cross_worker_content_workers', 'load_acknowledged',
                  'load_cross_worker_acknowledged', 'record_cross_worker_acknowledged',
@@ -421,6 +421,27 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         second_keys = {item['unit_key'] for item in second['unit_texts']}
         self.assertFalse(first_keys & second_keys)
         self.assertEqual(len(first_keys | second_keys), 12)
+        self.assertTrue(second['unit_delivery_complete_for_cloud_snapshot'])
+
+    def test_unicode_delivery_accounts_for_final_encrypted_json_encoding(self):
+        self.ns['REPORT_LIMIT'] = 512*1024
+        units = [self.unit(source, ('量📈'*10000).encode()) for source in ('0', '1', '2', '3')]
+        first = self.deliver(units, '1-1')
+        canonical = extract.vault.canonical(first)
+        self.assertLess(len(canonical), self.ns['REPORT_LIMIT'])
+        self.assertFalse(first['unit_delivery_complete_for_cloud_snapshot'])
+        record = {'status': 'remote_result_received', 'returncode': 0,
+                  'stdout_truncated': False, 'extraction': first,
+                  'stderr_base64': base64.b64encode(b'x'*65536).decode()}
+        key = extract.vault.X25519PrivateKey.generate()
+        recipient = extract.vault.recipient_for(key)
+        wire = extract.vault.seal(extract.vault.canonical(record), recipient, recipient['recipient_id'])
+        upper_wire_bytes = ((self.ns['REPORT_LIMIT'] + 131072 + 16 + 2)//3)*4 + 4096
+        self.assertLess(len(wire), upper_wire_bytes)
+        self.ns['apply_delivery_ack'](self.root, self.ack(first, ['unit', 'visual']))
+        second = self.deliver(units, '2-1')
+        self.assertFalse({item['unit_key'] for item in first['unit_texts']} &
+                         {item['unit_key'] for item in second['unit_texts']})
         self.assertTrue(second['unit_delivery_complete_for_cloud_snapshot'])
 
 
