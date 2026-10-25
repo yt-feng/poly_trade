@@ -88,6 +88,17 @@ jobs:
           research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
           research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': True, 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
           PY
+      - name: Retain encrypted H716 delivery artifact
+        if: ${{ !cancelled() && hashFiles('sealed-delivery/status.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: h716-sealed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            sealed-delivery/part-*.vault
+            sealed-delivery/status.json
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
       - name: Publish encrypted H716 journal
         env:
           GH_TOKEN: ${{ github.token }}
