@@ -142,7 +142,9 @@ def _collect_identity(path: Path) -> dict[str, Any]:
     owner_cols = _pick(OWNER_FIELDS, names)
     token_cols = _pick(TOKEN_FIELDS, names)
     market_cols = _pick(MARKET_FIELDS, names)
-    selected = list(dict.fromkeys(tx_cols + owner_cols + token_cols + market_cols))
+    # Market labels are useful provenance, but are not needed for the first
+    # chain join.  Do not pay to materialize them across the whole hour.
+    selected = list(dict.fromkeys(tx_cols + owner_cols + token_cols))
     report: dict[str, Any] = {
         "parquet_rows": parquet.metadata.num_rows,
         "parquet_row_groups": parquet.num_row_groups,
@@ -157,6 +159,7 @@ def _collect_identity(path: Path) -> dict[str, Any]:
         "owner_count": 0,
         "token_id_count": 0,
         "market_id_count": 0,
+        "market_id_collection_skipped": True,
         "identifier_caps_hit": False,
     }
     tx_hashes: set[str] = set()
@@ -165,35 +168,35 @@ def _collect_identity(path: Path) -> dict[str, Any]:
     market_ids: set[str] = set()
     if not selected:
         return {"report": report, "tx_hashes": tx_hashes, "owners": owners, "token_ids": token_ids, "market_ids": market_ids}
-    for batch in parquet.iter_batches(columns=selected, batch_size=100_000):
+    for batch in parquet.iter_batches(columns=selected, batch_size=250_000):
         columns = batch.to_pydict()
         row_count = batch.num_rows
         report["rows_scanned"] += row_count
         for index in range(row_count):
-            for column in tx_cols:
-                value = _tx(columns[column][index])
-                if value:
-                    tx_hashes.add(value)
-                    break
-            for column in owner_cols:
-                value = _address(columns[column][index])
-                if value:
-                    owners.add(value)
-            for column in token_cols:
-                value = _token(columns[column][index])
-                if value:
-                    token_ids.add(value)
-            for column in market_cols:
-                value = _text(columns[column][index]).lower()
-                if value:
-                    market_ids.add(value)
-            if any(len(values) > MAX_IDENTIFIERS for values in (tx_hashes, owners, token_ids, market_ids)):
+            if len(tx_hashes) < MAX_IDENTIFIERS:
+                for column in tx_cols:
+                    value = _tx(columns[column][index])
+                    if value:
+                        tx_hashes.add(value)
+                        break
+            if len(owners) < MAX_IDENTIFIERS:
+                for column in owner_cols:
+                    value = _address(columns[column][index])
+                    if value:
+                        owners.add(value)
+            if len(token_ids) < MAX_IDENTIFIERS:
+                for column in token_cols:
+                    value = _token(columns[column][index])
+                    if value:
+                        token_ids.add(value)
+            # Market IDs are deliberately not materialized in this first join.
+            if len(tx_hashes) >= MAX_IDENTIFIERS or len(owners) >= MAX_IDENTIFIERS or len(token_ids) >= MAX_IDENTIFIERS:
                 report["identifier_caps_hit"] = True
-                # Continue counting rows but stop retaining more raw identifiers.
-                tx_hashes = set(list(tx_hashes)[:MAX_IDENTIFIERS])
-                owners = set(list(owners)[:MAX_IDENTIFIERS])
-                token_ids = set(list(token_ids)[:MAX_IDENTIFIERS])
-                market_ids = set(list(market_ids)[:MAX_IDENTIFIERS])
+                break
+        if report["identifier_caps_hit"]:
+            # A capped identity set cannot support exhaustive admission. Stop
+            # early and preserve the explicit incompleteness in the sealed log.
+            break
     report.update({
         "transaction_hash_count": len(tx_hashes),
         "owner_count": len(owners),
