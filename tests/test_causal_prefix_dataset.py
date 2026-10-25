@@ -208,3 +208,49 @@ def test_prefix_diagnostics_capture_clock_rejection_and_ignore_future_missingnes
     assert meta["first_quote_minus_slug_epoch_seconds_max"] == -120.0
     assert meta["first_quote_before_slug_epoch_market_count"] == 1
     assert not any(meta["prefix_nonfinite_market_counts_by_field"].values())
+
+
+def test_versioned_price_book_contract_removes_only_flow_features_and_inputs():
+    full_features, full_inputs = dataset.feature_contract()
+    price_features, price_inputs = dataset.feature_contract("price_book_v1")
+    assert full_features == dataset.FEATURES
+    assert full_inputs == dataset.PREFIX_NUMERIC
+    assert set(full_features) - set(price_features) == dataset.FLOW_FEATURES
+    assert set(full_inputs) - set(price_inputs) == dataset.FLOW_SOURCE_FIELDS
+    assert len(price_features) == 24
+    with pytest.raises(ValueError, match="unknown_feature_profile"):
+        dataset.feature_contract("automatic_fallback")
+
+
+def test_price_book_profile_preserves_other_feature_values_and_labels():
+    raw = quotes()
+    full, _, _ = dataset.build_from_quotes(raw)
+    no_flow = raw.drop(columns=list(dataset.FLOW_SOURCE_FIELDS))
+    reduced, _, meta = dataset.build_from_quotes(no_flow, feature_profile="price_book_v1")
+    active_features, required = dataset.feature_contract("price_book_v1")
+    compare = [*dataset.IDENTITY_COLUMNS, *active_features, *dataset.LABEL_COLUMNS]
+    pd.testing.assert_frame_equal(full[compare], reduced[compare])
+    assert set(dataset.FLOW_FEATURES).isdisjoint(reduced.columns)
+    assert meta["required_numeric_fields"] == list(required)
+    assert meta["feature_profile"] == "price_book_v1"
+    assert meta["prefix_nonfinite_market_counts_by_field"]["trade_count_1s"] == 1
+    assert dataset.build_from_quotes(no_flow)[0].empty
+
+
+def test_price_book_profile_uses_required_bits_and_still_rejects_missing_target(tmp_path):
+    raw = quotes(epoch=1792860000)
+    raw["ts_iso"] = raw["ts_utc"].map(lambda value: value.isoformat())
+    raw = raw.drop(columns=["ts_utc", "run_name", "quote_conflict", *dataset.FLOW_SOURCE_FIELDS])
+    run_dir = tmp_path / "run_20261024_000000"
+    run_dir.mkdir()
+    source = run_dir / "synthetic_btc-updown-5m_quotes.csv"
+    raw.to_csv(source, index=False)
+    full, _, _ = dataset.build_dataset(tmp_path)
+    reduced, _, meta = dataset.build_dataset(tmp_path, feature_profile="price_book_v1")
+    assert full.empty and len(reduced) == 1
+    assert meta["original_missingness_mask_fields"] == list(dataset.PREFIX_NUMERIC)
+    raw.loc[0, "target_price"] = float("nan")
+    raw.to_csv(source, index=False)
+    rejected, _, rejected_meta = dataset.build_dataset(tmp_path, feature_profile="price_book_v1")
+    assert rejected.empty
+    assert rejected_meta["quality_counts"] == {"incomplete_original_prefix": 1}

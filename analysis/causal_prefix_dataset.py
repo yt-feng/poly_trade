@@ -28,6 +28,10 @@ MARKET_SECONDS = 300.0
 RELEASE_DELAY_SECONDS = 900.0
 LABEL_BASIS = "first_close_time_btc_sample_proxy_not_official_resolution"
 PREFIX_NUMERIC = tuple(base.REQUIRED_NUMERIC)
+DEFAULT_FEATURE_PROFILE = "full_prefix_v1"
+PRICE_BOOK_PROFILE = "price_book_v1"
+FLOW_FEATURES = frozenset({"trade_count_sum_first2m", "trade_volume_sum_first2m"})
+FLOW_SOURCE_FIELDS = frozenset({"trade_count_1s", "trade_volume_1s"})
 IDENTITY_COLUMNS = (
     "market_id", "run_name", "slug", "first_quote_ts", "feature_cutoff_ts",
     "decision_ts", "entry_ts", "market_start_ts", "market_close_ts",
@@ -45,11 +49,23 @@ def _ratio(left: float, right: float) -> float:
     return (left - right) / (left + right) if left + right > 0 else float("nan")
 
 
+def feature_contract(feature_profile: str = DEFAULT_FEATURE_PROFILE) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Resolve an explicit versioned input contract without filling absent data."""
+    if feature_profile == DEFAULT_FEATURE_PROFILE:
+        return FEATURES, PREFIX_NUMERIC
+    if feature_profile == PRICE_BOOK_PROFILE:
+        return (tuple(name for name in FEATURES if name not in FLOW_FEATURES),
+            tuple(name for name in PREFIX_NUMERIC if name not in FLOW_SOURCE_FIELDS))
+    raise ValueError("unknown_feature_profile")
+
+
 def prefix_features(
     group: pd.DataFrame, *, run_name: str, slug: str,
     max_snapshot_age_seconds: float = 90.0,
+    feature_profile: str = DEFAULT_FEATURE_PROFILE,
 ) -> tuple[dict[str, Any] | None, str]:
     """Derive one row from the first 120 seconds, excluding later observations."""
+    features, required_numeric = feature_contract(feature_profile)
     if not np.isfinite(max_snapshot_age_seconds) or max_snapshot_age_seconds < 0:
         raise ValueError("invalid_snapshot_age_limit")
     if group.empty or "ts_utc" not in group:
@@ -76,18 +92,22 @@ def prefix_features(
         return None, "too_few_prefix_quotes"
     if "quote_conflict" in prefix and prefix["quote_conflict"].any():
         return None, "conflicting_prefix_quotes"
-    if "original_prefix_incomplete" in prefix and prefix["original_prefix_incomplete"].any():
+    if "original_prefix_nonfinite_mask" in prefix:
+        required_bits = sum(1 << index for index, field in enumerate(PREFIX_NUMERIC) if field in required_numeric)
+        if np.bitwise_and(prefix["original_prefix_nonfinite_mask"].to_numpy(dtype=np.uint32), required_bits).any():
+            return None, "incomplete_original_prefix"
+    elif "original_prefix_incomplete" in prefix and prefix["original_prefix_incomplete"].any():
         return None, "incomplete_original_prefix"
-    if not set(PREFIX_NUMERIC).issubset(prefix.columns):
+    if not set(required_numeric).issubset(prefix.columns):
         return None, "missing_prefix_columns"
-    numeric = prefix.loc[:, list(PREFIX_NUMERIC)].apply(pd.to_numeric, errors="coerce")
+    numeric = prefix.loc[:, list(required_numeric)].apply(pd.to_numeric, errors="coerce")
     if not np.isfinite(numeric.to_numpy(dtype=float)).all():
         return None, "incomplete_or_nonfinite_prefix"
     for side in ("up", "down"):
         bid, ask = numeric[f"sell_{side}_cents"], numeric[f"buy_{side}_cents"]
         if not ((bid > 0) & (bid <= ask) & (ask < 100)).all():
             return None, "invalid_prefix_book_prices"
-    nonnegative = [name for name in PREFIX_NUMERIC if any(
+    nonnegative = [name for name in required_numeric if any(
         term in name for term in ("_size", "_depth_", "spread_", "trade_count", "trade_volume")
     )]
     if numeric[nonnegative].lt(0).any().any():
@@ -96,7 +116,7 @@ def prefix_features(
         return None, "invalid_prefix_btc_price"
     if numeric["target_price"].nunique() != 1:
         return None, "changing_prefix_target"
-    prefix.loc[:, list(PREFIX_NUMERIC)] = numeric
+    prefix.loc[:, list(required_numeric)] = numeric
     snapshots, ages = [], []
     for offset in (60.0, 120.0):
         at = first_ts + pd.Timedelta(seconds=offset)
@@ -144,14 +164,16 @@ def prefix_features(
         "spread_down_median_first2m": float(prefix["spread_down_cents"].median()) / 100,
         "overround_median_first2m": float((prefix["mid_up_cents"] + prefix["mid_down_cents"] - 100).median()) / 100,
         "quote_count_first2m": len(prefix),
-        "trade_count_sum_first2m": float(prefix["trade_count_1s"].sum()),
-        "trade_volume_sum_first2m": float(prefix["trade_volume_1s"].sum()),
         "realized_vol_first2m": float(differences.std()),
         "path_efficiency_first2m": abs(float(path.iloc[-1] - path.iloc[0])) / total_abs,
         "max_drawdown_first2m": abs(float(move.min())),
         "max_rebound_first2m": float(move.max()),
     }
-    if not np.isfinite([record[name] for name in FEATURES]).all():
+    if "trade_count_sum_first2m" in features:
+        record["trade_count_sum_first2m"] = float(prefix["trade_count_1s"].sum())
+    if "trade_volume_sum_first2m" in features:
+        record["trade_volume_sum_first2m"] = float(prefix["trade_volume_1s"].sum())
+    if not np.isfinite([record[name] for name in features]).all():
         return None, "nonfinite_registered_feature"
     return record, "admitted_prefix_only"
 
@@ -192,8 +214,10 @@ def proxy_label(
 def build_from_quotes(
     quotes: pd.DataFrame, *, max_snapshot_age_seconds: float = 90.0,
     max_label_delay_seconds: float = 5.0,
+    feature_profile: str = DEFAULT_FEATURE_PROFILE,
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, Any]]:
     """Build deterministic, duplicate-free rows from already prepared quotes."""
+    features, required_numeric = feature_contract(feature_profile)
     required = {"run_name", "slug", "ts_utc"}
     if not required.issubset(quotes.columns):
         raise ValueError("missing_quote_identity")
@@ -238,7 +262,7 @@ def build_from_quotes(
                 except (ValueError, OverflowError):
                     pass
         feature, reason = prefix_features(group, run_name=run_name, slug=slug,
-            max_snapshot_age_seconds=max_snapshot_age_seconds)
+            max_snapshot_age_seconds=max_snapshot_age_seconds, feature_profile=feature_profile)
         reasons[reason] += 1
         if feature is None:
             continue
@@ -249,7 +273,7 @@ def build_from_quotes(
         book = group.copy()
         book["ts_iso"] = book["ts_utc"]
         books[slug] = book
-    frame = pd.DataFrame(rows, columns=[*IDENTITY_COLUMNS, *FEATURES, *LABEL_COLUMNS])
+    frame = pd.DataFrame(rows, columns=[*IDENTITY_COLUMNS, *features, *LABEL_COLUMNS])
     if not frame.empty:
         frame = frame.sort_values(["decision_ts", "run_name", "slug"], kind="mergesort").reset_index(drop=True)
     metadata = {"format": "causal-prefix-dataset-v1", "input_market_occurrences": len(starts),
@@ -260,10 +284,15 @@ def build_from_quotes(
         "first_quote_minus_slug_epoch_seconds_max": max(first_quote_deltas) if first_quote_deltas else None,
         "first_quote_before_slug_epoch_market_count": sum(delta < 0 for delta in first_quote_deltas),
         "prefix_diagnostic_scope": "earliest_occurrence_of_each_slug_before_quality_admission",
-        "features": list(FEATURES), "feature_cutoff_seconds": PREFIX_SECONDS,
+        "feature_profile": feature_profile, "features": list(features),
+        "required_numeric_fields": list(required_numeric),
+        "original_missingness_mask_fields": list(PREFIX_NUMERIC), "feature_cutoff_seconds": PREFIX_SECONDS,
         "decision_seconds_after_first_quote": DECISION_SECONDS,
         "future_completeness_used_for_admission": False,
         "labels_used_for_admission": False, "label_basis": LABEL_BASIS,
+        "feature_availability_basis": "archive_timestamp_proxy",
+        "supplier_receipt_timestamps_verified": False,
+        "per_run_producer_version_verified": False,
         "proxy_label_comparator": "gte", "proxy_equivalent_to_official_twap": False,
         "label_availability_is_estimated": True, "official_resolution_verified": False,
         "duplicate_policy": "first_chronological_occurrence_before_quality_gate",
@@ -289,8 +318,10 @@ def build_dataset(
     source_root: Path, *, max_source_bytes: int = 1_100_000_000,
     max_snapshot_age_seconds: float = 90.0,
     max_label_delay_seconds: float = 5.0,
+    feature_profile: str = DEFAULT_FEATURE_PROFILE,
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, Any]]:
     """Cloud-only archive loading; bound and record input bytes before loading."""
+    feature_contract(feature_profile)
     files = sorted(path for run in base.scan_run_dirs(Path(source_root)) for path in run.glob(base.FILE_GLOB))
     sizes = [path.stat().st_size for path in files]
     total = sum(sizes)
@@ -311,7 +342,7 @@ def build_dataset(
     raw_rows = len(raw)
     del raw
     frame, books, metadata = build_from_quotes(quotes, max_snapshot_age_seconds=max_snapshot_age_seconds,
-        max_label_delay_seconds=max_label_delay_seconds)
+        max_label_delay_seconds=max_label_delay_seconds, feature_profile=feature_profile)
     metadata.update(source_bytes=total, source_file_count=len(files), source_raw_rows=raw_rows,
         source_run_count=len(coverage), source_budget_bytes=max_source_bytes,
         admission_run_file_count_filter_used=False)

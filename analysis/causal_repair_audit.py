@@ -19,14 +19,15 @@ import pandas as pd
 from sklearn.ensemble import ExtraTreesClassifier
 
 try:
-    from .causal_prefix_dataset import FEATURES, build_dataset, chronological_split
+    from .causal_prefix_dataset import FEATURES, build_dataset, chronological_split, feature_contract
     from .causal_cash_ledger import replay_cash_ledger
 except ImportError:
-    from causal_prefix_dataset import FEATURES, build_dataset, chronological_split
+    from causal_prefix_dataset import FEATURES, build_dataset, chronological_split, feature_contract
     from causal_cash_ledger import replay_cash_ledger
 
 
 def validate_config(config: dict) -> None:
+    feature_contract(config.get('feature_profile', 'full_prefix_v1'))
     if config.get('live_orders_enabled') is not False:
         raise ValueError('OFFLINE_CONFIG_REQUIRED')
     if not 1 <= len(config['profiles']) <= 2 or len({p['name'] for p in config['profiles']}) != len(config['profiles']):
@@ -105,42 +106,113 @@ def execution_candidates(signals: pd.DataFrame, books: dict, *, slippage: float,
     return pd.DataFrame(rows), {'signals': len(signals), 'executable_candidates': len(rows), 'rejected': dict(reasons)}
 
 
+def _write_summary(output: Path, value: dict) -> None:
+    """Atomically retain the latest small checkpoint or final complete report."""
+    output.mkdir(parents=True, exist_ok=True)
+    pending = output / 'summary.json.pending'
+    pending.write_text(json.dumps(value, indent=2, default=str, allow_nan=False) + '\n')
+    pending.replace(output / 'summary.json')
+
+
+def split_evidence_horizon(frame: pd.DataFrame, books: dict,
+                           boundary: pd.Timestamp | None = None) -> tuple[pd.Timestamp, dict]:
+    """Bound cash realization by raw evidence from the entire registered split.
+
+    No signal, position, profit, label or assumed release timestamp determines
+    this horizon. Selection additionally stops before the holdout market scope.
+    """
+    slugs = sorted(set(frame['slug'].astype(str)))
+    maxima = []
+    for slug in slugs:
+        book = books.get(slug)
+        if book is None or book.empty or 'ts_utc' not in book:
+            continue
+        observed = pd.to_datetime(book['ts_utc'], utc=True, errors='coerce').dropna()
+        if not observed.empty:
+            maxima.append(observed.max())
+    maximum_observed = max(maxima) if maxima else None
+    if maximum_observed is not None:
+        horizon = maximum_observed
+        source = 'registered_books_max_observed_quote_ts'
+    else:
+        horizon = pd.to_datetime(frame['market_close_ts'], utc=True, errors='coerce').max()
+        source = 'empty_book_fallback'
+    if pd.isna(horizon):
+        raise ValueError('SPLIT_EVIDENCE_HORIZON_UNAVAILABLE')
+    cap = None
+    if boundary is not None:
+        cap = pd.to_datetime(boundary, utc=True, errors='coerce')
+        if pd.isna(cap):
+            raise ValueError('SPLIT_EVIDENCE_BOUNDARY_INVALID')
+        horizon = min(horizon, cap)
+    return horizon, {
+        'source': source,
+        'scope': 'all_registered_split_slugs_before_signal_selection',
+        'registered_slug_count': len(slugs), 'books_with_valid_quote_clock': len(maxima),
+        'maximum_observed_quote_ts': maximum_observed.isoformat() if maximum_observed is not None else None,
+        'boundary_ts': cap.isoformat() if cap is not None else None,
+        'horizon_ts': horizon.isoformat(),
+        'derived_from_outcomes_or_assumed_releases': False,
+    }
+
+
 def evaluate(source_root: Path, config: dict, output: Path) -> dict:
     validate_config(config)
+    feature_profile = config.get('feature_profile', 'full_prefix_v1')
+    feature_names, _ = feature_contract(feature_profile)
     observed = subprocess.check_output(['git', '-C', str(source_root.resolve().parents[1]), 'rev-parse', 'HEAD'], text=True).strip()
     if observed != config['source_commit']:
         raise ValueError('SOURCE_COMMIT_MISMATCH')
     features, books, quality = build_dataset(source_root,
         max_source_bytes=config['max_source_bytes'], max_snapshot_age_seconds=config['max_snapshot_age_seconds'],
-        max_label_delay_seconds=config['max_label_delay_seconds'])
+        max_label_delay_seconds=config['max_label_delay_seconds'], feature_profile=feature_profile)
     # Persist input evidence before a split/model can fail. A zero-row cohort is
     # actionable source evidence and must not disappear behind an exception.
     output.mkdir(parents=True, exist_ok=True)
     preflight = {'format': config['delivery_contract']['expected_format'],
         'hypothesis_id': config['hypothesis_id'], 'source_commit': config['source_commit'],
         'observed_source_commit': observed, 'feature_rows': len(features), 'quality': quality,
+        'feature_profile': feature_profile, 'registered_feature_names': list(feature_names),
         'split': {}, 'aggregate': [], 'rows': [],
         'config_sha256': hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
         'strategy_evaluated': False, 'model_fit_calls': 0, 'model_predict_calls': 0,
-        'ledger_replays': 0, 'execution_mode': config.get('execution_mode', 'research'),
+        'model_fit_completions': 0, 'model_predict_completions': 0,
+        'ledger_replay_calls': 0, 'ledger_replays': 0,
+        'counter_semantics': 'calls count invocations; completions and ledger_replays count successful returns',
+        'execution_mode': config.get('execution_mode', 'research'),
         'stage': 'source_admission_completed', 'actual_fills': 0, 'verified_canary_fills': 0,
         'live_orders_enabled': False, 'promotion_eligible': False}
-    (output / 'summary.json').write_text(json.dumps(preflight, indent=2, allow_nan=False) + '\n')
+    _write_summary(output, preflight)
     if config.get('execution_mode') == 'data_diagnostic':
         return preflight
     train, selection, holdout, split = chronological_split(features,
         minimum_training_runs=config['minimum_training_runs'], selection_runs=config['selection_runs'])
-    preflight.update(split=split, stage='chronological_split_completed')
-    (output / 'summary.json').write_text(json.dumps(preflight, indent=2, allow_nan=False) + '\n')
+    selection_horizon, selection_evidence = split_evidence_horizon(
+        selection, books, boundary=holdout['market_start_ts'].min())
+    holdout_horizon, holdout_evidence = split_evidence_horizon(holdout, books)
+    horizons = {'selection': selection_horizon, 'retrospective_holdout': holdout_horizon}
+    split_evidence = {'selection': selection_evidence, 'retrospective_holdout': holdout_evidence}
+    preflight.update(split=split, split_evidence_horizons=split_evidence,
+                     stage='chronological_split_completed')
+    _write_summary(output, preflight)
     if len(train) < config['minimum_training_rows'] or train.outcome_up.nunique() < 2:
         raise ValueError('INSUFFICIENT_MATURE_TRAINING_LABELS')
     model = ExtraTreesClassifier(**config['model_params'])
-    model.fit(train[list(FEATURES)], train.outcome_up.astype(int))
-    if list(model.feature_names_in_) != list(FEATURES):
+    preflight.update(model_fit_calls=1, stage='model_fit_started')
+    _write_summary(output, preflight)
+    model.fit(train[list(feature_names)], train.outcome_up.astype(int))
+    preflight.update(model_fit_completions=1, stage='model_fit_completed')
+    _write_summary(output, preflight)
+    if list(model.feature_names_in_) != list(feature_names):
         raise ValueError('FITTED_FEATURE_CONTRACT')
     scored = pd.concat([selection.assign(audit_split='selection'), holdout.assign(audit_split='retrospective_holdout')])
     class_up = list(model.classes_).index(1)
-    probability = model.predict_proba(scored[list(FEATURES)])[:, class_up]
+    preflight.update(model_predict_calls=1, stage='model_prediction_started')
+    _write_summary(output, preflight)
+    predictions = model.predict_proba(scored[list(feature_names)])
+    preflight.update(model_predict_completions=1, stage='model_prediction_completed')
+    _write_summary(output, preflight)
+    probability = predictions[:, class_up]
     signals = signal_frame(scored, probability, config['signal_gate'], config['fee_rate'])
     rows = []
     gate_receipts = []
@@ -153,20 +225,33 @@ def evaluate(source_root: Path, config: dict, output: Path) -> dict:
                 current = candidates.loc[candidates.audit_split.eq(split_name)] if not candidates.empty else candidates
                 for haircut in config['stress_grid']['depth_haircuts']:
                     for profile in config['profiles']:
+                        cell = {'split': split_name, 'profile': profile['name'], 'slippage': slippage,
+                                'latency_seconds': latency, 'depth_haircut': haircut}
+                        preflight.update(ledger_replay_calls=preflight['ledger_replay_calls'] + 1,
+                                         stage='ledger_replay_started', current_cell=cell)
+                        _write_summary(output, preflight)
                         ledger = replay_cash_ledger(current, books, initial_cash=config['initial_cash'],
                             base_fraction=profile['base_fraction'], boost_fraction=profile.get('boost_fraction'),
                             boost_after_profits=profile.get('boost_after_profits', 1), fee_rate=config['fee_rate'],
                             minimum_notional=config['minimum_order_usd'], minimum_shares=config['minimum_order_shares'],
                             depth_haircut=haircut, exit_cutoff_seconds=config['exit_cutoff_seconds'],
                             exit_latency_seconds=latency, max_exit_quote_wait_seconds=config['max_quote_wait_seconds'],
-                            cash_release_delay_seconds=config['cash_release_delay_seconds'], required_fills=config['required_fills'])
-                        rows.append({'split': split_name, 'profile': profile['name'], 'slippage': slippage,
-                            'latency_seconds': latency, 'depth_haircut': haircut, **ledger})
+                            cash_release_delay_seconds=config['cash_release_delay_seconds'], required_fills=config['required_fills'],
+                            evidence_end_ts=horizons[split_name])
+                        preflight.update(ledger_replays=preflight['ledger_replays'] + 1,
+                                         stage='ledger_replay_completed')
+                        _write_summary(output, preflight)
+                        rows.append({**cell, **ledger})
     report = {'format': config['delivery_contract']['expected_format'], 'hypothesis_id': config['hypothesis_id'],
         'source_commit': config['source_commit'], 'observed_source_commit': observed,
         'config_sha256': hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
         'feature_rows': len(features), 'quality': quality, 'split': split,
-        'model_fit_calls': 1, 'model_predict_calls': 1, 'model_frozen_before_selection': True,
+        'split_evidence_horizons': split_evidence,
+        'feature_profile': feature_profile, 'registered_feature_names': list(feature_names),
+        **{key: preflight[key] for key in ('model_fit_calls', 'model_predict_calls',
+            'model_fit_completions', 'model_predict_completions', 'ledger_replay_calls',
+            'ledger_replays', 'counter_semantics', 'execution_mode')},
+        'stage': 'research_completed', 'model_frozen_before_selection': True,
         'feature_names_in': list(model.feature_names_in_), 'execution_gates': gate_receipts,
         'exit_execution_contract': 'first eligible bid triggers breakeven-limit order; revalidate first delayed arrival quote, retain unfilled positions',
         'rows': rows, 'profiles': config['profiles'], 'strategy_evaluated': True,
@@ -186,8 +271,7 @@ def evaluate(source_root: Path, config: dict, output: Path) -> dict:
         for profile in config['profiles']
         for group in [[r for r in rows if r['split'] == split_name and r['profile'] == profile['name']]]
     ]
-    output.mkdir(parents=True, exist_ok=True)
-    (output / 'summary.json').write_text(json.dumps(report, indent=2, default=str, allow_nan=False) + '\n')
+    _write_summary(output, report)
     return report
 
 
