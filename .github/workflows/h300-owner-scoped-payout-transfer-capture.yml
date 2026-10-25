@@ -28,6 +28,11 @@ on:
         required: false
         default: '5'
         type: string
+      share_floor_projection:
+        description: Read-only counterfactual that rounds sub-floor trades to the share minimum
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -63,6 +68,7 @@ jobs:
           SIZING_FRACTIONS: ${{ inputs.sizing_fractions }}
           SIZING_MINIMUM_ORDER_USD: ${{ inputs.sizing_minimum_order_usd }}
           SIZING_MINIMUM_ORDER_SHARES: ${{ inputs.sizing_minimum_order_shares }}
+          SHARE_FLOOR_PROJECTION: ${{ inputs.share_floor_projection }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
         run: |
@@ -126,7 +132,8 @@ jobs:
                 --max-transactions "$MAX_TRANSACTIONS" \
                 --sizing-fractions "$SIZING_FRACTIONS" \
                 --sizing-minimum-order-usd "$SIZING_MINIMUM_ORDER_USD" \
-                --sizing-minimum-order-shares "$SIZING_MINIMUM_ORDER_SHARES"
+                --sizing-minimum-order-shares "$SIZING_MINIMUM_ORDER_SHARES" \
+                $(if [ "$SHARE_FLOOR_PROJECTION" = "true" ]; then printf '%s' '--share-floor-projection'; fi)
               h300_rc=$?
           else
               h300_rc=1

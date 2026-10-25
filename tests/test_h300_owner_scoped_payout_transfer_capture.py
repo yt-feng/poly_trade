@@ -9,6 +9,7 @@ from h300_owner_scoped_payout_transfer_capture import (  # noqa: E402
     TRANSFER_TOPIC,
     capture,
     capture_account,
+    share_floor_projection,
     sizing_sensitivity,
 )
 
@@ -43,6 +44,26 @@ def test_sizing_requires_share_evidence_for_authoritative_floor():
     report = sizing_sensitivity(rows, fractions=["1.0"], initial_cash="20", minimum_order_usd="0", minimum_order_shares="5")
     assert report[0]["missing_share_evidence"] == 10
     assert report[0]["eligible"] is False
+
+
+def test_share_floor_projection_rounds_up_without_inventing_execution():
+    rows = []
+    for i in range(1, 11):
+        side = "BUY" if i % 2 else "SELL"
+        rows.append({
+            "type": "TRADE",
+            "side": side,
+            "timestamp": i,
+            "transaction_ref": str(i),
+            "usdc_size": "0.50",
+            "shares": "1.0",
+            "price": "0.50",
+        })
+    report = share_floor_projection(rows, fractions=["1.0", "0.5"], initial_cash="10", minimum_order_shares="5")
+    assert report[0]["projected_floor_adjustments"] == 10
+    assert report[0]["minimum_cash_usd"] == "7.50"
+    assert report[0]["eligible"] is True
+    assert report[1]["eligible"] is True
 
 
 def word(value: int) -> str:

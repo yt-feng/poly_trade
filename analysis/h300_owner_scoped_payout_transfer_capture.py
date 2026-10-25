@@ -246,6 +246,82 @@ def sizing_sensitivity(
     return output
 
 
+def share_floor_projection(
+    activity_rows: Iterable[dict[str, Any]],
+    *,
+    fractions: Iterable[Any],
+    initial_cash: Any = "10",
+    minimum_order_shares: Any = "5",
+    required_fills: int = 10,
+) -> list[dict[str, Any]]:
+    """Project the observed sequence after rounding each trade up to a share floor.
+
+    This is a cash-only counterfactual, not an execution simulator: it keeps the
+    observed order and prices, rounds a sub-floor trade to the market's minimum
+    shares, and never infers inventory, fills, or edge.  It is useful only for
+    separating a share-contract bottleneck from an insufficient cash floor.
+    """
+    rows = [row for row in activity_rows if isinstance(row, dict)]
+    ordered = sorted(rows, key=lambda row: (int(row.get("timestamp", 0)), _text(row.get("transaction_ref")), _text(row.get("type"))))
+    opening = Decimal(str(initial_cash))
+    minimum_shares = Decimal(str(minimum_order_shares))
+    if (not opening.is_finite() or opening < 0 or not minimum_shares.is_finite() or minimum_shares < 0):
+        raise ValueError("projection_cash_parameters_invalid")
+    output: list[dict[str, Any]] = []
+    for raw_fraction in fractions:
+        fraction = Decimal(str(raw_fraction))
+        if not fraction.is_finite() or fraction <= 0 or fraction > 1:
+            raise ValueError("projection_fraction_must_be_in_0_to_1")
+        cash = opening
+        minimum = opening
+        first_negative: int | None = None
+        trade_count = 0
+        projected_floor_adjustments = 0
+        missing_price_or_share_evidence = 0
+        first_prefix_end = None
+        for index, row in enumerate(ordered):
+            kind = _text(row.get("type")).upper()
+            amount = Decimal(str(row.get("usdc_size", "0"))) * fraction
+            if not amount.is_finite() or amount < 0:
+                raise ValueError("projection_activity_amount_invalid")
+            if kind == "TRADE":
+                trade_count += 1
+                shares_text = _text(row.get("shares"))
+                price_text = _text(row.get("price"))
+                if not shares_text or not price_text:
+                    missing_price_or_share_evidence += 1
+                else:
+                    shares = Decimal(shares_text) * fraction
+                    price = Decimal(price_text)
+                    projected_shares = max(shares, minimum_shares)
+                    if projected_shares > shares:
+                        projected_floor_adjustments += 1
+                    amount = projected_shares * price
+                if trade_count == required_fills:
+                    first_prefix_end = index + 1
+            delta = amount if kind == "REDEEM" or _text(row.get("side")).upper() == "SELL" else -amount
+            cash += delta
+            minimum = min(minimum, cash)
+            if cash < 0 and first_negative is None:
+                first_negative = index + 1
+            if first_prefix_end is not None and index + 1 >= first_prefix_end:
+                break
+        output.append({
+            "fraction": format(fraction, "f"),
+            "initial_cash_usd": format(opening, "f"),
+            "minimum_order_shares": format(minimum_shares, "f"),
+            "required_fills": required_fills,
+            "trades_evaluated": trade_count,
+            "minimum_cash_usd": format(minimum, "f"),
+            "ending_cash_usd": format(cash, "f"),
+            "first_negative_event_index": first_negative,
+            "projected_floor_adjustments": projected_floor_adjustments,
+            "missing_price_or_share_evidence": missing_price_or_share_evidence,
+            "eligible": trade_count >= required_fills and minimum >= 0 and first_negative is None and missing_price_or_share_evidence == 0,
+        })
+    return output
+
+
 def _word(value: str) -> int:
     text = _text(value)
     if text.startswith("0x"):
@@ -420,6 +496,7 @@ def capture_account(
     sizing_fractions: Iterable[Any] = (),
     sizing_minimum_order_usd: Any = "0",
     sizing_minimum_order_shares: Any = "5",
+    share_floor_projection_enabled: bool = False,
 ) -> dict[str, Any]:
     owner = _lower_address(account.get("owner"))
     if not owner:
@@ -487,6 +564,14 @@ def capture_account(
             minimum_order_shares=sizing_minimum_order_shares,
             required_fills=10,
         )
+        if share_floor_projection_enabled:
+            result["share_floor_projection"] = share_floor_projection(
+                btc_rows,
+                fractions=fractions,
+                initial_cash="10",
+                minimum_order_shares=sizing_minimum_order_shares,
+                required_fills=10,
+            )
     return result
 
 
@@ -498,6 +583,7 @@ def capture(
     sizing_fractions: Iterable[Any] = (),
     sizing_minimum_order_usd: Any = "0",
     sizing_minimum_order_shares: Any = "5",
+    share_floor_projection_enabled: bool = False,
 ) -> dict[str, Any]:
     rows = list(accounts)
     if not 1 <= len(rows) <= MAX_ACCOUNTS:
@@ -509,6 +595,7 @@ def capture(
         sizing_fractions=sizing_fractions,
         sizing_minimum_order_usd=sizing_minimum_order_usd,
         sizing_minimum_order_shares=sizing_minimum_order_shares,
+        share_floor_projection_enabled=share_floor_projection_enabled,
     ) for row in rows]
     return {
         "format": "h300-owner-scoped-payout-transfer-capture-v2",
@@ -539,6 +626,7 @@ def main() -> None:
     parser.add_argument("--sizing-fractions", default="", help="Optional comma-separated fractions for the first-ten cash-floor diagnostic")
     parser.add_argument("--sizing-minimum-order-usd", default="0", help="Optional minimum notional floor; zero disables notional-floor admission")
     parser.add_argument("--sizing-minimum-order-shares", default="5", help="Authoritative per-market minimum order size in shares")
+    parser.add_argument("--share-floor-projection", action="store_true", help="Project sub-floor trades up to the minimum share size without simulating execution")
     args = parser.parse_args()
     document = json.loads(args.input.read_text(encoding="utf-8"))
     if not 1 <= args.max_transactions <= MAX_TRANSACTIONS:
@@ -551,6 +639,7 @@ def main() -> None:
         sizing_fractions=fractions,
         sizing_minimum_order_usd=args.sizing_minimum_order_usd,
         sizing_minimum_order_shares=args.sizing_minimum_order_shares,
+        share_floor_projection_enabled=args.share_floor_projection,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
