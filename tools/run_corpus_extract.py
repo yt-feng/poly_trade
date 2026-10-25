@@ -18,7 +18,12 @@ import run_quality_first_research as delivery
 import run_corpus_capacity_probe as probe
 
 REPORT_LIMIT = 2 * 1024 * 1024
-REMOTE_TIMEOUT_SECONDS = 660
+# The remote worker is bounded at 480s, but the controller also has to
+# serialize its checkpoint/export and sealed report before SSH returns.  The
+# old 660s deadline expired during that handoff, producing an unknown outcome
+# even when the remote cursor had advanced.  Keep a finite bound with enough
+# handoff grace for the cloud-only path.
+REMOTE_TIMEOUT_SECONDS = 780
 WORKER_MAX_SECONDS = 480
 WORKER_PROCESS_TIMEOUT_SECONDS = WORKER_MAX_SECONDS + 15
 
