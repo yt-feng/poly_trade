@@ -3,13 +3,17 @@ name: H717 PendulumFlow V3 chain join probe
 on:
   workflow_dispatch:
 
+concurrency:
+  group: h717-pendulumflow-chain-join-probe
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   join:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,11 +28,33 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -m 700 "$RUNNER_TEMP/h717-pendulumflow-join"
-          python analysis/h717_pendulumflow_chain_join_probe.py \
-            --hour 2026-09-03/17 \
-            --rpc-url https://polygon-bor-rpc.publicnode.com \
-            --max-bytes $((256 * 1024 * 1024)) \
-            --output "$RUNNER_TEMP/h717-pendulumflow-join/report.json"
+          set +e
+          timeout --signal=TERM --kill-after=30s 1200s \
+            python analysis/h717_pendulumflow_chain_join_probe.py \
+              --hour 2026-09-03/17 \
+              --rpc-url https://polygon-bor-rpc.publicnode.com \
+              --max-bytes $((256 * 1024 * 1024)) \
+              --output "$RUNNER_TEMP/h717-pendulumflow-join/report.json"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] || [ ! -s "$RUNNER_TEMP/h717-pendulumflow-join/report.json" ]; then
+            python - "$RUNNER_TEMP/h717-pendulumflow-join/report.json" "$rc" <<'PY'
+          import json, pathlib, sys
+          pathlib.Path(sys.argv[1]).write_text(json.dumps({
+              "format": "h717-pendulumflow-chain-join-probe-v1",
+              "status": "cloud_join_step_failed",
+              "decision": "incomplete_cloud_join",
+              "failure_class": "bounded_cloud_step_timeout_or_error",
+              "exit_code": int(sys.argv[2]),
+              "strategy_evaluated": False,
+              "actual_fills": 0,
+              "verified_canary_fills": 0,
+              "live_orders_enabled": False,
+              "cash_ledger_proven": False,
+          }, sort_keys=True) + "\n")
+          PY
+          fi
+          exit "$rc"
       - name: Seal chain join report
         if: always()
         env:
