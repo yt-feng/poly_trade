@@ -877,7 +877,15 @@ def process_locked():
             raise ValueError('invalid_metadata_cursor')
     recovery = load_uncommitted_manifest(ROOT, cursor_value)
     names = sorted(p.name for p in (ROOT / 'metadata').iterdir() if re.fullmatch('[0-9a-f]{64}', p.name))
-    order = [name for name in names if name > last] + [name for name in names if name <= last]
+    recovery_source_ids = payload.get('recovery_source_ids', [])
+    if not isinstance(recovery_source_ids, list) or len(recovery_source_ids) > 8 or any(
+            not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value)
+            for value in recovery_source_ids):
+        raise ValueError('invalid_recovery_source_ids')
+    recovery_source_ids = list(dict.fromkeys(recovery_source_ids))
+    targeted_recovery = bool(recovery_source_ids)
+    targeted = [name for name in recovery_source_ids if name in names]
+    order = targeted + [name for name in names if name not in set(targeted) and name > last] + [name for name in names if name not in set(targeted) and name <= last]
     selected, metadata_read, deferred = [], 0, []
     if recovery is not None:
         selected = recovery['selected']
@@ -920,6 +928,10 @@ def process_locked():
                 deferred.append({'source_id': sid, 'state': 'metadata_or_object_rejected', 'error_class': type(exc).__name__, 'error': str(exc)[:160]})
         manifest = run_dir / 'manifest.jsonl'
         atomic(manifest, b''.join(raw_json(entry) + b'\n' for entry in selected))
+        if targeted_recovery:
+            report['recovery_scope'] = 'explicit_source_id_recovery'
+            report['recovery_source_ids'] = targeted
+            report['recovery_source_ids_missing'] = [value for value in recovery_source_ids if value not in names]
     report.update(metadata_records_read=metadata_read, metadata_names_seen=len(names),
                   selected_manifest=selected, deferred_sources=deferred,
                   manifest_scope='rotating_uploaded_objects_tranche_not_full_corpus')
@@ -955,7 +967,7 @@ def process_locked():
                 atomic(run_dir / 'worker-complete.json', raw_json({'run_id': run_dir.name,
                                                                    'controller_run_id': payload['run_id'],
                                                                    'completed_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}))
-                if recovery is None and order[:MAX_METADATA_LIMIT]:
+                if recovery is None and not targeted_recovery and order[:MAX_METADATA_LIMIT]:
                     atomic(cursor_path, raw_json({'last_source_id': order[:MAX_METADATA_LIMIT][-1],
                                                   'updated_run_id': payload['run_id']}))
                     report['metadata_cursor_committed'] = True
@@ -1030,13 +1042,18 @@ def source_payload(environment, worker_source):
         if not minimum <= value <= maximum:
             raise ValueError('INVALID_' + name.upper())
         return value
+    raw_recovery = environment.get('CORPUS_RECOVERY_SOURCE_IDS', '').strip()
+    recovery_source_ids = [] if not raw_recovery else raw_recovery.split(',')
+    if len(recovery_source_ids) > 8 or any(not re.fullmatch(r'[0-9a-f]{64}', value) for value in recovery_source_ids):
+        raise ValueError('INVALID_CORPUS_RECOVERY_SOURCE_IDS')
     return {'run_id': run + '-' + attempt, 'source_commit': commit, 'mode': mode,
             'worker_base64': base64.b64encode(worker_source).decode(),
             'delivery_ack': delivery_ack_from_environment(environment),
             'pdf_ocr': raw_ocr == 'true',
             'max_metadata': option('CORPUS_MAX_METADATA', 16, 1, 64),
             'max_files': option('CORPUS_MAX_FILES', 8, 1, 32),
-            'max_units': option('CORPUS_MAX_UNITS', 80, 1, 200)}
+            'max_units': option('CORPUS_MAX_UNITS', 80, 1, 200),
+            'recovery_source_ids': recovery_source_ids}
 
 
 def extract():

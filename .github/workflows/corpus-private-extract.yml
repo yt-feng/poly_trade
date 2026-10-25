@@ -54,6 +54,11 @@ on:
           - '80'
           - '120'
           - '200'
+      recovery_source_ids:
+        description: Optional comma-separated source IDs for a bounded retained-failure recovery
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: write
 concurrency:
@@ -85,6 +90,7 @@ jobs:
           CORPUS_MAX_METADATA: ${{ inputs.max_metadata }}
           CORPUS_MAX_FILES: ${{ inputs.max_files }}
           CORPUS_MAX_UNITS: ${{ inputs.max_units }}
+          CORPUS_RECOVERY_SOURCE_IDS: ${{ inputs.recovery_source_ids }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
           CORPUS_SSH_HOST: ${{ secrets.CORPUS_SSH_HOST }}

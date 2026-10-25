@@ -51,16 +51,22 @@ class CorpusExtractTests(unittest.TestCase):
 
     def test_payload_binds_run_attempt_and_source_without_execution(self):
         source = b'raise RuntimeError("must never execute here")\n'
-        payload = extract.source_payload({'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'a'*40}, source)
+        env = {'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'a'*40}
+        payload = extract.source_payload(env, source)
         self.assertEqual(payload['run_id'], '123-2')
         self.assertFalse(payload['pdf_ocr'])
         self.assertEqual(payload['max_metadata'], 16)
         self.assertEqual(payload['max_files'], 8)
         self.assertEqual(payload['max_units'], 80)
         self.assertEqual(base64.b64decode(payload['worker_base64']), source)
+        recovery = 'a' * 64 + ',' + 'b' * 64
+        targeted = extract.source_payload(dict(env, CORPUS_RECOVERY_SOURCE_IDS=recovery), source)
+        self.assertEqual(targeted['recovery_source_ids'], ['a' * 64, 'b' * 64])
         for invalid in ('../../elsewhere', '', '-1'):
             with self.subTest(run=invalid), self.assertRaises(ValueError):
                 extract.source_payload({'GITHUB_RUN_ID': invalid, 'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': 'a'*40}, source)
+        with self.assertRaisesRegex(ValueError, 'INVALID_CORPUS_RECOVERY_SOURCE_IDS'):
+            extract.source_payload(dict(env, CORPUS_RECOVERY_SOURCE_IDS='not-a-source-id'), source)
 
     def test_mode_does_not_change_worker_bytes_or_cache_identity(self):
         source = (ROOT / 'tools' / 'corpus_worker.py').read_bytes()
