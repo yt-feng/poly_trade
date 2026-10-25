@@ -24,7 +24,7 @@ ZERO = "0x" + "00" * 20
 
 def test_sizing_sensitivity_is_first_ten_single_ledger_and_respects_floor():
     rows = [
-        {"type": "TRADE", "side": "BUY", "timestamp": i, "transaction_ref": str(i), "usdc_size": "5.0"}
+        {"type": "TRADE", "side": "BUY", "timestamp": i, "transaction_ref": str(i), "usdc_size": "5.0", "shares": "5.0"}
         for i in range(1, 11)
     ]
     rows[5] = {**rows[5], "type": "REDEEM", "side": "", "usdc_size": "5.5"}
@@ -33,6 +33,16 @@ def test_sizing_sensitivity_is_first_ten_single_ledger_and_respects_floor():
     assert report[0]["eligible"] is False
     assert report[1]["minimum_order_violations"] >= 1
     assert report[1]["eligible"] is False
+
+
+def test_sizing_requires_share_evidence_for_authoritative_floor():
+    rows = [
+        {"type": "TRADE", "side": "BUY", "timestamp": i, "transaction_ref": str(i), "usdc_size": "1.0"}
+        for i in range(1, 11)
+    ]
+    report = sizing_sensitivity(rows, fractions=["1.0"], initial_cash="20", minimum_order_usd="0", minimum_order_shares="5")
+    assert report[0]["missing_share_evidence"] == 10
+    assert report[0]["eligible"] is False
 
 
 def word(value: int) -> str:

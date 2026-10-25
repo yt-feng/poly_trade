@@ -131,10 +131,10 @@ def normalize_activity_row(raw: dict[str, Any]) -> dict[str, Any] | None:
         return None
     tx = _tx(_first(raw, ("transaction_ref", "transactionHash", "transaction_hash", "tx_hash", "txHash")))
     ts = _timestamp(_first(raw, ("timestamp", "timestamp_ms", "created_at")))
+    size = _number(_first(raw, ("size", "shares")))
+    price = _number(_first(raw, ("price", "entry_price")))
     amount = _number(_first(raw, ("usdc_size", "usdcSize", "amount", "payout", "cash_amount")))
     if not amount and kind == "TRADE":
-        size = _number(_first(raw, ("size", "shares")))
-        price = _number(_first(raw, ("price", "entry_price")))
         if size and price:
             amount = format(Decimal(size) * Decimal(price), "f")
     slug = _text(_first(raw, ("slug", "event_slug", "eventSlug", "market_slug", "marketSlug"))).lower()
@@ -147,6 +147,8 @@ def normalize_activity_row(raw: dict[str, Any]) -> dict[str, Any] | None:
         "transaction_ref": tx,
         "timestamp": ts,
         "usdc_size": amount,
+        "shares": size,
+        "price": price,
         "slug": slug,
         "condition_id": condition_id,
     }
@@ -163,7 +165,8 @@ def sizing_sensitivity(
     *,
     fractions: Iterable[Any],
     initial_cash: Any = "10",
-    minimum_order_usd: Any = "5",
+    minimum_order_usd: Any = "0",
+    minimum_order_shares: Any = "5",
     required_fills: int = 10,
 ) -> list[dict[str, Any]]:
     """Run a compact, read-only cash-floor diagnostic on one observed path.
@@ -180,7 +183,9 @@ def sizing_sensitivity(
     output: list[dict[str, Any]] = []
     opening = Decimal(str(initial_cash))
     minimum_order = Decimal(str(minimum_order_usd))
-    if not opening.is_finite() or opening < 0 or not minimum_order.is_finite() or minimum_order < 0:
+    minimum_shares = Decimal(str(minimum_order_shares))
+    if (not opening.is_finite() or opening < 0 or not minimum_order.is_finite() or minimum_order < 0
+            or not minimum_shares.is_finite() or minimum_shares < 0):
         raise ValueError("sizing_cash_parameters_invalid")
     for raw_fraction in fractions:
         fraction = Decimal(str(raw_fraction))
@@ -191,6 +196,7 @@ def sizing_sensitivity(
         first_negative: int | None = None
         trade_count = 0
         minimum_order_violations = 0
+        missing_share_evidence = 0
         first_prefix_end = None
         for index, row in enumerate(ordered):
             kind = _text(row.get("type")).upper()
@@ -201,6 +207,13 @@ def sizing_sensitivity(
                 trade_count += 1
                 if amount < minimum_order:
                     minimum_order_violations += 1
+                shares_text = _text(row.get("shares"))
+                if shares_text:
+                    shares = Decimal(shares_text) * fraction
+                    if shares < minimum_shares:
+                        minimum_order_violations += 1
+                else:
+                    missing_share_evidence += 1
                 if trade_count == required_fills:
                     first_prefix_end = index + 1
             delta = amount if kind == "REDEEM" or _text(row.get("side")).upper() == "SELL" else -amount
@@ -220,13 +233,15 @@ def sizing_sensitivity(
             "fraction": format(fraction, "f"),
             "initial_cash_usd": format(opening, "f"),
             "minimum_order_usd": format(minimum_order, "f"),
+            "minimum_order_shares": format(minimum_shares, "f"),
             "required_fills": required_fills,
             "trades_evaluated": trade_count,
             "minimum_cash_usd": format(minimum, "f"),
             "ending_cash_usd": format(cash, "f"),
             "first_negative_event_index": first_negative,
             "minimum_order_violations": minimum_order_violations,
-            "eligible": eligible,
+            "missing_share_evidence": missing_share_evidence,
+            "eligible": eligible and missing_share_evidence == 0,
         })
     return output
 
@@ -403,6 +418,8 @@ def capture_account(
     receipt_fetcher: Callable[[str], dict[str, Any]],
     max_transactions: int = MAX_TRANSACTIONS,
     sizing_fractions: Iterable[Any] = (),
+    sizing_minimum_order_usd: Any = "0",
+    sizing_minimum_order_shares: Any = "5",
 ) -> dict[str, Any]:
     owner = _lower_address(account.get("owner"))
     if not owner:
@@ -466,7 +483,8 @@ def capture_account(
             btc_rows,
             fractions=fractions,
             initial_cash="10",
-            minimum_order_usd="5",
+            minimum_order_usd=sizing_minimum_order_usd,
+            minimum_order_shares=sizing_minimum_order_shares,
             required_fills=10,
         )
     return result
@@ -478,11 +496,20 @@ def capture(
     receipt_fetcher: Callable[[str], dict[str, Any]],
     max_transactions: int = MAX_TRANSACTIONS,
     sizing_fractions: Iterable[Any] = (),
+    sizing_minimum_order_usd: Any = "0",
+    sizing_minimum_order_shares: Any = "5",
 ) -> dict[str, Any]:
     rows = list(accounts)
     if not 1 <= len(rows) <= MAX_ACCOUNTS:
         raise ValueError("one to four accounts are required")
-    reports = [capture_account(row, receipt_fetcher=receipt_fetcher, max_transactions=max_transactions, sizing_fractions=sizing_fractions) for row in rows]
+    reports = [capture_account(
+        row,
+        receipt_fetcher=receipt_fetcher,
+        max_transactions=max_transactions,
+        sizing_fractions=sizing_fractions,
+        sizing_minimum_order_usd=sizing_minimum_order_usd,
+        sizing_minimum_order_shares=sizing_minimum_order_shares,
+    ) for row in rows]
     return {
         "format": "h300-owner-scoped-payout-transfer-capture-v2",
         "accounts": reports,
@@ -510,6 +537,8 @@ def main() -> None:
     parser.add_argument("--rpc-url", required=True)
     parser.add_argument("--max-transactions", type=int, default=MAX_TRANSACTIONS)
     parser.add_argument("--sizing-fractions", default="", help="Optional comma-separated fractions for the first-ten cash-floor diagnostic")
+    parser.add_argument("--sizing-minimum-order-usd", default="0", help="Optional minimum notional floor; zero disables notional-floor admission")
+    parser.add_argument("--sizing-minimum-order-shares", default="5", help="Authoritative per-market minimum order size in shares")
     args = parser.parse_args()
     document = json.loads(args.input.read_text(encoding="utf-8"))
     if not 1 <= args.max_transactions <= MAX_TRANSACTIONS:
@@ -520,6 +549,8 @@ def main() -> None:
         receipt_fetcher=lambda tx: _rpc_fetch(args.rpc_url, tx),
         max_transactions=args.max_transactions,
         sizing_fractions=fractions,
+        sizing_minimum_order_usd=args.sizing_minimum_order_usd,
+        sizing_minimum_order_shares=args.sizing_minimum_order_shares,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

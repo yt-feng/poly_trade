@@ -18,6 +18,16 @@ on:
         required: false
         default: '1.0,0.9,0.8,0.7,0.6,0.5'
         type: string
+      sizing_minimum_order_usd:
+        description: Optional per-order notional floor; zero disables this legacy floor
+        required: false
+        default: '0'
+        type: string
+      sizing_minimum_order_shares:
+        description: Per-market minimum order size in shares from Gamma metadata
+        required: false
+        default: '5'
+        type: string
 
 permissions:
   contents: write
@@ -51,6 +61,8 @@ jobs:
           RPC_URL: ${{ inputs.rpc_url }}
           MAX_TRANSACTIONS: ${{ inputs.max_transactions }}
           SIZING_FRACTIONS: ${{ inputs.sizing_fractions }}
+          SIZING_MINIMUM_ORDER_USD: ${{ inputs.sizing_minimum_order_usd }}
+          SIZING_MINIMUM_ORDER_SHARES: ${{ inputs.sizing_minimum_order_shares }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
         run: |
@@ -112,7 +124,9 @@ jobs:
                 --output "$private_dir/h300.json" \
                 --rpc-url "$RPC_URL" \
                 --max-transactions "$MAX_TRANSACTIONS" \
-                --sizing-fractions "$SIZING_FRACTIONS"
+                --sizing-fractions "$SIZING_FRACTIONS" \
+                --sizing-minimum-order-usd "$SIZING_MINIMUM_ORDER_USD" \
+                --sizing-minimum-order-shares "$SIZING_MINIMUM_ORDER_SHARES"
               h300_rc=$?
           else
               h300_rc=1
