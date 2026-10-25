@@ -87,7 +87,8 @@ class CorpusExtractTests(unittest.TestCase):
         assignments = {n.targets[0].id: constant_product(n.value) for n in tree.body
                        if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
                        and n.targets[0].id in ('REPORT_LIMIT', 'MEMORY_LIMIT', 'MAX_METADATA')}
-        self.assertEqual(assignments['REPORT_LIMIT'], 2*1024*1024)
+        self.assertEqual(assignments['REPORT_LIMIT'], extract.REPORT_LIMIT)
+        self.assertEqual(extract.REPORT_LIMIT, 4*1024*1024)
         self.assertEqual(assignments['MEMORY_LIMIT'], 512*1024*1024)
         self.assertEqual(assignments['MAX_METADATA'], 64)
 
@@ -396,6 +397,30 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         second = self.deliver(units, '2-1')
         delivered_keys = {item['unit_key'] for item in first['unit_texts']} | {item['unit_key'] for item in second['unit_texts']}
         self.assertEqual(len(delivered_keys), 6)
+        self.assertTrue(second['unit_delivery_complete_for_cloud_snapshot'])
+
+    def test_larger_delivery_budget_preserves_acknowledged_resume_and_wire_bound(self):
+        self.ns['REPORT_LIMIT'] = extract.REPORT_LIMIT
+        png = b'\x89PNG\r\n\x1a\n' + b'x'*(512*1024 - 8)
+        (self.output / 'page.png').write_bytes(png)
+        units = [self.unit(source) for source in ('0', '1', '2', '3', '4', '5')]
+        for unit in units:
+            unit['metadata']['visual_artifact'] = 'page.png'
+        first = self.deliver(units, '1-1')
+        raw = self.ns['raw_json'](first)
+        self.assertGreater(len(raw), 2*1024*1024)
+        self.assertLess(len(raw), extract.REPORT_LIMIT)
+        # Include room for the outer diagnostic record, authenticated
+        # encryption tag, base64 expansion, and envelope metadata.
+        upper_wire_bytes = ((len(raw) + 131072 + 16 + 2)//3)*4 + 4096
+        self.assertLess(upper_wire_bytes, 6*1024*1024)
+        self.assertFalse(first['unit_delivery_complete_for_cloud_snapshot'])
+        self.ns['apply_delivery_ack'](self.root, self.ack(first, ['unit', 'visual']))
+        second = self.deliver(units, '2-1')
+        first_keys = {item['unit_key'] for item in first['unit_texts']}
+        second_keys = {item['unit_key'] for item in second['unit_texts']}
+        self.assertFalse(first_keys & second_keys)
+        self.assertEqual(len(first_keys | second_keys), 12)
         self.assertTrue(second['unit_delivery_complete_for_cloud_snapshot'])
 
 

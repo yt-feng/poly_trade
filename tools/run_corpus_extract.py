@@ -17,7 +17,9 @@ import research_vault as vault
 import run_quality_first_research as delivery
 import run_corpus_capacity_probe as probe
 
-REPORT_LIMIT = 2 * 1024 * 1024
+# Keep both transport ends aligned. This allows more already-exported page
+# evidence per readback without changing the worker or its cache identity.
+REPORT_LIMIT = 4 * 1024 * 1024
 # The remote worker is bounded at 480s, but the controller also has to
 # serialize its checkpoint/export and sealed report before SSH returns.  The
 # old 660s deadline expired during that handoff, producing an unknown outcome
@@ -90,7 +92,7 @@ REMOTE_EXTRACT = r'''
 import base64, datetime, fcntl, hashlib, importlib.util, json, os, pathlib, re, resource, signal, stat, subprocess, sys, urllib.request
 payload = json.loads(PAYLOAD_LITERAL)
 ROOT = pathlib.Path('/home/ubuntu/quantml-study')
-REPORT_LIMIT = 2 * 1024 * 1024
+REPORT_LIMIT = 4 * 1024 * 1024
 MEMORY_LIMIT = 512 * 1024 * 1024
 MAX_METADATA = 64
 def bounded_option(name, default, minimum, maximum):
