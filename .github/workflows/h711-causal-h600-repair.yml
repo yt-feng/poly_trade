@@ -1,0 +1,112 @@
+name: H711 causal H600 repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Pinned old-clean source commit
+        required: true
+        default: bbda5f2050685f63153621a54641ebdfab943487
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: ${{ inputs.source_commit }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install research dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy scikit-learn pytest
+      - name: Validate H711 causal contract
+        run: python -m pytest -q tests/test_h711_causal_h600_repair.py tests/test_h621_frozen_h600_canary_candidate_manifest.py
+      - name: Run causal H600 repair on pinned old-clean source
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/old-data-h711"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/h711_causal_h600_repair.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "${{ inputs.source_commit }}" \
+            --output "$PRIVATE_DIR/results" \
+            > "$PRIVATE_DIR/analysis-output.txt"
+      - name: Seal H711 result
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+          SOURCE_DATA_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/old-data-h711" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          recipient = research_vault.load_json_bytes(base64.b64decode(os.environ['QUALITY_FIRST_RECIPIENT_JSON_B64'], validate=True), 4096)
+          recipient_id = os.environ['QUALITY_FIRST_RECIPIENT_ID']
+          research_vault.validate_recipient(recipient, recipient_id)
+          report = json.loads((private / 'results' / 'summary.json').read_text(encoding='utf-8'))
+          output = (private / 'analysis-output.txt').read_text(encoding='utf-8')
+          if len(output.encode('utf-8')) > 10_000_000:
+              raise SystemExit('analysis output too large')
+          payload = research_vault.canonical({
+              'format': 'old-clean-h711-causal-h600-repair-sealed-v1',
+              'report': report,
+              'analysis_output': output,
+              'workflow': {
+                  'run_id': os.environ['GITHUB_RUN_ID'],
+                  'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                  'source_commit': os.environ['SOURCE_DATA_COMMIT'],
+              },
+              'actual_fills': 0,
+              'verified_canary_fills': 0,
+              'live_orders_enabled': False,
+              'plaintext_published': False,
+          })
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(payload, recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({
+              'version': 1, 'status': 'complete', 'stage': 'sealed_delivery',
+              'strategy_evaluated': True, 'live_orders_enabled': False,
+              'plaintext_published': False, 'sealed_parts': 1,
+          }) + b'\n', 0o644)
+          PY
+      - name: Publish encrypted H711 journal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: PYTHONPATH=tools python tools/publish_quality_first_journal.py --source sealed-delivery --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --recipient-id "$RESEARCH_RECIPIENT_ID" --cell-id h711-causal-h600-repair
+      - name: Upload ciphertext and generic status only
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: h711-causal-h600-repair-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            sealed-delivery/part-0000.vault
+            sealed-delivery/status.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Redacted summary
+        if: always()
+        run: |
+          echo '## H711 causal H600 repair' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Reused the pinned old-clean source, H600 favorite-side/depth rule and one-position cash ledger.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Removed the post-decision four-minute feature and used market-start plus 300 seconds for settlement.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Detailed metrics remain encrypted; no orders, transfers, or canary fills were created.' >> "$GITHUB_STEP_SUMMARY"
