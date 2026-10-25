@@ -111,7 +111,7 @@ def _contract(profile: str | None, path: Path | None, source_commit: str) -> dic
         if not isinstance(value, dict) or value.get("source_commit") != source_commit:
             raise ValueError("REPORT_CONTRACT_SOURCE")
         value = {key: value.get(key) for key in ("expected_format", "expected_hypothesis", "source_commit",
-                                                "required_report_keys", "required_object_keys")}
+                                                "required_report_keys", "required_object_keys", "allow_zero_feature_diagnostic")}
         value["required_object_keys"] = value["required_object_keys"] or []
     else:
         format_name, hypothesis, fields = PROFILES[profile]
@@ -130,6 +130,11 @@ def _contract(profile: str | None, path: Path | None, source_commit: str) -> dic
 
 def report_contract(report: dict, contract: dict) -> bool:
     source_commit = contract["source_commit"]
+    feature_count_valid = type(report.get('feature_rows')) is int and report['feature_rows'] > 0
+    zero_diagnostic = (contract.get('allow_zero_feature_diagnostic') is True
+        and type(report.get('feature_rows')) is int and report['feature_rows'] == 0
+        and report.get('execution_mode') == 'data_diagnostic'
+        and report.get('strategy_evaluated') is False)
     return bool(
         report.get("format") == contract["expected_format"]
         and report.get("hypothesis_id") == contract["expected_hypothesis"]
@@ -137,7 +142,7 @@ def report_contract(report: dict, contract: dict) -> bool:
         and report.get("observed_source_commit") == source_commit
         and report.get("live_orders_enabled") is False
         and all(type(report.get(key)) is int and report[key] == 0 for key in ("actual_fills", "verified_canary_fills"))
-        and type(report.get("feature_rows")) is int and report["feature_rows"] > 0
+        and (feature_count_valid or zero_diagnostic)
         and all(field in report and report[field] is not None for field in contract["required_report_keys"])
         and all(isinstance(report.get(field), dict) for field in contract["required_object_keys"])
     )
@@ -201,7 +206,7 @@ def seal(private: Path, output: Path, *, profile: str | None = None, source_comm
         report = None
         valid_report = False
         errors.append("report_missing_or_invalid")
-    evaluated = bool(
+    execution_validated = bool(
         env.get("EVALUATION_OUTCOME") == "success"
         and execution.get("format") == "private-research-step-execution-v1"
         and execution.get("process_started") is True
@@ -210,6 +215,7 @@ def seal(private: Path, output: Path, *, profile: str | None = None, source_comm
         and type(execution.get("process_exit_code")) is int and execution["process_exit_code"] == 0
         and valid_report
     )
+    evaluated = execution_validated and report.get('strategy_evaluated', True) is True
     metadata = {
         "format": "private-research-step-outcome-v1", "profile": profile,
         "source_commit": source_commit,
@@ -218,11 +224,13 @@ def seal(private: Path, output: Path, *, profile: str | None = None, source_comm
         "execution": execution, "report_contract_valid": valid_report,
         "report_contract": contract,
         "contract_errors": errors, "strategy_evaluated": evaluated,
+        "execution_validated": execution_validated,
         "evaluation_status": "evaluated" if evaluated else "failed_or_not_executed",
         "actual_fills": 0, "verified_canary_fills": 0, "live_orders_enabled": False,
         "evidence_boundary": "delivery and execution validity do not establish economic qualification",
     }
     result = delivery.seal_outcomes(private, output, recipient, TRUSTED_RECIPIENT_ID, metadata=metadata)
+    result['execution_validated'] = execution_validated
     if summary_output is not None:
         _summary_projection(private, summary_output, recipient, metadata, report, result)
     return result
@@ -260,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
                 handle.write("delivery_complete=true\n")
                 handle.write("evaluation_complete=" + str(result["strategy_evaluated"]).lower() + "\n")
+                handle.write("execution_complete=" + str(result["execution_validated"]).lower() + "\n")
         print(json.dumps({"status": "delivery_complete", "plaintext_published": False}))
         return 0
     except Exception:

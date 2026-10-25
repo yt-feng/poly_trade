@@ -108,8 +108,8 @@ jobs:
       - name: Require valid delivered execution
         if: always() && steps.seal.outcome == 'success' && steps.evaluate.outcome == 'success'
         env:
-          EVALUATION_COMPLETE: ${{ steps.seal.outputs.evaluation_complete }}
-        run: test "$EVALUATION_COMPLETE" = 'true'
+          EXECUTION_COMPLETE: ${{ steps.seal.outputs.execution_complete }}
+        run: test "$EXECUTION_COMPLETE" = 'true'
       - name: Public summary
         if: always()
         run: echo 'Execution and delivery outcomes are distinct. Findings are encrypted. No trading actions were performed.' >> "$GITHUB_STEP_SUMMARY"

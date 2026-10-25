@@ -113,8 +113,25 @@ def evaluate(source_root: Path, config: dict, output: Path) -> dict:
     features, books, quality = build_dataset(source_root,
         max_source_bytes=config['max_source_bytes'], max_snapshot_age_seconds=config['max_snapshot_age_seconds'],
         max_label_delay_seconds=config['max_label_delay_seconds'])
+    # Persist input evidence before a split/model can fail. A zero-row cohort is
+    # actionable source evidence and must not disappear behind an exception.
+    output.mkdir(parents=True, exist_ok=True)
+    preflight = {'format': config['delivery_contract']['expected_format'],
+        'hypothesis_id': config['hypothesis_id'], 'source_commit': config['source_commit'],
+        'observed_source_commit': observed, 'feature_rows': len(features), 'quality': quality,
+        'split': {}, 'aggregate': [], 'rows': [],
+        'config_sha256': hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+        'strategy_evaluated': False, 'model_fit_calls': 0, 'model_predict_calls': 0,
+        'ledger_replays': 0, 'execution_mode': config.get('execution_mode', 'research'),
+        'stage': 'source_admission_completed', 'actual_fills': 0, 'verified_canary_fills': 0,
+        'live_orders_enabled': False, 'promotion_eligible': False}
+    (output / 'summary.json').write_text(json.dumps(preflight, indent=2, allow_nan=False) + '\n')
+    if config.get('execution_mode') == 'data_diagnostic':
+        return preflight
     train, selection, holdout, split = chronological_split(features,
         minimum_training_runs=config['minimum_training_runs'], selection_runs=config['selection_runs'])
+    preflight.update(split=split, stage='chronological_split_completed')
+    (output / 'summary.json').write_text(json.dumps(preflight, indent=2, allow_nan=False) + '\n')
     if len(train) < config['minimum_training_rows'] or train.outcome_up.nunique() < 2:
         raise ValueError('INSUFFICIENT_MATURE_TRAINING_LABELS')
     model = ExtraTreesClassifier(**config['model_params'])

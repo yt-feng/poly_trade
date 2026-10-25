@@ -38,6 +38,17 @@ def valid_report():
             **{field: {"synthetic": True} for field in fields}}
 
 
+def test_zero_feature_diagnostic_not_allowed_as_strategy_result():
+    format_name, hypothesis, fields = runner.PROFILES['h712']
+    contract = {'expected_format': format_name, 'expected_hypothesis': hypothesis,
+        'source_commit': SOURCE, 'required_report_keys': list(fields), 'required_object_keys': list(fields),
+        'allow_zero_feature_diagnostic': True}
+    report = {**valid_report(), 'feature_rows': 0, 'execution_mode': 'data_diagnostic', 'strategy_evaluated': False}
+    assert runner.report_contract(report, contract)
+    report['strategy_evaluated'] = True
+    assert not runner.report_contract(report, contract)
+
+
 def execute_fixture(private, recipient_path, *, fail=False, write_report=True):
     code = "import json, pathlib, sys\n"
     code += f"print({MARKER!r} + '_stdout')\nprint({MARKER!r} + '_stderr', file=sys.stderr)\n"

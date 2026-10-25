@@ -120,6 +120,7 @@ def test_midpoint_fallback_cannot_rescue_missing_original_prefix():
     frame, _, meta = dataset.build_from_quotes(prepared)
     assert frame.empty
     assert meta["quality_counts"] == {"incomplete_original_prefix": 1}
+    assert meta["prefix_nonfinite_market_counts_by_field"]["mid_up_cents"] == 1
 
 
 def test_future_missing_midpoint_does_not_remove_prefix():
@@ -152,3 +153,58 @@ def test_overlapping_run_intervals_rejected():
     frame.loc[4, "run_name"] = "run0"
     with pytest.raises(ValueError, match="overlapping_run_intervals"):
         dataset.chronological_split(frame, minimum_training_runs=1, selection_runs=1)
+
+
+def test_synthetic_csv_schema_roundtrip_keeps_valid_prefix(tmp_path):
+    """Exercise the actual loader/preparer contract with seven invented rows."""
+    raw = quotes(epoch=1792860000, run="will_be_set_by_loader")
+    raw["ts_iso"] = raw["ts_utc"].map(lambda value: value.isoformat())
+    for column in dataset.PREFIX_NUMERIC:
+        raw[column] = raw[column].map(str)
+    raw = raw.drop(columns=["ts_utc", "run_name", "quote_conflict"])
+    run_dir = tmp_path / "run_20261024_000000"
+    run_dir.mkdir()
+    source = run_dir / "synthetic_btc-updown-5m_quotes.csv"
+    raw.to_csv(source, index=False)
+    frame, books, meta = dataset.build_dataset(tmp_path)
+    assert len(frame) == 1
+    assert frame.iloc[0]["run_name"] == run_dir.name
+    assert set(books) == {"btc-updown-5m-1792860000"}
+    assert meta["quality_counts"] == {"admitted_prefix_only": 1}
+    assert meta["source_file_count"] == 1
+    assert meta["source_raw_rows"] == 7
+    assert meta["source_bytes"] == source.stat().st_size
+    assert not any(meta["prefix_nonfinite_market_counts_by_field"].values())
+    assert meta["first_quote_minus_slug_epoch_seconds_min"] == 0.0
+    assert meta["first_quote_minus_slug_epoch_seconds_max"] == 0.0
+    assert meta["first_quote_before_slug_epoch_market_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "missing_column", ["mid_up_cents", "trade_count_1s", "trade_volume_1s"]
+)
+def test_synthetic_csv_missing_original_field_rejection_is_diagnostic(tmp_path, missing_column):
+    raw = quotes(epoch=1792860000)
+    raw["ts_iso"] = raw["ts_utc"].map(lambda value: value.isoformat())
+    raw = raw.drop(columns=["ts_utc", "run_name", "quote_conflict", missing_column])
+    run_dir = tmp_path / "run_20261024_000000"
+    run_dir.mkdir()
+    raw.to_csv(run_dir / "synthetic_btc-updown-5m_quotes.csv", index=False)
+    frame, _, meta = dataset.build_dataset(tmp_path)
+    assert frame.empty
+    assert meta["quality_counts"] == {"incomplete_original_prefix": 1}
+    assert meta["input_market_occurrences"] == 1
+    assert meta["prefix_nonfinite_market_counts_by_field"][missing_column] == 1
+    assert sum(meta["prefix_nonfinite_market_counts_by_field"].values()) == 1
+
+
+def test_prefix_diagnostics_capture_clock_rejection_and_ignore_future_missingness():
+    data = quotes(offsets=(-120, -90, -60, -30, 0, 180))
+    data.loc[data.index[-1], "mid_up_cents"] = float("nan")
+    frame, _, meta = dataset.build_from_quotes(data)
+    assert frame.empty
+    assert meta["quality_counts"] == {"decision_outside_market_lifetime": 1}
+    assert meta["first_quote_minus_slug_epoch_seconds_min"] == -120.0
+    assert meta["first_quote_minus_slug_epoch_seconds_max"] == -120.0
+    assert meta["first_quote_before_slug_epoch_market_count"] == 1
+    assert not any(meta["prefix_nonfinite_market_counts_by_field"].values())

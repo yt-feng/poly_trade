@@ -199,6 +199,8 @@ def build_from_quotes(
         raise ValueError("missing_quote_identity")
     reasons: Counter = Counter()
     label_reasons: Counter = Counter()
+    prefix_nonfinite: Counter = Counter({field: 0 for field in PREFIX_NUMERIC})
+    first_quote_deltas: list[float] = []
     starts = quotes.groupby(["run_name", "slug"], dropna=False)["ts_utc"].min().reset_index()
     starts = starts.sort_values(["ts_utc", "run_name", "slug"], kind="mergesort", na_position="last")
     groups = quotes.groupby(["run_name", "slug"], dropna=False, sort=False)
@@ -213,6 +215,28 @@ def build_from_quotes(
         # complete copy cannot rescue an unavailable first decision prefix.
         seen.add(slug)
         group = groups.get_group((item.run_name, item.slug)).sort_values("ts_utc", kind="mergesort")
+        # Diagnostic-only aggregates inspect the same earliest prefix used by
+        # admission. They do not alter the frozen gates or admit missing data.
+        first_ts = pd.Timestamp(item.ts_utc)
+        if not pd.isna(first_ts):
+            prefix = group.loc[group["ts_utc"].le(first_ts + pd.Timedelta(seconds=PREFIX_SECONDS))]
+            original_mask = 0
+            if "original_prefix_nonfinite_mask" in prefix and not prefix.empty:
+                original_mask = int(np.bitwise_or.reduce(
+                    prefix["original_prefix_nonfinite_mask"].to_numpy(dtype=np.uint32)))
+            for index, field in enumerate(PREFIX_NUMERIC):
+                absent_original = bool(original_mask & (1 << index))
+                absent_current = field not in prefix or not np.isfinite(
+                    pd.to_numeric(prefix[field], errors="coerce").to_numpy(dtype=float)).all()
+                if absent_original or absent_current:
+                    prefix_nonfinite[field] += 1
+            match = re.fullmatch(r"btc-updown-5m-(\d+)", slug)
+            if match is not None:
+                try:
+                    epoch_ts = pd.to_datetime(int(match.group(1)), unit="s", utc=True)
+                    first_quote_deltas.append(float((first_ts - epoch_ts).total_seconds()))
+                except (ValueError, OverflowError):
+                    pass
         feature, reason = prefix_features(group, run_name=run_name, slug=slug,
             max_snapshot_age_seconds=max_snapshot_age_seconds)
         reasons[reason] += 1
@@ -231,6 +255,11 @@ def build_from_quotes(
     metadata = {"format": "causal-prefix-dataset-v1", "input_market_occurrences": len(starts),
         "unique_slugs_seen": len(seen), "feature_rows": len(frame), "quality_counts": dict(reasons),
         "label_quality_counts": dict(label_reasons), "max_label_delay_seconds": max_label_delay_seconds,
+        "prefix_nonfinite_market_counts_by_field": dict(prefix_nonfinite),
+        "first_quote_minus_slug_epoch_seconds_min": min(first_quote_deltas) if first_quote_deltas else None,
+        "first_quote_minus_slug_epoch_seconds_max": max(first_quote_deltas) if first_quote_deltas else None,
+        "first_quote_before_slug_epoch_market_count": sum(delta < 0 for delta in first_quote_deltas),
+        "prefix_diagnostic_scope": "earliest_occurrence_of_each_slug_before_quality_admission",
         "features": list(FEATURES), "feature_cutoff_seconds": PREFIX_SECONDS,
         "decision_seconds_after_first_quote": DECISION_SECONDS,
         "future_completeness_used_for_admission": False,
@@ -246,7 +275,12 @@ def prepare_quotes_preserving_missingness(raw: pd.DataFrame) -> pd.DataFrame:
     """Record original missingness before the legacy midpoint fallback can act."""
     marked = raw.copy(deep=False)
     original_numeric = marked.reindex(columns=PREFIX_NUMERIC).apply(pd.to_numeric, errors="coerce")
-    marked["original_prefix_incomplete"] = ~np.isfinite(original_numeric.to_numpy(dtype=float)).all(axis=1)
+    original_mask = np.zeros(len(marked), dtype=np.uint32)
+    for index, field in enumerate(PREFIX_NUMERIC):
+        missing = ~np.isfinite(original_numeric[field].to_numpy(dtype=float))
+        original_mask |= missing.astype(np.uint32) << index
+    marked["original_prefix_incomplete"] = original_mask != 0
+    marked["original_prefix_nonfinite_mask"] = original_mask
     del original_numeric
     return base.prepare_quotes(marked)
 

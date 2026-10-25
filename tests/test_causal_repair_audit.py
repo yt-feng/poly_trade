@@ -86,3 +86,28 @@ def test_rejects_expanded_grid_before_source_read():
     value['stress_grid']['slippages'] = [0.01] * 25
     with pytest.raises(ValueError, match='STRESS_BUDGET'):
         audit.validate_config(value)
+
+
+def test_zero_cohort_diagnostic_has_no_model_split_or_replay(monkeypatch, tmp_path):
+    value = config()
+    value['execution_mode'] = 'data_diagnostic'
+    monkeypatch.setattr(audit, 'build_dataset', lambda *a, **kw:
+        (pd.DataFrame(), {}, {'feature_rows': 0, 'quality_counts': {'synthetic_rejection': 2}}))
+    monkeypatch.setattr(audit.subprocess, 'check_output', lambda *a, **kw: 'a' * 40)
+    monkeypatch.setattr(audit, 'chronological_split', lambda *a, **kw: pytest.fail('diagnostic split'))
+    monkeypatch.setattr(audit, 'ExtraTreesClassifier', lambda **kw: pytest.fail('diagnostic model'))
+    result = audit.evaluate(tmp_path / 'repo/data/monthly_runs', value, tmp_path / 'out')
+    assert result['feature_rows'] == 0 and result['strategy_evaluated'] is False
+    assert result['model_fit_calls'] == result['ledger_replays'] == 0
+    assert json.loads((tmp_path / 'out/summary.json').read_text())['quality']['quality_counts']
+
+
+def test_split_failure_keeps_source_quality_evidence(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, 'build_dataset', lambda *a, **kw:
+        (pd.DataFrame(), {}, {'quality_counts': {'synthetic_rejection': 2}}))
+    monkeypatch.setattr(audit.subprocess, 'check_output', lambda *a, **kw: 'a' * 40)
+    with pytest.raises(ValueError, match='no_prefix_rows'):
+        audit.evaluate(tmp_path / 'repo/data/monthly_runs', config(), tmp_path / 'out')
+    evidence = json.loads((tmp_path / 'out/summary.json').read_text())
+    assert evidence['strategy_evaluated'] is False and evidence['model_fit_calls'] == 0
+    assert evidence['quality']['quality_counts']['synthetic_rejection'] == 2
