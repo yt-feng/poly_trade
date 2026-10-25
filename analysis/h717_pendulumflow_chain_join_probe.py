@@ -17,6 +17,8 @@ import re
 import sys
 import tempfile
 from typing import Any, Iterable
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from polygon_orderfilled_probe import (  # noqa: E402
@@ -26,16 +28,15 @@ from polygon_orderfilled_probe import (  # noqa: E402
     V1_ORDER_FILLED_TOPIC,
     V2_ORDER_FILLED_TOPIC,
     _hex_int,
-    _rpc,
     decode_v1_log,
     decode_v2_log,
-    probe as orderfilled_probe,
 )
 
 
 MAX_BYTES = 256 * 1024 * 1024
 MAX_IDENTIFIERS = 250_000
-MAX_RECEIPTS = 200
+MAX_RECEIPTS = 32
+FAST_RPC_TIMEOUT = 8
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 TX_HASH = re.compile(r"^0x[0-9a-fA-F]{64}$")
 HEX_WORD = re.compile(r"^0x[0-9a-fA-F]{64}$")
@@ -206,8 +207,27 @@ def _collect_identity(path: Path) -> dict[str, Any]:
     return {"report": report, "tx_hashes": tx_hashes, "owners": owners, "token_ids": token_ids, "market_ids": market_ids}
 
 
+def _rpc_fast(url: str, method: str, params: list[Any], request_id: int) -> Any:
+    """Bound each public-RPC call so a provider cannot consume the whole job."""
+    body = json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}).encode()
+    request = Request(
+        url,
+        data=body,
+        headers={"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "poly-trade-h717-chain-join/2"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=FAST_RPC_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("polygon_rpc_fast_call_failed") from exc
+    if not isinstance(payload, dict) or payload.get("error") is not None:
+        raise RuntimeError("polygon_rpc_fast_error")
+    return payload.get("result")
+
+
 def _block_timestamp(rpc_url: str, block_number: int) -> int:
-    result = _rpc(rpc_url, "eth_getBlockByNumber", [hex(block_number), False], block_number)
+    result = _rpc_fast(rpc_url, "eth_getBlockByNumber", [hex(block_number), False], block_number)
     if not isinstance(result, dict):
         raise RuntimeError("block_header_missing")
     return _hex_int(result.get("timestamp"), "block_timestamp")
@@ -222,6 +242,61 @@ def _first_block_at_or_after(rpc_url: str, target: int, latest: int) -> int:
         else:
             high = middle
     return low
+
+
+def _fast_orderfilled_logs(
+    rpc_url: str,
+    *,
+    from_block: int,
+    to_block: int,
+    addresses: Iterable[str],
+    chunk_blocks: int = 1000,
+    max_logs: int = 20_000,
+) -> dict[str, Any]:
+    """Read a bounded finalized window with larger chunks and short RPC timeouts."""
+    logs: dict[str, dict[str, Any]] = {}
+    chunks = 0
+    for address in sorted({str(value).lower() for value in addresses if str(value)}):
+        start = from_block
+        while start <= to_block:
+            end = min(start + chunk_blocks - 1, to_block)
+            result = _rpc_fast(
+                rpc_url,
+                "eth_getLogs",
+                [{
+                    "address": address,
+                    "topics": [list(ORDER_FILLED_TOPICS)],
+                    "fromBlock": hex(start),
+                    "toBlock": hex(end),
+                }],
+                chunks + 1,
+            )
+            chunks += 1
+            if not isinstance(result, list):
+                raise RuntimeError("eth_getLogs_result_invalid")
+            for log in result:
+                topics = log.get("topics") if isinstance(log, dict) else None
+                topic = str(topics[0]).lower() if isinstance(topics, list) and topics else ""
+                if topic == V1_ORDER_FILLED_TOPIC:
+                    decoded = decode_v1_log(log)
+                elif topic == V2_ORDER_FILLED_TOPIC:
+                    decoded = decode_v2_log(log, topic=V2_ORDER_FILLED_TOPIC)
+                else:
+                    raise RuntimeError("unsupported_orderfilled_topic")
+                logs[decoded["event_id"]] = decoded
+                if len(logs) > max_logs:
+                    raise RuntimeError("max_logs_exceeded")
+            start = end + 1
+    by_block: dict[int, int] = {}
+    for item in logs.values():
+        by_block.setdefault(int(item["block_number"]), 0)
+    for block_number in sorted(by_block):
+        by_block[block_number] = _block_timestamp(rpc_url, block_number)
+    for item in logs.values():
+        timestamp = by_block[int(item["block_number"])]
+        item["block_timestamp"] = timestamp
+        item["timestamp_ms"] = timestamp * 1000
+    return {"records": [logs[key] for key in sorted(logs)], "rpc_log_chunk_count": chunks}
 
 
 def _topic_owner_match(topics: Any, owners: set[str]) -> bool:
@@ -239,7 +314,7 @@ def _receipt_evidence(rpc_url: str, tx_hashes: list[str], owners: set[str]) -> d
     owner_evidence_receipts = 0
     for tx_hash in tx_hashes[:MAX_RECEIPTS]:
         queried += 1
-        receipt = _rpc(rpc_url, "eth_getTransactionReceipt", [tx_hash], queried)
+        receipt = _rpc_fast(rpc_url, "eth_getTransactionReceipt", [tx_hash], queried)
         if not isinstance(receipt, dict):
             continue
         present += 1
@@ -316,19 +391,19 @@ def probe(base: str, hour: str, *, rpc_url: str = POLYGON_RPC_URL, max_bytes: in
             if not identity["tx_hashes"]:
                 report["decision"] = "no_transaction_identity_in_hour_no_chain_join"
                 return report
-            latest = _hex_int(_rpc(rpc_url, "eth_blockNumber", [], 1), "latest_block")
+            latest = _hex_int(_rpc_fast(rpc_url, "eth_blockNumber", [], 1), "latest_block")
             start_ts = int(datetime.fromisoformat(hour.replace("/", "T") + ":00:00+00:00").timestamp())
             end_ts = start_ts + 3600
             from_block = _first_block_at_or_after(rpc_url, start_ts, latest)
             end_boundary = _first_block_at_or_after(rpc_url, end_ts, latest)
             to_block = max(from_block, end_boundary - 1)
             report.update({"from_block": from_block, "to_block": to_block, "latest_block": latest})
-            logs = orderfilled_probe(
-                rpc_url=rpc_url,
+            logs = _fast_orderfilled_logs(
+                rpc_url,
                 from_block=from_block,
                 to_block=to_block,
-                chunk_blocks=200,
-                max_logs=100_000,
+                chunk_blocks=1000,
+                max_logs=20_000,
                 addresses=DEFAULT_EXCHANGE_ADDRESSES,
             )
             records = logs.get("records") or []
