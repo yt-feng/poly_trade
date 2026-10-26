@@ -23,6 +23,23 @@ RECIPIENT = ROOT / 'research_vault' / 'recipient.json'
 RECIPIENT_ID = '5d68eb70893219fd4281958caf0072d145babc30123714f070a3ba058956e7a9'
 CELL_ID = 'quantml-extract-0172-preflight'
 
+
+def bounded_choice(name: str, default: int, allowed: set[int]) -> int:
+    """Accept only workflow-supported batch sizes and fail closed otherwise."""
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f'invalid_{name.lower()}') from exc
+    if value not in allowed:
+        raise SystemExit(f'unsupported_{name.lower()}')
+    return value
+
+
+MAX_METADATA = bounded_choice('EXTRACT_MAX_METADATA', 4, {2, 4, 8, 16, 32, 64})
+MAX_FILES = bounded_choice('EXTRACT_MAX_FILES', 4, {1, 2, 4, 8, 16, 32})
+MAX_UNITS = bounded_choice('EXTRACT_MAX_UNITS', 40, {10, 20, 40, 80, 120, 200})
+
 sys.path.insert(0, str(ROOT / 'tools'))
 import research_vault as vault  # noqa: E402
 
@@ -73,9 +90,9 @@ def main() -> None:
         },
         'parameters': {
             'pdf_ocr': True,
-            'max_metadata': 4,
-            'max_files': 4,
-            'max_units': 40,
+            'max_metadata': MAX_METADATA,
+            'max_files': MAX_FILES,
+            'max_units': MAX_UNITS,
             'recovery_source_ids': [],
             'no_strategy_evaluation': True,
             'no_model_refit': True,
