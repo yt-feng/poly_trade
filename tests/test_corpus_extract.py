@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import pathlib
 from pathlib import Path
 import re
 import stat
@@ -468,13 +469,17 @@ class ReadbackTests(unittest.TestCase):
             path.mkdir(mode=0o700)
         (self.root / 'bin' / ('corpus_worker-' + self.worker_hash + '.py')).write_bytes(self.worker_raw)
         (self.output / 'coverage.json').write_text('{"source_count_including_discovered_children":2}')
-        names = {'raw_json', 'safe_directory', 'regular', 'read_small', 'worker_lock_busy',
-                 'source_receipts', 'source_availability_snapshot', 'attach_output_snapshot', 'readback_existing_output', 'process', 'process_locked'}
+        names = {'raw_json', 'delivery_report_size', 'safe_directory', 'regular', 'read_small', 'worker_lock_busy',
+                 'source_receipts', 'inventory_export_rows', 'compact_source_inventory',
+                 'source_availability_snapshot', 'attach_output_snapshot', 'readback_existing_output', 'process', 'process_locked'}
         nodes = [node for node in ast.parse(extract.REMOTE_EXTRACT).body
                  if isinstance(node, ast.FunctionDef) and node.name in names]
-        self.ns = {'json': json, 'hashlib': hashlib, 'os': os, 'stat': stat, 're': re, 'fcntl': fcntl,
+        self.ns = {'json': json, 'hashlib': hashlib, 'os': os, 'stat': stat, 're': re, 'fcntl': fcntl, 'pathlib': pathlib,
                    'base64': base64, 'ROOT': self.root, 'SOURCE_RECEIPT_ROWS': 128,
                    'SOURCE_RECEIPT_BYTES': 256*1024, 'REPORT_LIMIT': 2*1024*1024,
+                   'SOURCE_INVENTORY_ROWS': 4096, 'SOURCE_INVENTORY_BYTES': 1024*1024,
+                   'SOURCE_INVENTORY_INPUT_BYTES': 8*1024*1024,
+                   'UNIT_INVENTORY_INPUT_BYTES': 16*1024*1024, 'UNIT_INVENTORY_ROWS': 200000,
                    'payload': {'mode': 'readback', 'run_id': '123-1', 'worker_base64': base64.b64encode(self.worker_raw).decode()},
                    'report': {}, 'apply_delivery_ack': Mock(return_value={'status': 'not_supplied'}),
                    'build_unit_delivery': Mock(),
@@ -500,12 +505,108 @@ class ReadbackTests(unittest.TestCase):
         self.assertEqual(report['source_receipts'][0]['total_units'], 2)
         self.assertEqual(report['source_receipts'][0]['sha256'], 'a'*64)
         self.assertFalse(report['source_receipts'][0]['semantic_learning_complete'])
+        self.assertEqual(len(report['source_inventory']), 2)
+        self.assertTrue(report['source_inventory_bounds']['complete_for_source_export'])
+        self.assertFalse(report['source_inventory_bounds']['unit_counts_complete_for_export'])
         self.ns['apply_delivery_ack'].assert_called_once_with(self.root, None)
         self.ns['build_unit_delivery'].assert_called_once_with(self.output, self.worker_hash, '123-1', report)
         self.ns['subprocess'].run.assert_not_called()
         self.ns['prepare_tessdata'].assert_not_called()
         self.ns['memory_available'].assert_not_called()
         self.assertFalse((self.root / 'metadata-extract-cursor.json').exists())
+
+    def test_inventory_covers_nonprefix_sources_and_preserves_hash_and_parent(self):
+        self.write_sources(306)
+        manifest = self.output / 'manifest-state.jsonl'
+        rows = [json.loads(line) for line in manifest.read_text().splitlines()]
+        late_id = rows[-1]['source_id']
+        rows[-1].update(relative_path='nested/manual.pdf', parent_id='e'*64, expected_bytes=123,
+                        status='partial_pending_page_capability', content_hash='b'*64,
+                        total_units=3, cursor=3, notes={'pages_with_extraction_gap': 2})
+        rows[-2].update(relative_path='pack.zip', content_hash=None, expected_hash='f'*64)
+        rows[-3].update(relative_path='lesson.mp4')
+        manifest.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        units = [{'source_id': late_id, 'unit_index': i, 'artifact': 'never-open-this.bin',
+                  'content_hash': 'c'*64, 'status': status}
+                 for i, status in enumerate(('extracted', 'pending_visual_resolution'))]
+        units.append({'source_id': late_id, 'unit_index': 2, 'status': 'pending_ocr'})
+        (self.output / 'unit-state.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in units))
+        self.ns['process']()
+        report = self.ns['report']
+        self.assertEqual(len(report['source_receipts']), 128)  # Compatibility, still bounded.
+        self.assertEqual(len(report['source_inventory']), 306)
+        last = report['source_inventory'][-1]
+        self.assertEqual((last['source_id'], last['parent_id'], last['kind']), (late_id, 'e'*64, 'pdf'))
+        self.assertEqual((last['expected_bytes'], last['content_hash']), (123, 'b'*64))
+        self.assertEqual((last['total_pages'], last['pages_with_extraction_gap']), (3, 2))
+        self.assertEqual((last['exported_unit_count'], last['available_unit_count'],
+                          last['fully_extracted_unit_count']), (3, 2, 1))
+        self.assertIsNone(report['source_inventory'][-2]['content_hash'])
+        self.assertEqual(report['source_inventory'][-2]['expected_hash'], 'f'*64)
+        self.assertEqual([item['kind'] for item in report['source_inventory'][-3:]], ['video', 'archive', 'pdf'])
+        bounds = report['source_inventory_bounds']
+        self.assertFalse(bounds['truncated'])
+        self.assertTrue(bounds['unit_counts_complete_for_export'])
+        self.assertEqual(bounds['semantic_learning_credit'], 0)
+
+    def test_inventory_returns_explicit_output_and_input_bounds(self):
+        self.write_sources(10)
+        self.ns['SOURCE_INVENTORY_BYTES'] = 1000
+        report = {}
+        self.ns['compact_source_inventory'](self.output, report)
+        bounds = report['source_inventory_bounds']
+        self.assertTrue(bounds['truncated'])
+        self.assertTrue(bounds['output_truncated'])
+        self.assertFalse(bounds['complete_for_source_export'])
+        self.assertGreater(len(report['source_inventory']), 0)
+        self.assertLess(len(report['source_inventory']), 10)
+        self.assertEqual(bounds['serialized_bytes'], self.ns['delivery_report_size'](report['source_inventory']))
+        self.assertLessEqual(bounds['serialized_bytes'], 1000)
+        self.ns['SOURCE_INVENTORY_INPUT_BYTES'] = 500
+        self.ns['compact_source_inventory'](self.output, report)
+        bounds = report['source_inventory_bounds']
+        self.assertTrue(bounds['source_export']['truncated'])
+        self.assertLessEqual(bounds['source_export']['input_bytes_read'], 500)
+        self.assertFalse(bounds['complete_for_source_export'])
+
+    def test_inventory_row_and_unit_bounds_cannot_claim_exact_counts(self):
+        self.write_sources(3)
+        units = [{'source_id': '0'*64, 'unit_index': i, 'artifact': 'unread',
+                  'content_hash': 'c'*64, 'status': 'extracted'} for i in range(3)]
+        (self.output / 'unit-state.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in units))
+        self.ns.update(SOURCE_INVENTORY_ROWS=2, UNIT_INVENTORY_ROWS=1)
+        report = {}
+        self.ns['compact_source_inventory'](self.output, report)
+        self.assertEqual(len(report['source_inventory']), 2)
+        self.assertEqual(report['source_inventory'][0]['available_unit_count'], 1)
+        bounds = report['source_inventory_bounds']
+        self.assertTrue(bounds['source_export']['truncated'])
+        self.assertTrue(bounds['unit_export']['truncated'])
+        self.assertFalse(bounds['unit_counts_complete_for_export'])
+        self.assertFalse(bounds['complete_for_source_export'])
+
+    def test_inventory_opens_only_metadata_exports_and_never_hashes_sources(self):
+        self.write_sources(1)
+        (self.output / 'unit-state.jsonl').write_text(json.dumps({
+            'source_id': '0'*64, 'artifact': '/forbidden/corpus/or/derived-artifact',
+            'content_hash': 'c'*64, 'status': 'extracted'}) + '\n')
+        allowed = {self.output / name for name in ('manifest-state.jsonl', 'unit-state.jsonl')}
+        original_open, opened = os.open, []
+        def metadata_only(path, flags, *args):
+            self.assertIn(Path(path), allowed)
+            self.assertEqual(flags, os.O_RDONLY | os.O_NOFOLLOW)
+            opened.append(Path(path))
+            return original_open(path, flags, *args)
+        self.ns['hashlib'] = SimpleNamespace(sha256=Mock(side_effect=AssertionError('no source hashing')))
+        with patch.object(os, 'open', side_effect=metadata_only), \
+                patch('builtins.open', side_effect=AssertionError('no alternate file reads')), \
+                patch.object(Path, 'open', side_effect=AssertionError('no alternate path reads')):
+            report = {}
+            self.ns['compact_source_inventory'](self.output, report)
+        self.assertEqual(set(opened), allowed)
+        self.ns['hashlib'].sha256.assert_not_called()
+        self.assertFalse(report['source_inventory_bounds']['source_content_read'])
+        self.assertFalse(report['source_inventory_bounds']['source_hashes_recomputed'])
 
     def test_source_receipts_limit_rows_and_record_truncation(self):
         self.write_sources(129)
@@ -615,6 +716,9 @@ class DirectJsonDeliveryTests(unittest.TestCase):
     def test_direct_json_matches_archive_report_without_unpacking(self):
         record = {'status': 'remote_result_received', 'extraction': {
             'status': 'readback_observed', 'private_note': 'synthetic private evidence',
+            'source_inventory': [{'source_id': 'd'*64, 'content_hash': 'e'*64,
+                                  'kind': 'synthetic-private-inventory-marker'}],
+            'source_inventory_bounds': {'semantic_learning_credit': 0},
             'semantic_learning_complete': False, 'coverage': {}}}
         code, stdout, remote = self.run_main(record)
         self.assertEqual(code, 0)
@@ -628,6 +732,8 @@ class DirectJsonDeliveryTests(unittest.TestCase):
         self.assertEqual(status['cursor_code'], 'readback_no_advance')
         self.assertFalse(status['strategy_evaluated'])
         self.assertNotIn('synthetic private evidence', stdout + json.dumps(status))
+        self.assertNotIn('synthetic-private-inventory-marker', stdout + json.dumps(status))
+        self.assertNotIn('source_inventory', stdout + json.dumps(status))
         self.assertEqual({path.name for path in self.direct.iterdir()},
                          {'part-0000.vault', 'status.json'})
 

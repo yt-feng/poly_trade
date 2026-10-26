@@ -25,6 +25,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_public_observation_contract.py' -v
           python -m unittest discover -s tests -p 'test_persist_quality_first_journal.py' -v
           python -m unittest discover -s tests -p 'test_quality_first_publisher.py' -v
+          python -m unittest discover -s tests -p 'test_corpus_extract.py' -v
           python -m py_compile tools/research_vault.py tools/research_journal_guard.py tools/public_observation_contract.py
       - name: Synthetic decision-deadline and H373 output regressions
         run: |

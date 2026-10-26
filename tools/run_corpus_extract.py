@@ -110,6 +110,11 @@ WORKER_MAX_SECONDS = 480
 WORKER_PROCESS_TIMEOUT_SECONDS = WORKER_MAX_SECONDS + 15
 SOURCE_RECEIPT_ROWS = 128
 SOURCE_RECEIPT_BYTES = 256 * 1024
+SOURCE_INVENTORY_ROWS = 4096
+SOURCE_INVENTORY_BYTES = 1024 * 1024
+SOURCE_INVENTORY_INPUT_BYTES = 8 * 1024 * 1024
+UNIT_INVENTORY_INPUT_BYTES = 16 * 1024 * 1024
+UNIT_INVENTORY_ROWS = 200000
 ACK_STATE_LIMIT = 32 * 1024 * 1024
 TESSDATA_REVISION = '87416418657359cb625c412a48b6e1d6d41c29bd'
 MAX_TESSDATA_BYTES = 32 * 1024 * 1024
@@ -650,6 +655,92 @@ def source_receipts(output, report):
     summary.update(receipts_returned=len(receipts), serialized_receipt_bytes=len(raw_json(receipts)))
     report.update(source_receipts=receipts, source_receipts_bounds=summary)
 
+def inventory_export_rows(path, max_bytes, max_rows, bounds):
+    """Read only a bounded existing metadata export, never its artifact paths."""
+    bounds.update(available=path.exists(), max_input_bytes=max_bytes, max_rows=max_rows,
+                  input_bytes_read=0, rows_read=0, truncated=False, complete=False)
+    if not bounds['available']:
+        return
+    info = regular(path)
+    bounds['snapshot_bytes'] = info.st_size
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as source:
+        while bounds['input_bytes_read'] < info.st_size:
+            remaining = max_bytes - bounds['input_bytes_read']
+            if remaining <= 0 or bounds['rows_read'] >= max_rows:
+                bounds.update(truncated=True, truncation_reason='input_byte_or_row_bound')
+                break
+            raw = source.readline(min(65536, remaining))
+            bounds['input_bytes_read'] += len(raw)
+            if not raw or (not raw.endswith(b'\n') and bounds['input_bytes_read'] < info.st_size):
+                bounds.update(truncated=True, truncation_reason='line_or_input_byte_bound')
+                break
+            row = json.loads(raw)
+            if not isinstance(row, dict):
+                raise ValueError('inventory_export_row_not_object')
+            bounds['rows_read'] += 1
+            yield row
+    after = regular(path)
+    if (info.st_ino, info.st_size, info.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+        bounds.update(truncated=True, truncation_reason='export_changed_during_read')
+    bounds['complete'] = not bounds['truncated'] and bounds['input_bytes_read'] == info.st_size
+
+def compact_source_inventory(output, report):
+    """Queue visibility only: persisted metadata is neither delivery nor learning."""
+    source_bounds, unit_bounds, items = {}, {}, {}
+    fields = ('source_id', 'parent_id', 'archive_depth', 'duplicate_of', 'status',
+              'expected_bytes', 'expected_hash', 'content_hash', 'unit_kind', 'cursor',
+              'total_units', 'updated_utc')
+    for row in inventory_export_rows(output / 'manifest-state.jsonl', SOURCE_INVENTORY_INPUT_BYTES,
+                                     SOURCE_INVENTORY_ROWS, source_bounds):
+        sid = row.get('source_id')
+        if not isinstance(sid, str) or not re.fullmatch('[0-9a-f]{64}', sid) or sid in items:
+            raise ValueError('inventory_source_identity')
+        item = {field: row.get(field) for field in fields}
+        # Pure suffix classification performs no source-file stat/read/hash.
+        suffix = pathlib.PurePosixPath(row.get('relative_path') or '').suffix.lower()
+        item['extension'] = suffix
+        item['kind'] = ('pdf' if suffix == '.pdf' else
+                        'archive' if suffix in ('.zip', '.tar', '.gz', '.bz2', '.xz', '.7z', '.rar') else
+                        'video' if suffix in ('.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v') else
+                        row.get('unit_kind') or 'unclassified')
+        item['total_pages'] = row.get('total_units') if row.get('unit_kind') == 'pages' else None
+        notes = row.get('notes') or {}
+        item['pages_with_extraction_gap'] = notes.get('pages_with_extraction_gap') if isinstance(notes, dict) else None
+        item.update(exported_unit_count=0, available_unit_count=0, fully_extracted_unit_count=0)
+        items[sid] = item
+    for unit in inventory_export_rows(output / 'unit-state.jsonl', UNIT_INVENTORY_INPUT_BYTES,
+                                      UNIT_INVENTORY_ROWS, unit_bounds):
+        item = items.get(unit.get('source_id'))
+        if item is None:
+            continue
+        item['exported_unit_count'] += 1
+        if unit.get('artifact') and unit.get('content_hash'):
+            item['available_unit_count'] += 1
+            if unit.get('status') == 'extracted':
+                item['fully_extracted_unit_count'] += 1
+    inventory, serialized_bytes = [], 2
+    for item in items.values():
+        added = delivery_report_size(item) + bool(inventory)
+        if serialized_bytes + added > SOURCE_INVENTORY_BYTES:
+            break
+        inventory.append(item)
+        serialized_bytes += added
+    output_truncated = len(inventory) != len(items)
+    report.update(source_inventory=inventory, source_inventory_bounds={
+        'version': 1, 'scope': 'existing_worker_queue_exports_only_not_full_corpus',
+        'max_rows': SOURCE_INVENTORY_ROWS, 'max_serialized_bytes': SOURCE_INVENTORY_BYTES,
+        'rows_returned': len(inventory), 'serialized_bytes': serialized_bytes,
+        'source_export': source_bounds, 'unit_export': unit_bounds,
+        'truncated': source_bounds.get('truncated', False) or unit_bounds.get('truncated', False) or output_truncated,
+        'output_truncated': output_truncated,
+        'complete_for_source_export': source_bounds.get('complete', False) and not output_truncated,
+        'unit_counts_complete_for_export': unit_bounds.get('complete', False),
+        'unit_count_semantics': 'export_records_with_artifact_and_hash; lower_bounds_unless_unit_export_complete; artifacts_not_reverified',
+        'content_hash_provenance': 'persisted_worker_content_hash_only_no_expected_hash_fallback',
+        'expected_hash_provenance': 'source_metadata_claim_not_reverified',
+        'source_content_read': False, 'source_hashes_recomputed': False,
+        'semantic_learning_credit': 0, 'visual_review_credit': 0, 'full_corpus_complete': False})
+
 def source_availability_snapshot(root, report):
     """Inspect small upload metadata and object stat only; never hash corpus bytes."""
     cursor = root / 'metadata-extract-cursor.json'
@@ -747,6 +838,7 @@ def attach_output_snapshot(output, worker_hash, source_run, report):
     if (output / 'coverage.json').exists():
         report['coverage'] = json.loads(read_small(output / 'coverage.json', 65536))
     source_receipts(output, report)
+    compact_source_inventory(output, report)
     if payload['mode'] == 'readback':
         source_availability_snapshot(ROOT, report)
     build_unit_delivery(output, worker_hash, source_run, report)
