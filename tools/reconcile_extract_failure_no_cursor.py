@@ -47,9 +47,46 @@ def write(path: Path, value: dict) -> None:
     os.replace(tmp, path)
 
 
+def update_checkpoints(action: str, now: str) -> None:
+    """Idempotently settle every QuantML control-plane checkpoint."""
+    paths = [BASE / 'active-episode.json', BASE / 'cycle-progress.json',
+             BASE / 'quantml-learning-progress.json', BASE / 'quantml-learning-state.json',
+             STUDY / 'manifest-summary.json', STUDY / 'runtime-state.json',
+             STUDY / 'progress.json']
+    for path in paths:
+        if not path.is_file():
+            continue
+        state = load(path)
+        state.update({
+            'status': f'extract_{BATCH}_readback_verified_failure_no_cursor',
+            'state': 'cloud_worker_failure_repeated_snapshot_no_cursor',
+            'active_remote_task': None, 'active_run': None,
+            'current_inflight_run': None, 'current_inflight_runs': [],
+            'current_cloud_run_status': 'completed_failure_no_cursor',
+            'quantml_inflight_extract_run': None,
+            'quantml_inflight_extract_batch': None,
+            'quantml_inflight_extract_status': f'completed_failure_no_cursor_{BATCH}',
+            'latest_quantml_extract_run': RUN_ID,
+            'latest_quantml_extract_status': 'completed_failure_no_cursor',
+            'latest_quantml_extract_readback': str(READBACK),
+            'latest_quantml_extract_failure': str(OUT),
+            'authoritative_cursor_run': PRIOR_RUN,
+            'authoritative_cursor_status': 'committed_before_failed_extract',
+            'latest_quantml_extract_cursor_committed': False,
+            'remote_failure_class': 'cloud_worker_timeout_or_non_successful_acquisition',
+            'cursor_advance_credited': False,
+            'semantic_credit': 0, 'quantml_semantic_read_count': 0,
+            'semantic_learning_complete': False, 'full_corpus_complete': False,
+            'actual_fills': 0, 'verified_canary_fills': 0,
+            'live_orders_enabled': False, 'buying_paused': True,
+            'next_action': action, 'next_step': action,
+            'quantml_next_action': action, 'checkpoint_updated_utc': now,
+            'updated_utc': now, 'updated_at_utc': now,
+        })
+        write(path, state)
+
+
 def main() -> None:
-    if OUT.exists() or DELIVERY.exists() or RECEIPT.exists():
-        raise SystemExit('failure_reconciliation_already_exists')
     readback = load(READBACK)
     if readback.get('workflow_run_id') != RUN_ID:
         raise RuntimeError('run_identity_mismatch')
@@ -66,6 +103,15 @@ def main() -> None:
         'do not count the repeated snapshot, and choose a future distinct tranche only after deduplication review. '
         'Semantic credit remains 0 and buying stays paused.'
     )
+    if OUT.exists() or DELIVERY.exists() or RECEIPT.exists():
+        if not (OUT.exists() and DELIVERY.exists() and RECEIPT.exists()):
+            raise SystemExit('failure_reconciliation_partial_artifacts')
+        update_checkpoints(action, now)
+        print(json.dumps({'status': 'verified_remote', 'batch': BATCH,
+                          'run_id': RUN_ID, 'authoritative_cursor_run': PRIOR_RUN,
+                          'cursor_advanced': False, 'idempotent_state_repair': True},
+                         ensure_ascii=False))
+        return
     summary = {
         'format': f'quantml-extract-{BATCH}-failure-no-cursor-v1',
         'created_utc': now,
@@ -122,38 +168,7 @@ def main() -> None:
         'plaintext_published': False,
         'publication': publication,
     })
-    paths = [BASE / 'active-episode.json', BASE / 'cycle-progress.json',
-             BASE / 'quantml-learning-progress.json', STUDY / 'manifest-summary.json',
-             STUDY / 'runtime-state.json', STUDY / 'progress.json']
-    for path in paths:
-        if not path.is_file():
-            continue
-        state = load(path)
-        state.update({
-            'status': f'extract_{BATCH}_readback_verified_failure_no_cursor',
-            'state': 'cloud_worker_failure_repeated_snapshot_no_cursor',
-            'active_remote_task': None, 'active_run': None,
-            'current_inflight_run': None, 'current_inflight_runs': [],
-            'current_cloud_run_status': 'completed_failure_no_cursor',
-            'quantml_inflight_extract_run': None,
-            'quantml_inflight_extract_batch': None,
-            'quantml_inflight_extract_status': f'completed_failure_no_cursor_{BATCH}',
-            'latest_quantml_extract_run': RUN_ID,
-            'latest_quantml_extract_status': 'completed_failure_no_cursor',
-            'latest_quantml_extract_readback': str(READBACK),
-            'latest_quantml_extract_failure': str(OUT),
-            'authoritative_cursor_run': PRIOR_RUN,
-            'authoritative_cursor_status': 'committed_before_failed_extract',
-            'latest_quantml_extract_cursor_committed': False,
-            'semantic_credit': 0, 'quantml_semantic_read_count': 0,
-            'semantic_learning_complete': False, 'full_corpus_complete': False,
-            'actual_fills': 0, 'verified_canary_fills': 0,
-            'live_orders_enabled': False, 'buying_paused': True,
-            'next_action': action, 'next_step': action,
-            'quantml_next_action': action, 'checkpoint_updated_utc': now,
-            'updated_utc': now, 'updated_at_utc': now,
-        })
-        write(path, state)
+    update_checkpoints(action, now)
     for path in [BASE / 'QuantML-学习进度.md', STUDY / 'QuantML-学习进度.md']:
         if not path.is_file():
             continue
