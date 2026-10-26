@@ -77,7 +77,7 @@ def main() -> None:
             'mode': 'extract',
             'parameters': preflight.get('parameters'),
             'preflight': str(PREFLIGHT),
-            'preflight_publication': str(STUDY / 'extract-0172-preflight-publication.json'),
+            'preflight_publication': str(STUDY / f'extract-{N}-preflight-publication-20261026.json'),
             'duplicate_dispatch': False,
             'targeted_recovery': False,
             'prior_committed_cursor_run': PRIOR_RUN,
@@ -185,8 +185,9 @@ def main() -> None:
             text = path.read_text(encoding='utf-8')
             marker = f'## EXTRACT-{N} 云端普通续批登记（2026-10-26）'
             if marker not in text:
+                params = dispatch.get('parameters') or {}
                 path.write_text(text + f'\n\n{marker}\n\n'
-                    f'- 在前一 authoritative run `{PRIOR_RUN}` 已提交游标、此前定向恢复已归因且无游标推进后，只登记一次普通新游标 run `{RUN_ID}`（4 metadata / 4 files / 40 units）。\n'
+                    f'- 在前一 authoritative run `{PRIOR_RUN}` 已提交游标、此前定向恢复已归因且无游标推进后，只登记一次普通新游标 run `{RUN_ID}`（{params.get("max_metadata")} metadata / {params.get("max_files")} files / {params.get("max_units")} units）。\n'
                     f'- 不带定向 source id，不重复此前恢复；该批只推进 QuantML 覆盖，不训练、不评估 BTC 策略、不计 semantic credit 或 Canary。\n'
                     '- 预检、派发和状态登记均通过密文流程核验；终态回读前不重复派发，实盘买入继续暂停。\n', encoding='utf-8')
     print(json.dumps({'status': 'registered', 'batch': N, 'run_id': RUN_ID, 'run_status': run.get('status'), 'dispatch': str(DISPATCH)}, ensure_ascii=False))
