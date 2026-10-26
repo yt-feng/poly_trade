@@ -99,6 +99,7 @@ def main() -> None:
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
     paths = [
         BASE / 'active-episode.json', BASE / 'cycle-progress.json', BASE / 'quantml-learning-progress.json',
+        BASE / 'quantml-learning-state.json',
         STUDY / 'manifest-summary.json', STUDY / 'runtime-state.json', STUDY / 'progress.json',
     ]
     for path in paths:
@@ -117,6 +118,7 @@ def main() -> None:
             'latest_quantml_preflight': str(PREFLIGHT),
             'latest_quantml_extract_run': RUN_ID,
             'latest_quantml_extract_status': 'in_progress',
+            'authoritative_cursor_run': PRIOR_RUN,
             'next_action': action,
             'next_step': action,
             'quantml_next_action': action,
