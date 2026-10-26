@@ -236,6 +236,11 @@ class Worker:
         self.started = time.monotonic()
         self.units_written = 0
         self.bytes_written = 0
+        # Sources in the current controller manifest must be processed before
+        # the durable backlog.  Otherwise a rotating metadata tranche can be
+        # registered successfully while the worker spends its file budget on
+        # older retryable rows from the same SQLite queue.
+        self.priority_sources = set()
         self.db = sqlite3.connect(self.out / 'state.sqlite3')
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.executescript('''
@@ -339,6 +344,9 @@ class Worker:
     def next_source(self, visited):
         rows = self.db.execute("SELECT * FROM sources WHERE status IN ('inventoried','transferred','extracting','pending_transfer','partial_pending_page_capability','pending_pdf_dependency','pending_memory_capacity') ORDER BY archive_depth,source_id").fetchall()
         rows = [row for row in rows if row['source_id'] not in visited and self.source_retryable(row)]
+        priority = [row for row in rows if row['source_id'] in self.priority_sources]
+        if priority:
+            return priority[0]
         previous = self.db.execute("SELECT value FROM scheduler_state WHERE key='last_source'").fetchone()
         last = tuple(json.loads(previous[0])) if previous else (-1, '')
         following = [row for row in rows if (row['archive_depth'], row['source_id']) > last]
@@ -373,6 +381,8 @@ class Worker:
         self.db.execute('INSERT OR IGNORE INTO sources (source_id,relative_path,source_root,expected_bytes,expected_hash,parent_id,archive_depth,status,updated_utc) VALUES (?,?,?,?,?,?,?,?,?)',
                         (sid, rel, target_root, expected, expected_hash, parent, depth, 'inventoried', now()))
         self.db.commit()
+        if parent in self.priority_sources:
+            self.priority_sources.add(sid)
         return sid
 
     def state(self, sid, **fields):
@@ -783,11 +793,11 @@ class Worker:
                 data = json.load(source)
                 entries = data if isinstance(data, list) else data.get('files', data.get('entries', []))
                 for entry in entries:
-                    self.register(entry)
+                    self.priority_sources.add(self.register(entry))
             else:
                 for line in source:
                     if line.strip():
-                        self.register(json.loads(line))
+                        self.priority_sources.add(self.register(json.loads(line)))
         reason, visited, processed = 'queue_pass_complete', set(), 0
         try:
             while processed < self.args.max_files:

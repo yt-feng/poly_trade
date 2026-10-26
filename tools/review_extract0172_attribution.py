@@ -7,6 +7,7 @@ import datetime as dt
 import getpass
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,15 +15,16 @@ from pathlib import Path
 ROOT = Path('/Users/ytfeng/Code_Pj/poly_trade/research-repair-20261015')
 BASE = Path('/Users/ytfeng/Code_Pj/poly_trade/output/continuous-research-20261016')
 STUDY = BASE / 'quantml-full-study'
-PART = STUDY / 'artifact-extract-0172-v1/corpus-direct-readback-40304795524-1/part-0000.vault'
-OUT = STUDY / 'extract-0172-attribution-review-20261026.json'
-DELIVERY = STUDY / 'extract-0172-attribution-review-delivery'
-RECEIPT = STUDY / 'extract-0172-attribution-review-publication.json'
+N = os.environ.get('EXTRACT_BATCH', '0172')
+RUN_ID = os.environ.get('EXTRACT_RUN_ID', '40304795524')
+PART = Path(os.environ.get('EXTRACT_PART', str(STUDY / 'artifact-extract-0172-v1/corpus-direct-readback-40304795524-1/part-0000.vault')))
+OUT = STUDY / f'extract-{N}-attribution-review-20261026.json'
+DELIVERY = STUDY / f'extract-{N}-attribution-review-delivery'
+RECEIPT = STUDY / f'extract-{N}-attribution-review-publication.json'
 IDENTITY = Path('/Users/ytfeng/.codex/private/poly-quality-first-20261015')
 RECIPIENT = ROOT / 'research_vault' / 'recipient.json'
 RECIPIENT_ID = '5d68eb70893219fd4281958caf0072d145babc30123714f070a3ba058956e7a9'
-RUN_ID = '40304795524'
-CELL_ID = 'quantml-extract-0172-attribution-review'
+CELL_ID = f'quantml-extract-{N}-attribution-review'
 
 sys.path.insert(0, str(ROOT / 'tools'))
 import research_vault as vault  # noqa: E402
@@ -81,7 +83,7 @@ def main() -> None:
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
     source_counts = collections.Counter(str(row.get('source_id')) for row in rows)
     summary = {
-        'format': 'quantml-extract-0172-attribution-review-v1',
+        'format': f'quantml-extract-{N}-attribution-review-v1',
         'created_utc': now,
         'workflow_run_id': int(RUN_ID),
         'review_scope': 'transport attribution only; no native/OCR text retained and no semantic credit',
@@ -109,7 +111,7 @@ def main() -> None:
     vault.validate_recipient(recipient, RECIPIENT_ID)
     DELIVERY.mkdir(mode=0o700)
     vault.write_new(DELIVERY / 'part-0000.vault', vault.seal(vault.canonical({
-        'format': 'quantml-extract-0172-attribution-review-sealed-v1',
+        'format': f'quantml-extract-{N}-attribution-review-sealed-v1',
         'summary': summary,
         'plaintext_published': False,
         'actual_fills': 0,
@@ -131,7 +133,7 @@ def main() -> None:
         raise SystemExit(proc.stdout.strip() or 'attribution_publication_failed')
     publication = json.loads(proc.stdout)
     write_json(RECEIPT, {
-        'format': 'quantml-extract-0172-attribution-review-publication-v1',
+        'format': f'quantml-extract-{N}-attribution-review-publication-v1',
         'cell_id': CELL_ID,
         'source': str(OUT),
         'source_sha256': hashlib.sha256(OUT.read_bytes()).hexdigest(),

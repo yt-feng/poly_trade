@@ -65,6 +65,12 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.worker.next_source(set())['source_id'], '0')
         self.assertIsNone(self.worker.next_source({'0', 'a'}))
 
+    def test_current_manifest_sources_preempt_old_retryable_backlog(self):
+        self.add_source('old', 'extracting', 1)
+        self.add_source('current')
+        self.worker.priority_sources.add('current')
+        self.assertEqual(self.worker.next_source(set())['source_id'], 'current')
+
     def test_pending_ocr_requires_changed_capability_and_capacity_gap_stays_pending(self):
         self.add_source('a', 'partial_pending_page_capability', 2)
         self.insert_unit('a', 0, 'pending_ocr', {'ocr_status': 'pending_ocr_RuntimeError',
