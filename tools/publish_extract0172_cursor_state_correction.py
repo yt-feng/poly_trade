@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,13 +12,14 @@ from pathlib import Path
 ROOT = Path('/Users/ytfeng/Code_Pj/poly_trade/research-repair-20261015')
 BASE = Path('/Users/ytfeng/Code_Pj/poly_trade/output/continuous-research-20261016')
 STUDY = BASE / 'quantml-full-study'
-SOURCE = STUDY / 'extract-0172-cursor-state-correction-20261026.json'
-DELIVERY = STUDY / 'extract-0172-cursor-state-correction-delivery'
-RECEIPT = STUDY / 'extract-0172-cursor-state-correction-publication.json'
+N = os.environ.get('EXTRACT_BATCH', '0172')
+SOURCE = STUDY / f'extract-{N}-cursor-state-correction-20261026.json'
+RECEIPT = STUDY / f'extract-{N}-cursor-state-correction-v2-publication.json'
+DELIVERY = STUDY / f'extract-{N}-cursor-state-correction-v2-delivery'
 RECIPIENT = ROOT / 'research_vault' / 'recipient.json'
 RECIPIENT_ID = '5d68eb70893219fd4281958caf0072d145babc30123714f070a3ba058956e7a9'
 RUN_ID = '40304795524'
-CELL_ID = 'quantml-extract-0172-cursor-state-correction'
+CELL_ID = f'quantml-extract-{N}-cursor-state-correction-v2'
 
 sys.path.insert(0, str(ROOT / 'tools'))
 import research_vault as vault  # noqa: E402
@@ -46,7 +48,7 @@ def main() -> None:
     status = DELIVERY / 'status.json'
     if not part.exists():
         vault.write_new(part, vault.seal(vault.canonical({
-            'format': 'quantml-extract-0172-cursor-state-correction-sealed-v1',
+            'format': f'quantml-extract-{N}-cursor-state-correction-sealed-v1',
             'audit': audit,
             'plaintext_published': False,
             'actual_fills': 0,
@@ -69,7 +71,7 @@ def main() -> None:
         raise SystemExit(proc.stdout.strip() or 'publication_failed')
     publication = json.loads(proc.stdout)
     write_json(RECEIPT, {
-        'format': 'quantml-extract-0172-cursor-state-correction-publication-v1',
+        'format': f'quantml-extract-{N}-cursor-state-correction-publication-v1',
         'cell_id': CELL_ID,
         'source': str(SOURCE),
         'source_sha256': hashlib.sha256(SOURCE.read_bytes()).hexdigest(),

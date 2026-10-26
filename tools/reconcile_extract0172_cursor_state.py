@@ -10,10 +10,11 @@ from pathlib import Path
 ROOT = Path('/Users/ytfeng/Code_Pj/poly_trade')
 BASE = ROOT / 'output/continuous-research-20261016'
 STUDY = BASE / 'quantml-full-study'
-READBACK = STUDY / 'extract-0172-readback-20261026.json'
-AUDIT = STUDY / 'extract-0172-cursor-state-correction-20261026.json'
-RUN_ID = 40304795524
-PRIOR_CURSOR = 40302264902
+N = os.environ.get('EXTRACT_BATCH', '0172')
+READBACK = STUDY / f'extract-{N}-readback-20261026.json'
+AUDIT = STUDY / f'extract-{N}-cursor-state-correction-20261026.json'
+RUN_ID = int(os.environ.get('EXTRACT_RUN_ID', '40304795524'))
+PRIOR_CURSOR = int(os.environ.get('EXTRACT_PRIOR_RUN', '40302264902'))
 
 
 def load(path: Path) -> dict:
@@ -56,7 +57,7 @@ def main() -> None:
         if previous not in (None, PRIOR_CURSOR, RUN_ID):
             raise RuntimeError(f'authoritative_cursor_conflict:{path.name}:{previous}')
         state.update({
-            'status': 'extract_0172_readback_verified_partial',
+            'status': f'extract_{N}_readback_verified_partial',
             'current_cloud_run_status': 'completed_reconciled',
             'latest_quantml_extract_run': RUN_ID,
             'latest_quantml_extract_status': 'completed_success_partial_transport_no_ack',
@@ -80,7 +81,7 @@ def main() -> None:
         write(path, state)
         changed += 1
     audit = {
-        'format': 'quantml-extract-0172-cursor-state-correction-v1',
+        'format': f'quantml-extract-{N}-cursor-state-correction-v1',
         'created_utc': now,
         'readback': str(READBACK),
         'workflow_run_id': RUN_ID,
@@ -102,14 +103,14 @@ def main() -> None:
         'duplicate_dispatch': False,
         'plaintext_published': False,
         'root_cause': 'generic finalizer omitted latest cursor commit fields after successful readback; encrypted readback remained authoritative',
-        'next_action': 'Use extract-0172 as authoritative cursor; choose a future distinct tranche only after deduplication review, preserving semantic credit 0 and buying paused.',
+        'next_action': f'Use extract-{N} as authoritative cursor; choose a future distinct tranche only after deduplication review, preserving semantic credit 0 and buying paused.',
     }
     write(AUDIT, audit)
     for path in [BASE / 'QuantML-学习进度.md', STUDY / 'QuantML-学习进度.md']:
         if not path.is_file():
             continue
         text = path.read_text(encoding='utf-8')
-        marker = '## EXTRACT-0172 游标字段一致性纠正（2026-10-26）'
+        marker = f'## EXTRACT-{N} 游标字段一致性纠正（2026-10-26）'
         if marker not in text:
             text += (f'\n\n{marker}\n\n'
                      f'- readback `{RUN_ID}` 明确 `metadata_cursor_committed=true`，但通用收尾脚本遗留了旧的 `latest_quantml_extract_cursor_committed=false`；这属于控制面字段遗漏，不是云端提取失败。\n'
