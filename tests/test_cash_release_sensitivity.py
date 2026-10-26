@@ -134,6 +134,61 @@ class CashReleaseSensitivityTests(unittest.TestCase):
         self.assertEqual(metrics["blocked_single_position_events"], 1)
         self.assertTrue(metrics["single_position_only"])
 
+    def test_execution_clock_uses_fill_quote_time_for_serial_release(self):
+        frame = self.frame()
+        frame.loc[0, "first_quote_ts"] = pd.Timestamp("2026-01-01T00:00:00Z")
+        frame.loc[1, "first_quote_ts"] = pd.Timestamp("2026-01-01T00:15:50Z")
+        frame["exec_buy_down_1m_d4_quote_ts"] = [
+            pd.Timestamp("2026-01-01T00:02:00Z"),
+            pd.Timestamp("2026-01-01T00:15:51Z"),
+        ]
+        first_clock, first_metrics = simulate_cash_locked(
+            frame,
+            "classic_early_drop_down_mean_positive",
+            ExecutionConfig(),
+            10.0,
+            5.0,
+            600.0,
+            fee_mode="polymarket_taker",
+            fee_rate=0.0,
+            single_position_only=True,
+        )
+        execution_clock, execution_metrics = simulate_cash_locked(
+            frame,
+            "classic_early_drop_down_mean_positive",
+            ExecutionConfig(),
+            10.0,
+            5.0,
+            600.0,
+            fee_mode="polymarket_taker",
+            fee_rate=0.0,
+            single_position_only=True,
+            entry_clock="execution_quote_ts",
+        )
+        self.assertEqual(first_metrics["trades"], 2)
+        self.assertEqual(execution_metrics["trades"], 1)
+        self.assertEqual(execution_metrics["entry_clock"], "execution_quote_ts")
+        self.assertEqual(execution_metrics["blocked_single_position_events"], 1)
+        self.assertEqual(len(first_clock), 2)
+        self.assertEqual(len(execution_clock), 1)
+
+    def test_execution_clock_rejects_missing_quote_timestamp(self):
+        frame = self.frame()
+        frame["exec_buy_down_1m_d4_quote_ts"] = [pd.Timestamp("2026-01-01T00:02:00Z"), pd.NaT]
+        _, metrics = simulate_cash_locked(
+            frame,
+            "classic_early_drop_down_mean_positive",
+            ExecutionConfig(),
+            10.0,
+            5.0,
+            0.0,
+            fee_mode="polymarket_taker",
+            fee_rate=0.0,
+            entry_clock="execution_quote_ts",
+        )
+        self.assertEqual(metrics["trades"], 1)
+        self.assertEqual(metrics["blocked_entry_clock_events"], 1)
+
     def test_relative_capacity_gate_uses_fee_aware_minimum_cash(self):
         _, metrics = simulate_cash_locked(
             self.frame(),

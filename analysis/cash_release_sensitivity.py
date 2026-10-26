@@ -42,7 +42,10 @@ def simulate_cash_locked(
     minimum_free_cash_after_entry: float = 0.0,
     single_position_only: bool = False,
     minimum_capacity_ratio: float | None = None,
+    entry_clock: str = "first_quote_ts",
 ) -> tuple[pd.DataFrame, dict]:
+    if entry_clock not in {"first_quote_ts", "execution_quote_ts"}:
+        raise ValueError("entry_clock must be first_quote_ts or execution_quote_ts")
     if not math.isfinite(float(min_order_shares)) or float(min_order_shares) < 0:
         raise ValueError("min_order_shares must be finite and non-negative")
     if not math.isfinite(float(minimum_free_cash_after_entry)) or float(minimum_free_cash_after_entry) < 0:
@@ -62,6 +65,7 @@ def simulate_cash_locked(
     quote_spread = np.full(len(d), np.nan)
     quote_overround = np.full(len(d), np.nan)
     adverse = np.full(len(d), np.nan)
+    execution_quote_ts = np.full(len(d), pd.NaT, dtype=object)
     for side_name in ("buy_up", "buy_down"):
         side_mask = signal & (side == side_name)
         for entry_minute in (1, 2, 4):
@@ -75,6 +79,19 @@ def simulate_cash_locked(
             quote_spread[rows] = pd.to_numeric(d.loc[rows, f"{prefix}_quote_spread"], errors="coerce").to_numpy()
             quote_overround[rows] = pd.to_numeric(d.loc[rows, f"{prefix}_quote_overround"], errors="coerce").to_numpy()
             adverse[rows] = pd.to_numeric(d.loc[rows, f"{prefix}_adverse_slippage"], errors="coerce").to_numpy()
+            quote_ts_column = f"{prefix}_quote_ts"
+            if quote_ts_column in d.columns:
+                execution_quote_ts[rows] = d.loc[rows, quote_ts_column].to_numpy()
+    first_quote_times = pd.to_datetime(d["first_quote_ts"], utc=True, errors="coerce")
+    execution_times = pd.to_datetime(pd.Series(execution_quote_ts, index=d.index), utc=True, errors="coerce")
+    if entry_clock == "execution_quote_ts":
+        invalid_execution_clock = signal & (
+            execution_times.isna() | first_quote_times.isna() | execution_times.lt(first_quote_times)
+        )
+        entry_times = execution_times
+    else:
+        invalid_execution_clock = pd.Series(False, index=d.index)
+        entry_times = first_quote_times
     fill_price = quote_price + config.fixed_slippage
     outcome = pd.to_numeric(d["outcome_up"], errors="coerce").to_numpy(dtype=float)
     eligible = (
@@ -99,6 +116,7 @@ def simulate_cash_locked(
     logs: list[dict] = []
     blocked_cash = 0
     blocked_pending = 0
+    blocked_entry_clock = 0
     blocked_single_position = 0
     blocked_capacity_ratio = 0
     last_now = None
@@ -114,11 +132,23 @@ def simulate_cash_locked(
             if peak_cash > 0:
                 max_cash_drawdown = max(max_cash_drawdown, (peak_cash - cash) / peak_cash)
 
-    for i in np.flatnonzero(signal):
-        now = pd.Timestamp(d.at[i, "first_quote_ts"]).timestamp()
+    ordered_indices = [int(i) for i in np.flatnonzero(signal)]
+    if entry_clock == "execution_quote_ts":
+        ordered_indices.sort(
+            key=lambda index: (
+                pd.Timestamp(entry_times.iloc[index]).value
+                if pd.notna(entry_times.iloc[index])
+                else np.iinfo(np.int64).max
+            )
+        )
+    for event_rank, i in enumerate(ordered_indices):
+        if bool(invalid_execution_clock.iloc[i]) or pd.isna(entry_times.iloc[i]):
+            blocked_entry_clock += 1
+            continue
+        now = pd.Timestamp(entry_times.iloc[i]).timestamp()
         last_now = now
         release_until(now)
-        recent_trades = [index for index in recent_trades if index > i - study.QUOTA_WINDOW_EVENTS]
+        recent_trades = [index for index in recent_trades if index > event_rank - study.QUOTA_WINDOW_EVENTS]
         if cooldown > 0:
             cooldown -= 1
             blocked_pending += 1
@@ -169,7 +199,7 @@ def simulate_cash_locked(
         peak_cash = max(peak_cash, cash)
         if peak_cash > 0:
             max_cash_drawdown = max(max_cash_drawdown, (peak_cash - cash) / peak_cash)
-        recent_trades.append(i)
+        recent_trades.append(event_rank)
         if pnl < 0:
             loss_streak += 1
             if loss_streak >= study.COOLDOWN_AFTER_LOSSES:
@@ -181,6 +211,8 @@ def simulate_cash_locked(
             logs.append({
                 "strategy": strategy,
                 "first_quote_ts": d.at[i, "first_quote_ts"],
+                "entry_clock": entry_clock,
+                "entry_quote_ts": pd.Timestamp(entry_times.iloc[i]),
                 "run_name": d.at[i, "run_name"],
                 "market_id": d.at[i, "market_id"],
                 "side": side[i],
@@ -219,6 +251,8 @@ def simulate_cash_locked(
         "locked_positions_at_observation_end": int(locked_at_observation_end),
         "blocked_cash_events": int(blocked_cash),
         "blocked_pending_events": int(blocked_pending),
+        "entry_clock": entry_clock,
+        "blocked_entry_clock_events": int(blocked_entry_clock),
         "single_position_only": bool(single_position_only),
         "blocked_single_position_events": int(blocked_single_position),
         "minimum_capacity_ratio": None if minimum_capacity_ratio is None else float(minimum_capacity_ratio),
