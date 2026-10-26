@@ -1,0 +1,93 @@
+name: H737 Polymarket market contract unit gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'analysis/polymarket_market_contract.py'
+      - 'tests/test_polymarket_market_contract.py'
+      - '.github/workflows/h737-polymarket-market-contract.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run bounded contract regression
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check pytest==9.1.1
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p no:cacheprovider -q tests/test_polymarket_market_contract.py
+          python -m py_compile analysis/polymarket_market_contract.py
+      - name: Seal redacted result
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -r requirements-vault.txt
+          python - <<'PY'
+          import base64, json, os
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'tools')
+          import research_vault
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          payload = {
+              'format': 'h737-polymarket-market-contract-sealed-v1',
+              'hypothesis_id': 'H737_OFFICIAL_MARKET_NOTIONAL_CONTRACT_REPAIR',
+              'source_commit': os.environ['GITHUB_SHA'],
+              'tests': 'bounded_unit_regression_passed',
+              'strategy_evaluated': False,
+              'live_orders_enabled': False,
+              'actual_fills': 0,
+              'verified_canary_fills': 0,
+              'semantic_credit': 0,
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({
+              'version': 1,
+              'status': 'complete',
+              'stage': 'sealed_delivery',
+              'strategy_evaluated': False,
+              'live_orders_enabled': False,
+              'plaintext_published': False,
+              'sealed_parts': 1,
+          }) + b'\n', 0o644)
+          PY
+      - name: Publish encrypted result only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+      - name: Redacted summary
+        if: always()
+        run: |
+          echo 'H737 contract regression completed; the frozen strategy and live buying state were not changed.' >> "$GITHUB_STEP_SUMMARY"
