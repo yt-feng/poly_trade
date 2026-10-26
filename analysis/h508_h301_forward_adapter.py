@@ -13,7 +13,8 @@ holdout tuning is performed here.
 from __future__ import annotations
 
 import argparse
-import base64
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import math
@@ -42,6 +43,8 @@ class ContractError(ValueError):
 
 
 def _finite(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -50,8 +53,20 @@ def _finite(value: Any) -> float | None:
 
 
 def _digest(value: Any) -> str:
+    # Bundle producers hash the complete market_metadata object as UTF-8 JSON,
+    # with sorted keys, compact separators, ASCII escapes and no NaN values.
     payload = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def _aware_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None and parsed.utcoffset() is not None else None
 
 
 def _require_digest(container: Mapping[str, Any], name: str, errors: list[str]) -> None:
@@ -144,12 +159,22 @@ def validate_document(document: Any) -> dict[str, Any]:
 
     # The official CLOB contract is market-specific and can change while a
     # paper bundle is being assembled.  A numeric USD floor alone is not
-    # enough: bind every candidate row to the contemporaneous share floor,
-    # tick, taker-delay flag, and observation timestamp used for admission.
+    # enough: bind every candidate row to metadata available at its decision
+    # cutoff. There is no registered maximum age, so this checks causal
+    # availability only; it does not establish freshness or source authenticity.
     market_metadata = document.get("market_metadata")
     if not isinstance(market_metadata, dict):
         errors.append("market_metadata_missing")
         market_metadata = {}
+    try:
+        metadata_digest = _digest(market_metadata)
+    except (TypeError, ValueError):
+        errors.append("market_metadata_not_canonical_json")
+    else:
+        declared_digest = source.get("market_metadata_sha256")
+        if not isinstance(declared_digest, str) or declared_digest.lower() != metadata_digest:
+            errors.append("market_metadata_digest_mismatch")
+    metadata_validation: list[dict[str, Any]] = []
     for index, row in enumerate(rows[:MAX_ROWS]):
         if not isinstance(row, dict):
             continue
@@ -163,10 +188,57 @@ def validate_document(document: Any) -> dict[str, Any]:
                 errors.append(f"market_metadata_field_missing:{index}:{name}")
         if _finite(metadata.get("min_order_size")) is None or float(metadata.get("min_order_size")) <= 0:
             errors.append(f"market_metadata_min_order_size_invalid:{index}")
+        elif float(metadata["min_order_size"]) > MINIMUM_SHARES:
+            # Preserve the frozen replay floor rather than silently simulating
+            # quantities the supplied market would reject.
+            errors.append(f"market_minimum_exceeds_frozen_shares:{index}")
         if _finite(metadata.get("tick_size")) is None or float(metadata.get("tick_size")) <= 0:
             errors.append(f"market_metadata_tick_size_invalid:{index}")
         if type(metadata.get("itode")) is not bool:
             errors.append(f"market_metadata_itode_invalid:{index}")
+        elif metadata["itode"]:
+            # The frozen adapter has no entry-delay execution model. An exit
+            # latency parameter or an asserted paper fill cannot stand in for it.
+            errors.append(f"market_entry_delay_unsupported:{index}")
+
+        observed = _aware_timestamp(metadata.get("observed_ts"))
+        cutoff_field = "decision_ts" if "decision_ts" in row else "entry_ts"
+        cutoff = _aware_timestamp(row.get(cutoff_field))
+        entry = _aware_timestamp(row.get("entry_ts"))
+        if observed is None:
+            errors.append(f"market_metadata_observed_ts_invalid:{index}")
+        if cutoff is None or entry is None:
+            errors.append(f"row_metadata_cutoff_invalid:{index}")
+        elif cutoff > entry:
+            errors.append(f"row_decision_after_entry:{index}")
+        if observed is not None and cutoff is not None and observed > cutoff:
+            errors.append(f"market_metadata_observed_after_cutoff:{index}")
+
+        # The average fill price may legitimately fall between ticks. Only a
+        # concrete submitted order/limit price supports an alignment check.
+        price_fields = [name for name in ("order_price", "limit_price") if name in row]
+        tick = _finite(metadata.get("tick_size"))
+        for name in price_fields:
+            price = _finite(row[name])
+            if price is None or not 0 < price < 1:
+                errors.append(f"row_order_price_invalid:{index}:{name}")
+            elif tick is not None and tick > 0:
+                try:
+                    aligned = Decimal(str(row[name])) % Decimal(str(metadata["tick_size"])) == 0
+                except InvalidOperation:
+                    aligned = False
+                if not aligned:
+                    errors.append(f"row_order_price_off_tick:{index}:{name}")
+        metadata_validation.append({
+            "row_index": index,
+            "cutoff_field": cutoff_field,
+            "observation_timing": "available_by_cutoff",
+            "freshness": "unverified_no_registered_max_age",
+            "source_authenticity": "unverified_digest_binds_content_only",
+            "tick_execution_applicability": (
+                "order_price_alignment_checked" if price_fields else "unverified_fill_vwap_only"
+            ),
+        })
 
     quotes = document.get("quotes")
     if not isinstance(quotes, dict):
@@ -184,7 +256,8 @@ def validate_document(document: Any) -> dict[str, Any]:
 
     if errors:
         raise ContractError(";".join(errors[:40]))
-    return {"source": source, "protocol": protocol, "rows": rows, "quotes": quotes}
+    return {"source": source, "protocol": protocol, "rows": rows, "quotes": quotes,
+            "market_metadata": market_metadata, "metadata_validation": metadata_validation}
 
 
 def evaluate(document: Any) -> dict[str, Any]:
@@ -196,6 +269,8 @@ def evaluate(document: Any) -> dict[str, Any]:
         "hypothesis_id": HYPOTHESIS_ID,
         "source": validated["source"],
         "protocol": protocol,
+        "market_metadata": validated["market_metadata"],
+        "metadata_validation": validated["metadata_validation"],
         "tested_fractions": list(FRACTIONS),
         "required_fills": REQUIRED_FILLS,
         "promotion_eligible": False,
