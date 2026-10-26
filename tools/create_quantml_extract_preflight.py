@@ -15,6 +15,25 @@ RID="5d68eb70893219fd4281958caf0072d145babc30123714f070a3ba058956e7a9"
 sys.path.insert(0,str(ROOT/"tools"))
 import research_vault as vault  # noqa: E402
 
+
+def bounded_choice(name: str, default: int, allowed: set[int]) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"invalid_{name.lower()}") from exc
+    if value not in allowed:
+        raise SystemExit(f"unsupported_{name.lower()}")
+    return value
+
+
+MAX_METADATA = bounded_choice('EXTRACT_MAX_METADATA', 2, {1, 2, 4, 8, 16, 32, 64})
+MAX_FILES = bounded_choice('EXTRACT_MAX_FILES', 2, {1, 2, 4, 8, 16, 32})
+MAX_UNITS = bounded_choice('EXTRACT_MAX_UNITS', 20, {10, 20, 40, 80, 120, 200})
+PDF_OCR = os.environ.get('EXTRACT_PDF_OCR', 'true').strip().lower()
+if PDF_OCR not in {'true', 'false'}:
+    raise SystemExit('invalid_extract_pdf_ocr')
+
 def main():
     if PREFLIGHT.exists() or DELIVERY.exists(): raise SystemExit("already_exists")
     prior=STUDY/f"extract-{PRIOR}-readback-20261026.json"
@@ -22,11 +41,11 @@ def main():
     now=dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")
     pre={"format":f"quantml-extract-{N}-preflight-v1","created_utc":now,"batch_id":f"extract-{N}-no-ack-cursor-continuation",
       "workflow":"corpus-private-extract.yml","mode":"extract","source_previous_batch":{"run_id":d.get("workflow_run_id"),"readback":str(prior),"metadata_cursor_committed":d.get("metadata_cursor_committed"),"last_source_id":b.get("last_source_id"),"source_count_including_discovered_children":(d.get("coverage") or {}).get("source_count_including_discovered_children")},
-      "input_scope":{"scope":f"existing private manifest after verified {PRIOR} cursor; no shared delivery ACK input; two metadata entries, two files and at most twenty units","local_bytes_read":0,"archive_and_video_denominators_preserved":True,"ack_secret_state":"absent_by_name_check; secret value never read"},
+      "input_scope":{"scope":f"existing private manifest after verified {PRIOR} cursor; no shared delivery ACK input; {MAX_METADATA} metadata entries, {MAX_FILES} files and at most {MAX_UNITS} units","local_bytes_read":0,"archive_and_video_denominators_preserved":True,"ack_secret_state":"absent_by_name_check; secret value never read"},
       "cloud_execution":{"backend":"GitHub Actions corpus-private-extract","runner":"ubuntu-latest","expected_cpu":"bounded worker batch only","expected_memory":"existing worker and 1 GiB output cap","expected_runtime_minutes":20,"concurrency":1,"local_heavy_compute":False},
-      "parameters":{"pdf_ocr":True,"max_metadata":2,"max_files":2,"max_units":20,"recovery_source_ids":[],"no_strategy_evaluation":True,"no_model_refit":True,"no_live_orders":True},
+      "parameters":{"pdf_ocr":PDF_OCR == 'true',"max_metadata":MAX_METADATA,"max_files":MAX_FILES,"max_units":MAX_UNITS,"recovery_source_ids":[],"no_strategy_evaluation":True,"no_model_refit":True,"no_live_orders":True},
       "gates":{"duplicate_dispatch":False,"prior_terminal_readback_verified":True,"ack_secret_present_by_name":False,"semantic_credit_before":0,"full_corpus_complete_before":False,"actual_fills_before":0,"verified_canary_before":0,"buying_paused":True},
-      "hypothesis":f"A separate bounded cursor continuation {N} expands coverage without replaying {PRIOR} or treating transport as semantic learning.","success_contract":"Persist encrypted report and direct readback; count only newly committed units and never infer semantic learning from transport.","failure_contract":"Retain terminal or unknown result and do not replay without readback; keep semantic credit 0 and trading disabled.","idempotency_key":f"quantml-extract-{N}|after-{d.get('workflow_run_id')}|no-ack|files-2|units-20|ocr-true","result_paths":{"local_compact_summary":str(STUDY/f"extract-{N}-readback-20261026.json"),"encrypted_journal_branch":"sealed-research-journal"}}
+      "hypothesis":f"A separate bounded cursor continuation {N} expands coverage without replaying {PRIOR} or treating transport as semantic learning; the smaller profile is a timeout-control test.","success_contract":"Persist encrypted report and direct readback; count only newly committed units and never infer semantic learning from transport.","failure_contract":"Retain terminal or unknown result and do not replay without readback; keep semantic credit 0 and trading disabled.","idempotency_key":f"quantml-extract-{N}|after-{d.get('workflow_run_id')}|no-ack|metadata-{MAX_METADATA}|files-{MAX_FILES}|units-{MAX_UNITS}|ocr-{PDF_OCR}","result_paths":{"local_compact_summary":str(STUDY/f"extract-{N}-readback-20261026.json"),"encrypted_journal_branch":"sealed-research-journal"}}
     PREFLIGHT.write_text(json.dumps(pre,ensure_ascii=False,indent=2)+"\n",encoding="utf-8"); PREFLIGHT.chmod(0o600)
     recipient=vault.load_json_bytes(vault.read_bounded(ROOT/"research_vault/recipient.json",4096),4096); vault.validate_recipient(recipient,RID); DELIVERY.mkdir(mode=0o700)
     vault.write_new(DELIVERY/"part-0000.vault",vault.seal(vault.canonical({"format":f"quantml-extract-{N}-preflight-v1","preflight":pre,"actual_fills":0,"verified_canary_fills":0,"live_orders_enabled":False,"plaintext_published":False}),recipient,RID),0o600)
