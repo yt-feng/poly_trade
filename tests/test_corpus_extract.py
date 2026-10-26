@@ -264,6 +264,19 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         self.assertEqual([item['unit']['source_id'] for item in second['unit_texts']], ['0'*64])
         self.assertEqual(second['unit_delivery_acknowledged_unchanged_skipped'], 1)
 
+    def test_current_manifest_sources_are_delivered_before_old_unacknowledged_units(self):
+        old = self.unit('f')
+        current = self.unit('e')
+        (self.output / 'manifest-state.jsonl').write_text('\n'.join([
+            json.dumps({'source_id': 'e'*64, 'parent_id': None}),
+            json.dumps({'source_id': 'f'*64, 'parent_id': None}),
+        ]) + '\n')
+        (self.output / 'unit-state.jsonl').write_text('\n'.join(json.dumps(unit) for unit in (old, current)) + '\n')
+        report = {'selected_manifest': [{'source_id': 'e'*64}]}
+        self.ns['build_unit_delivery'](self.output, self.worker_hash, 'current-1', report)
+        self.assertEqual([item['unit']['source_id'] for item in report['unit_texts']], ['e'*64, 'f'*64])
+        self.assertEqual(report['unit_delivery_priority_source_count'], 1)
+
     def test_same_unit_updated_ocr_content_and_metadata_is_redelivered(self):
         unit = self.unit()
         first = self.deliver([unit], '1-1')

@@ -624,33 +624,72 @@ def build_unit_delivery(output, worker_hash, source_run, report):
     report['legacy_delivery_cursor_ignored'] = (output / 'delivery-cursor.json').exists()
     if units_path.exists():
         regular(units_path)
-        with units_path.open() as units:
-            for line in units:
-                if len(line) > 65536:
-                    raise ValueError('unit_metadata_line_limit')
-                unit = json.loads(line)
-                for item in unit_delivery_items(output, unit):
-                    key, digest = item['unit_key'], item['evidence_digest']
-                    complete = item['unit_evidence_complete']
-                    content_hash = item.get('artifact_sha256')
-                    exact_ack = (acknowledged.get(key) == digest or cross_worker_acknowledged.get(key) == digest
-                                 or digest in versioned_acknowledged.get(key, {}))
-                    if complete and exact_ack:
-                        skipped += 1
-                        continue
-                    report['unit_texts'].append(item)
-                    if delivery_report_size(report) > REPORT_LIMIT - 131072:
-                        report['unit_texts'].pop()
-                        exhausted = False
-                        break
-                    if complete:
-                        proposed[key] = digest
-                        if isinstance(content_hash, str):
-                            proposed_content_hashes[key] = content_hash
-                    else:
-                        pending_large_units = True
-                if not exhausted:
+        # The unit-state export is a durable queue, not a FIFO for the current
+        # selected manifest.  Prior to this ordering pass, an old unacknowledged
+        # page could consume the report budget before units produced by the
+        # current cursor tranche, making every readback look like a duplicate.
+        # Prefer the current manifest's source IDs (and their discovered child
+        # sources) while retaining the original order for all other evidence.
+        priority_sources = {entry.get('source_id') for entry in (report.get('selected_manifest') or [])
+                            if isinstance(entry, dict) and isinstance(entry.get('source_id'), str)}
+        if priority_sources and (output / 'manifest-state.jsonl').exists():
+            # Close the parent->child relation without loading the complete
+            # manifest into memory.  A bounded number of passes is sufficient
+            # for archive discovery and leaves unlisted deep descendants in the
+            # ordinary fallback pass.
+            for _ in range(8):
+                expanded = False
+                with (output / 'manifest-state.jsonl').open() as manifest:
+                    for line in manifest:
+                        if len(line) > 65536:
+                            raise ValueError('manifest_metadata_line_limit')
+                        row = json.loads(line)
+                        if row.get('parent_id') in priority_sources and row.get('source_id') not in priority_sources:
+                            priority_sources.add(row.get('source_id'))
+                            expanded = True
+                if not expanded:
                     break
+        report['unit_delivery_priority_source_count'] = len(priority_sources)
+
+        def deliver_pass(priority_only):
+            nonlocal exhausted, pending_large_units, skipped
+            with units_path.open() as units:
+                for line in units:
+                    if len(line) > 65536:
+                        raise ValueError('unit_metadata_line_limit')
+                    unit = json.loads(line)
+                    is_priority = unit.get('source_id') in priority_sources
+                    if priority_only is not None and is_priority != priority_only:
+                        continue
+                    for item in unit_delivery_items(output, unit):
+                        key, digest = item['unit_key'], item['evidence_digest']
+                        complete = item['unit_evidence_complete']
+                        content_hash = item.get('artifact_sha256')
+                        exact_ack = (acknowledged.get(key) == digest or cross_worker_acknowledged.get(key) == digest
+                                     or digest in versioned_acknowledged.get(key, {}))
+                        if complete and exact_ack:
+                            skipped += 1
+                            continue
+                        report['unit_texts'].append(item)
+                        if delivery_report_size(report) > REPORT_LIMIT - 131072:
+                            report['unit_texts'].pop()
+                            exhausted = False
+                            break
+                        if complete:
+                            proposed[key] = digest
+                            if isinstance(content_hash, str):
+                                proposed_content_hashes[key] = content_hash
+                        else:
+                            pending_large_units = True
+                    if not exhausted:
+                        break
+
+        if priority_sources:
+            deliver_pass(True)
+            if exhausted:
+                deliver_pass(False)
+        else:
+            deliver_pass(None)
     report.update(unit_delivery_complete_for_cloud_snapshot=exhausted and not pending_large_units,
                   unit_delivery_acknowledged_unchanged_skipped=skipped,
                   unit_delivery_cross_worker_skipped=cross_worker_skipped,
