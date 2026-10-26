@@ -16,6 +16,16 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+      - name: Preflight registered private forward bundle
+        env:
+          H508_H301_FORWARD_INPUT_B64: ${{ secrets.H508_H301_FORWARD_INPUT_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${H508_H301_FORWARD_INPUT_B64:-}" ]; then
+            echo 'FORWARD_INPUT_MISSING' >&2
+            exit 78
+          fi
+          echo 'FORWARD_INPUT_REGISTERED'
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -30,7 +40,6 @@ jobs:
           H508_H301_FORWARD_INPUT_B64: ${{ secrets.H508_H301_FORWARD_INPUT_B64 }}
         run: |
           set -euo pipefail
-          test -n "${H508_H301_FORWARD_INPUT_B64:-}" || { echo 'FORWARD_INPUT_MISSING' >&2; exit 78; }
           private_dir="$RUNNER_TEMP/h508-h301-forward"
           mkdir -m 700 "$private_dir"
           printf '%s' "$H508_H301_FORWARD_INPUT_B64" | base64 --decode > "$private_dir/input.json"
