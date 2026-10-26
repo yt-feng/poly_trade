@@ -196,7 +196,8 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         names = {'raw_json', 'delivery_report_size', 'safe_directory', 'regular', 'read_small', 'atomic', 'checked_relative',
                  'unit_delivery_identity', 'validate_acknowledged_units', 'validate_cross_worker_content_hashes',
                  'validate_cross_worker_content_workers', 'load_acknowledged',
-                 'load_cross_worker_acknowledged', 'record_cross_worker_acknowledged',
+                 'load_cross_worker_acknowledged', 'load_versioned_acknowledged',
+                 'acknowledged_version', 'migrate_legacy_acknowledged',
                  'derive_delivery_content_hashes',
                  'apply_delivery_ack', 'save_delivery_proposal', 'delivery_artifact',
                  'unit_delivery_items', 'build_unit_delivery'}
@@ -230,11 +231,29 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
             request['evidence_kinds'] = kinds
         return request
 
+    def versioned_path(self):
+        return self.root / 'extracted' / 'acknowledged-evidence-v2.json'
+
+    def seed_legacy_ack(self, report):
+        request = self.ack(report)
+        proposal = json.loads((self.output / 'delivery-proposals' / (request['source_run'] + '.json')).read_text())
+        local = {'version': 1, 'worker_hash': self.worker_hash, 'units': proposal['units'],
+                 'proposals': {request['source_run']: {'proposal_hash': request['proposal_hash'], 'evidence_kinds': ['unit']}}}
+        shared = {'version': 1, 'units': proposal['units'], 'content_hashes': proposal['content_hashes'],
+                  'content_workers': {key: self.worker_hash for key in proposal['content_hashes']}}
+        originals = {}
+        for path, value in ((self.output / 'acknowledged-units.json', local),
+                            (self.root / 'extracted' / 'acknowledged-units.json', shared)):
+            originals[path] = self.ns['raw_json'](value)
+            path.write_bytes(originals[path])
+        return originals
+
     def test_without_ack_evidence_is_redelivered(self):
         unit = self.unit()
         first, second = self.deliver([unit], '1-1'), self.deliver([unit], '2-1')
         self.assertEqual(first['unit_texts'], second['unit_texts'])
         self.assertFalse((self.output / 'acknowledged-units.json').exists())
+        self.assertFalse(self.versioned_path().exists())
 
     def test_new_lower_sorted_source_is_not_skipped(self):
         old = self.unit()
@@ -254,6 +273,15 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         second = self.deliver([changed], '2-1')
         self.assertEqual(first['unit_texts'][0]['unit_key'], second['unit_texts'][0]['unit_key'])
         self.assertNotEqual(first['unit_texts'][0]['evidence_digest'], second['unit_texts'][0]['evidence_digest'])
+        self.ns['apply_delivery_ack'](self.root, self.ack(second))
+        self.assertEqual(self.deliver([changed], '3-1')['unit_texts'], [])
+        state = self.ns['load_versioned_acknowledged'](self.root)
+        key = first['unit_texts'][0]['unit_key']
+        self.assertEqual(set(state['units'][key]), {first['unit_texts'][0]['evidence_digest'],
+                                                  second['unit_texts'][0]['evidence_digest']})
+        # Restore the old bytes: the older exact version remains acknowledged.
+        self.unit(text=b'native')
+        self.assertEqual(self.deliver([unit], '4-1')['unit_texts'], [])
 
     def test_metadata_only_update_is_new_evidence(self):
         unit = self.unit()
@@ -263,12 +291,14 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         second = self.deliver([unit], '2-1')
         self.assertEqual(len(second['unit_texts']), 1)
         self.assertEqual(first['unit_texts'][0]['artifact_sha256'], second['unit_texts'][0]['artifact_sha256'])
+        self.ns['apply_delivery_ack'](self.root, self.ack(second))
+        self.assertEqual(self.deliver([unit], '3-1')['unit_texts'], [])
 
     def test_replayed_ack_is_idempotent_and_wrong_hash_does_not_mutate(self):
         report = self.deliver([self.unit()], '1-1')
         request = self.ack(report)
         self.ns['apply_delivery_ack'](self.root, request)
-        path = self.output / 'acknowledged-units.json'
+        path = self.versioned_path()
         before = path.read_bytes()
         replay = self.ns['apply_delivery_ack'](self.root, request)
         self.assertEqual(replay['status'], 'already_acknowledged')
@@ -288,11 +318,11 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         second = self.deliver_at(new_output, new_hash, [old_unit], '40090131316-1')
         self.assertEqual(second['unit_texts'], [])
         self.assertEqual(second['unit_delivery_acknowledged_unchanged_skipped'], 1)
-        shared = json.loads((self.root / 'extracted' / 'acknowledged-units.json').read_text())
-        self.assertEqual(shared['version'], 1)
+        shared = json.loads(self.versioned_path().read_text())
+        self.assertEqual(shared['version'], 2)
         self.assertEqual(len(shared['units']), 1)
 
-    def test_same_content_hash_with_new_worker_metadata_is_deduped(self):
+    def test_same_content_hash_with_new_worker_metadata_requires_exact_new_ack(self):
         old_unit = self.unit()
         first = self.deliver([old_unit], '40072774055-1')
         self.ns['apply_delivery_ack'](self.root, self.ack(first))
@@ -303,10 +333,12 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         (new_output / new_unit['artifact']).parent.mkdir(mode=0o700, exist_ok=True)
         (new_output / new_unit['artifact']).write_bytes(b'native')
         second = self.deliver_at(new_output, new_hash, [new_unit], '40090131316-1')
-        self.assertEqual(second['unit_texts'], [])
-        self.assertEqual(second['unit_delivery_cross_worker_skipped'], 1)
+        self.assertEqual(len(second['unit_texts']), 1)
+        self.assertEqual(second['unit_delivery_cross_worker_skipped'], 0)
+        self.ns['apply_delivery_ack'](self.root, self.ack(second))
+        self.assertEqual(self.deliver_at(new_output, new_hash, [new_unit], '40090131317-1')['unit_texts'], [])
 
-    def test_legacy_proposal_without_content_hash_is_migrated_for_cross_worker_dedupe(self):
+    def test_legacy_proposal_without_content_hash_preserves_exact_version_only(self):
         old_unit = self.unit()
         first = self.deliver([old_unit], '40066237080-1')
         proposal_path = self.output / 'delivery-proposals' / '40066237080-1.json'
@@ -323,10 +355,14 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         (new_output / new_unit['artifact']).parent.mkdir(mode=0o700, exist_ok=True)
         (new_output / new_unit['artifact']).write_bytes(b'native')
         second = self.deliver_at(new_output, new_hash, [new_unit], '40090131316-1')
-        self.assertEqual(second['unit_texts'], [])
-        self.assertEqual(second['unit_delivery_cross_worker_skipped'], 1)
+        self.assertEqual(len(second['unit_texts']), 1)
+        self.assertEqual(second['unit_delivery_cross_worker_skipped'], 0)
+        state = self.ns['load_versioned_acknowledged'](self.root)
+        item = first['unit_texts'][0]
+        self.assertEqual(state['units'][item['unit_key']][item['evidence_digest']]['artifact_sha256'],
+                         item['artifact_sha256'])
 
-    def test_cross_worker_digest_conflict_redelivers_and_ack_fails_closed(self):
+    def test_cross_worker_changed_content_can_be_acknowledged_without_losing_old_version(self):
         first = self.deliver([self.unit()], '1-1')
         self.ns['apply_delivery_ack'](self.root, self.ack(first))
         new_hash = 'b' * 64
@@ -337,15 +373,73 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         second = self.deliver_at(new_output, new_hash, [changed], '2-1')
         self.assertEqual(len(second['unit_texts']), 1)
         request = self.ack(second)
-        with self.assertRaisesRegex(ValueError, 'cross_worker_acknowledged_digest_conflict'):
-            self.ns['apply_delivery_ack'](self.root, request)
+        self.ns['apply_delivery_ack'](self.root, request)
+        self.assertEqual(self.deliver_at(new_output, new_hash, [changed], '3-1')['unit_texts'], [])
+        state = self.ns['load_versioned_acknowledged'](self.root)
+        self.assertEqual(len(state['units'][second['unit_texts'][0]['unit_key']]), 2)
         self.assertFalse((new_output / 'acknowledged-units.json').exists())
+
+    def test_legacy_singletons_are_migrated_readonly_and_do_not_block_new_version(self):
+        old = self.unit()
+        first = self.deliver([old], '1-1')
+        originals = self.seed_legacy_ack(first)
+        self.assertEqual(self.deliver([old], '2-1')['unit_texts'], [])
+        changed = self.unit(text=b'updated complete evidence')
+        third = self.deliver([changed], '3-1')
+        result = self.ns['apply_delivery_ack'](self.root, self.ack(third))
+        self.assertEqual(result['registered_versions_before'], 0)
+        self.assertEqual(result['registered_versions_after_migration'], 1)
+        self.assertEqual(result['registered_versions_after'], 2)
+        self.assertEqual(result['newly_acknowledged_versions'], 1)
+        self.assertEqual(result['selected_keys_with_prior_other_version'], 1)
+        self.assertEqual(result['legacy_migration_count'], 2)
+        self.assertEqual(result['ack_registry_sha256'], hashlib.sha256(self.versioned_path().read_bytes()).hexdigest())
+        state = self.ns['load_versioned_acknowledged'](self.root)
+        self.assertEqual(set(state['legacy_migrations']), {'shared_v1', 'worker_v1:' + self.worker_hash})
+        old_item, new_item = first['unit_texts'][0], third['unit_texts'][0]
+        versions = state['units'][old_item['unit_key']]
+        self.assertEqual(len(versions), 2)
+        self.assertEqual(len(versions[old_item['evidence_digest']]['legacy_sources']), 2)
+        self.assertEqual(versions[new_item['evidence_digest']]['proposal_refs'],
+                         {self.worker_hash + ':3-1': self.ack(third)['proposal_hash']})
+        for path, original in originals.items():
+            self.assertEqual(path.read_bytes(), original)
+        # Simulate a fresh process namespace: all dedupe state must come from disk.
+        refreshed = dict(self.ns)
+        exec(compile(ast.Module(body=[node for node in ast.parse(extract.REMOTE_EXTRACT).body
+                                     if isinstance(node, ast.FunctionDef) and node.name in self.ns], type_ignores=[]),
+                     'restarted_delivery', 'exec'), refreshed)
+        report = {}
+        refreshed['build_unit_delivery'](self.output, self.worker_hash, '4-1', report)
+        self.assertEqual(report['unit_texts'], [])
 
     def test_malformed_cross_worker_index_fails_closed(self):
         (self.root / 'extracted' / 'acknowledged-units.json').write_text(
             json.dumps({'version': 1, 'units': {'not-a-unit-key': '0' * 64}}))
         with self.assertRaisesRegex(ValueError, 'invalid_acknowledged_unit_digest'):
             self.deliver([self.unit()], '1-1')
+
+    def test_malformed_v2_provenance_cannot_suppress_evidence(self):
+        report = self.deliver([self.unit()], '1-1')
+        self.ns['apply_delivery_ack'](self.root, self.ack(report))
+        state = json.loads(self.versioned_path().read_text())
+        state['proposals'] = {}
+        self.versioned_path().write_bytes(self.ns['raw_json'](state))
+        with self.assertRaisesRegex(ValueError, 'invalid_acknowledged_version_proposal'):
+            self.deliver([self.unit()], '2-1')
+
+    def test_capacity_failure_does_not_partially_publish_new_ack_or_migration(self):
+        first = self.deliver([self.unit()], '1-1')
+        originals = self.seed_legacy_ack(first)
+        changed = self.unit(text=b'changed')
+        second = self.deliver([changed], '2-1')
+        # Each legacy input still fits; their combined v2 history does not.
+        self.ns['ACK_STATE_LIMIT'] = max(len(raw) for raw in originals.values()) + 1
+        with self.assertRaisesRegex(ValueError, 'acknowledged_state_capacity'):
+            self.ns['apply_delivery_ack'](self.root, self.ack(second))
+        self.assertFalse(self.versioned_path().exists())
+        for path, original in originals.items():
+            self.assertEqual(path.read_bytes(), original)
 
     def test_text_ack_does_not_acknowledge_visual_png(self):
         unit = self.unit()
@@ -370,6 +464,7 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             self.ns['apply_delivery_ack'](self.root, request)
         self.assertFalse((self.output / 'acknowledged-units.json').exists())
+        self.assertFalse(self.versioned_path().exists())
         encoded = base64.b64encode(json.dumps(dict(request, source_run='../elsewhere')).encode()).decode()
         with self.assertRaisesRegex(ValueError, 'DELIVERY_ACK_SOURCE_RUN'):
             extract.delivery_ack_from_environment({'CORPUS_DELIVERY_ACK_B64': encoded})
@@ -384,6 +479,12 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         path.write_bytes(b'\x89PNG\r\n\x1a\nsecond')
         second = self.deliver([unit], '2-1')
         self.assertEqual([item['evidence_kind'] for item in second['unit_texts']], ['visual'])
+        self.ns['apply_delivery_ack'](self.root, self.ack(second, ['visual']))
+        self.assertEqual(self.deliver([unit], '3-1')['unit_texts'], [])
+        state = self.ns['load_versioned_acknowledged'](self.root)
+        self.assertEqual(len(state['units'][second['unit_texts'][0]['unit_key']]), 2)
+        path.write_bytes(b'\x89PNG\r\n\x1a\nfirst')
+        self.assertEqual(self.deliver([unit], '4-1')['unit_texts'], [])
 
     def test_oversized_visual_remains_unacknowledgeable(self):
         unit = self.unit()
@@ -395,6 +496,12 @@ class DeliveryAcknowledgementTests(unittest.TestCase):
         self.assertNotIn('artifact_base64', visual)
         self.assertEqual(report['unit_delivery_proposal']['evidence_count'], 1)
         self.assertFalse(report['unit_delivery_complete_for_cloud_snapshot'])
+        result = self.ns['apply_delivery_ack'](self.root, self.ack(report, ['unit', 'visual']))
+        self.assertEqual(result['acknowledged_evidence_count'], 1)
+        remaining = self.deliver([unit], '2-1')
+        self.assertEqual([item['evidence_kind'] for item in remaining['unit_texts']], ['visual'])
+        self.assertEqual(remaining['unit_delivery_proposal']['evidence_count'], 0)
+        self.assertNotIn(visual['unit_key'], self.ns['load_versioned_acknowledged'](self.root)['units'])
 
     def test_visuals_share_report_budget_and_undelivered_evidence_resumes(self):
         png = b'\x89PNG\r\n\x1a\n' + b'x'*(512*1024 - 8)

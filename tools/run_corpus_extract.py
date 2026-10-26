@@ -344,8 +344,8 @@ def load_cross_worker_acknowledged(output):
 
     Per-worker acknowledgement files remain the audit record for a specific
     worker.  This index is only a conservative transport dedupe: a unit is
-    skipped by another worker only when its exact delivery digest or verified
-    artifact hash matches an acknowledgement.  Any malformed index is
+    skipped only when its exact delivery digest matches an acknowledgement.
+    Artifact hashes alone do not acknowledge changed metadata. Any malformed index is
     rejected so a bad state can never cause evidence to be silently omitted.
     """
     path = output.parent.parent / 'extracted' / 'acknowledged-units.json'
@@ -367,47 +367,77 @@ def load_cross_worker_acknowledged(output):
     state['content_workers'] = content_workers
     return state
 
-def record_cross_worker_acknowledged(root, selected, content_hashes=None, worker_hash=None):
-    """Record exact acknowledged unit digests for subsequent worker hashes."""
-    content_hashes = content_hashes or {}
-    validate_cross_worker_content_hashes(content_hashes)
-    if not set(content_hashes) <= set(selected):
-        raise ValueError('cross_worker_content_hash_without_unit')
-    if content_hashes and (not isinstance(worker_hash, str) or not re.fullmatch('[0-9a-f]{64}', worker_hash)):
-        raise ValueError('cross_worker_content_worker_required')
-    path = root / 'extracted' / 'acknowledged-units.json'
+def load_versioned_acknowledged(root):
+    """Independent registry; the legacy singleton files remain read-only."""
+    path = root / 'extracted' / 'acknowledged-evidence-v2.json'
     if not path.exists() and not path.is_symlink():
-        state = {'version': 1, 'units': {}, 'content_hashes': {}, 'content_workers': {}}
-    else:
-        state = json.loads(read_small(path, ACK_STATE_LIMIT))
-        if state.get('version') != 1 or not isinstance(state.get('units'), dict):
-            raise ValueError('cross_worker_acknowledged_state_identity_mismatch')
-        validate_acknowledged_units(state['units'])
-        state['content_hashes'] = state.get('content_hashes', {})
-        state['content_workers'] = state.get('content_workers', {})
-        validate_cross_worker_content_hashes(state['content_hashes'])
-        validate_cross_worker_content_workers(state['content_workers'])
-        if not set(state['content_workers']) <= set(state['content_hashes']):
-            raise ValueError('cross_worker_content_worker_without_hash')
-        if not set(state['content_hashes']) <= set(state['units']):
-            raise ValueError('cross_worker_content_hash_without_unit')
-    for key, digest in selected.items():
-        previous = state['units'].get(key)
-        if previous is not None and previous != digest:
-            raise ValueError('cross_worker_acknowledged_digest_conflict')
-    for key, digest in content_hashes.items():
-        previous = state['content_hashes'].get(key)
-        if previous is not None and previous != digest:
-            raise ValueError('cross_worker_acknowledged_content_hash_conflict')
-    state['units'].update(selected)
-    state['content_hashes'].update(content_hashes)
-    if worker_hash is not None:
-        state['content_workers'].update({key: worker_hash for key in content_hashes})
-    raw = raw_json(state)
-    if len(raw) > ACK_STATE_LIMIT:
-        raise ValueError('cross_worker_acknowledged_state_capacity')
-    if selected:
-        atomic(path, raw)
+        return {'version': 2, 'units': {}, 'proposals': {}, 'legacy_migrations': {}}
+    state = json.loads(read_small(path, ACK_STATE_LIMIT))
+    if state.get('version') != 2 or any(not isinstance(state.get(key), dict)
+                                      for key in ('units', 'proposals', 'legacy_migrations')):
+        raise ValueError('versioned_acknowledged_state_identity_mismatch')
+    for reference, receipt in state['proposals'].items():
+        if (not re.fullmatch('[0-9a-f]{64}:[0-9]{1,25}-[0-9]{1,5}', reference)
+                or not isinstance(receipt, dict)
+                or not isinstance(receipt.get('proposal_hash'), str)
+                or not re.fullmatch('[0-9a-f]{64}', receipt['proposal_hash'])
+                or not isinstance(receipt.get('evidence_kinds'), list)
+                or not receipt['evidence_kinds'] or not set(receipt['evidence_kinds']) <= {'unit', 'visual'}):
+            raise ValueError('invalid_versioned_acknowledged_proposal')
+    for origin, digest in state['legacy_migrations'].items():
+        if (not re.fullmatch('shared_v1|worker_v1:[0-9a-f]{64}', origin)
+                or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)):
+            raise ValueError('invalid_legacy_ack_migration')
+    for key, versions in state['units'].items():
+        if not isinstance(versions, dict) or not versions:
+            raise ValueError('invalid_acknowledged_versions')
+        for digest, evidence in versions.items():
+            validate_acknowledged_units({key: digest})
+            if (not isinstance(evidence, dict) or not isinstance(evidence.get('proposal_refs'), dict)
+                    or not isinstance(evidence.get('legacy_sources'), dict)
+                    or not (evidence['proposal_refs'] or evidence['legacy_sources'])):
+                raise ValueError('invalid_acknowledged_version_provenance')
+            artifact_hash = evidence.get('artifact_sha256')
+            if artifact_hash is not None:
+                validate_cross_worker_content_hashes({key: artifact_hash})
+            for reference, proposal_hash in evidence['proposal_refs'].items():
+                receipt = state['proposals'].get(reference, {})
+                if receipt.get('proposal_hash') != proposal_hash or key.rsplit(':', 1)[1] not in receipt.get('evidence_kinds', []):
+                    raise ValueError('invalid_acknowledged_version_proposal')
+            for origin, legacy_hash in evidence['legacy_sources'].items():
+                if origin not in state['legacy_migrations'] or state['legacy_migrations'][origin] != legacy_hash:
+                    raise ValueError('invalid_acknowledged_version_legacy_origin')
+    return state
+
+def acknowledged_version(state, key, digest, artifact_hash=None):
+    versions = state['units'].setdefault(key, {})
+    evidence = versions.setdefault(digest, {'artifact_sha256': None, 'proposal_refs': {}, 'legacy_sources': {}})
+    previous = evidence['artifact_sha256']
+    if previous is not None and artifact_hash is not None and previous != artifact_hash:
+        raise ValueError('acknowledged_version_artifact_conflict')
+    if artifact_hash is not None:
+        evidence['artifact_sha256'] = artifact_hash
+    return evidence
+
+def migrate_legacy_acknowledged(output, worker_hash, state):
+    """Explicitly import exact v1 versions without rewriting either v1 file."""
+    legacy_worker = load_acknowledged(output, worker_hash)
+    legacy_shared = load_cross_worker_acknowledged(output)
+    for origin, path, legacy in (
+            ('shared_v1', output.parent / 'acknowledged-units.json', legacy_shared),
+            ('worker_v1:' + worker_hash, output / 'acknowledged-units.json', legacy_worker)):
+        if not path.exists():
+            continue
+        # Hash canonical validated metadata only; never hash source documents.
+        legacy_hash = hashlib.sha256(raw_json(legacy)).hexdigest()
+        previous = state['legacy_migrations'].get(origin)
+        if previous is not None and previous != legacy_hash:
+            raise ValueError('legacy_ack_changed_after_migration')
+        for key, digest in legacy['units'].items():
+            evidence = acknowledged_version(state, key, digest, legacy.get('content_hashes', {}).get(key))
+            evidence['legacy_sources'][origin] = legacy_hash
+        state['legacy_migrations'][origin] = legacy_hash
+    return legacy_worker
 
 def derive_delivery_content_hashes(output, units):
     """Recover content hashes from a legacy proposal that omitted them."""
@@ -462,30 +492,44 @@ def apply_delivery_ack(root, ack):
         raise ValueError('cross_worker_content_hash_without_unit')
     selected = {key: digest for key, digest in proposal['units'].items() if key.rsplit(':', 1)[1] in kinds}
     selected_content_hashes = {key: digest for key, digest in content_hashes.items() if key.rsplit(':', 1)[1] in kinds}
-    state = load_acknowledged(output, worker_hash)
-    previous = state['proposals'].get(source_run)
-    if previous is not None:
-        if previous['proposal_hash'] != proposal_hash:
+    state = load_versioned_acknowledged(root)
+    before = raw_json(state)
+    versions_before = sum(len(versions) for versions in state['units'].values())
+    legacy = migrate_legacy_acknowledged(output, worker_hash, state)
+    versions_after_migration = sum(len(versions) for versions in state['units'].values())
+    prior_other_versions = sum(any(old != digest for old in state['units'].get(key, {}))
+                               for key, digest in selected.items())
+    reference = worker_hash + ':' + source_run
+    previous = state['proposals'].get(reference)
+    legacy_previous = legacy['proposals'].get(source_run)
+    for receipt in (previous, legacy_previous):
+        if receipt is not None and receipt['proposal_hash'] != proposal_hash:
             raise ValueError('delivery_ack_replay_conflict')
-        # A state created before cross-worker indexing may already contain a
-        # successful local acknowledgement.  Reconcile it into the shared
-        # index before treating a replay as idempotent.
-        record_cross_worker_acknowledged(root, selected, selected_content_hashes, worker_hash)
-        if set(kinds) <= set(previous['evidence_kinds']):
-            return {'status': 'already_acknowledged', 'source_run': source_run,
-                    'worker_hash': worker_hash, 'proposal_hash': proposal_hash, 'semantic_read_credited': False}
-    # Validate and publish the cross-worker index before mutating the local
-    # acknowledgement.  A conflicting digest must not leave a local state
-    # that would suppress the conflicting evidence on a later run.
-    record_cross_worker_acknowledged(root, selected, selected_content_hashes, worker_hash)
-    state['units'].update(selected)
-    state['proposals'][source_run] = {'proposal_hash': proposal_hash,
-                                    'evidence_kinds': sorted(set(kinds) | set(previous['evidence_kinds'] if previous else []))}
+    already = previous is not None and set(kinds) <= set(previous['evidence_kinds'])
+    for key, digest in selected.items():
+        evidence = acknowledged_version(state, key, digest, selected_content_hashes.get(key))
+        evidence['proposal_refs'][reference] = proposal_hash
+    state['proposals'][reference] = {'proposal_hash': proposal_hash,
+                                   'evidence_kinds': sorted(set(kinds) | set(previous['evidence_kinds'] if previous else []))}
     raw_state = raw_json(state)
     if len(raw_state) > ACK_STATE_LIMIT:
         raise ValueError('acknowledged_state_capacity')
-    atomic(output / 'acknowledged-units.json', raw_state)
-    return {'status': 'acknowledged', 'source_run': source_run, 'worker_hash': worker_hash,
+    # The existing controller flock covers validation, migration and this
+    # single atomic commit. Legacy ACKs and immutable proposals are untouched.
+    if raw_state != before:
+        atomic(root / 'extracted' / 'acknowledged-evidence-v2.json', raw_state)
+    versions_after = sum(len(versions) for versions in state['units'].values())
+    return {'status': 'already_acknowledged' if already else 'acknowledged',
+            'ack_registry_version': 2, 'legacy_states_preserved': True,
+            'ack_registry_sha256': hashlib.sha256(raw_state).hexdigest(),
+            'registered_versions_before': versions_before,
+            'registered_versions_after_migration': versions_after_migration,
+            'registered_versions_after': versions_after,
+            'newly_acknowledged_versions': versions_after - versions_after_migration,
+            'selected_keys_with_prior_other_version': prior_other_versions,
+            'legacy_migration_count': len(state['legacy_migrations']),
+            'legacy_migrations_canonical_sha256': state['legacy_migrations'],
+            'source_run': source_run, 'worker_hash': worker_hash,
             'proposal_hash': proposal_hash, 'acknowledged_evidence_count': len(selected),
             'evidence_kinds_acknowledged': kinds, 'semantic_read_credited': False, 'visual_review_credited': False}
 
@@ -571,11 +615,12 @@ def build_unit_delivery(output, worker_hash, source_run, report):
     acknowledged = load_acknowledged(output, worker_hash)['units']
     cross_worker_state = load_cross_worker_acknowledged(output)
     cross_worker_acknowledged = cross_worker_state['units']
-    cross_worker_content_hashes = cross_worker_state['content_hashes']
-    cross_worker_content_workers = cross_worker_state['content_workers']
+    versioned_acknowledged = load_versioned_acknowledged(output.parent.parent)['units']
     proposed, proposed_content_hashes = {}, {}
+    # Keep the retired content-only skip counter at zero for old report readers.
     exhausted, pending_large_units, skipped, cross_worker_skipped = True, False, 0, 0
     report['unit_delivery_protocol'] = 'per_unit_evidence_kind_and_digest_v1'
+    report['unit_acknowledgement_protocol'] = 'exact_evidence_versions_v2_with_readonly_v1'
     report['legacy_delivery_cursor_ignored'] = (output / 'delivery-cursor.json').exists()
     if units_path.exists():
         regular(units_path)
@@ -588,14 +633,10 @@ def build_unit_delivery(output, worker_hash, source_run, report):
                     key, digest = item['unit_key'], item['evidence_digest']
                     complete = item['unit_evidence_complete']
                     content_hash = item.get('artifact_sha256')
-                    exact_ack = acknowledged.get(key) == digest or cross_worker_acknowledged.get(key) == digest
-                    cross_content_ack = (complete and isinstance(content_hash, str)
-                                         and cross_worker_content_hashes.get(key) == content_hash
-                                         and cross_worker_content_workers.get(key) != worker_hash)
-                    if complete and (exact_ack or cross_content_ack):
+                    exact_ack = (acknowledged.get(key) == digest or cross_worker_acknowledged.get(key) == digest
+                                 or digest in versioned_acknowledged.get(key, {}))
+                    if complete and exact_ack:
                         skipped += 1
-                        if cross_content_ack and not exact_ack:
-                            cross_worker_skipped += 1
                         continue
                     report['unit_texts'].append(item)
                     if delivery_report_size(report) > REPORT_LIMIT - 131072:
