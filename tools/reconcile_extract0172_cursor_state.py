@@ -44,6 +44,7 @@ def main() -> None:
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
     paths = [
         BASE / 'active-episode.json', BASE / 'cycle-progress.json', BASE / 'quantml-learning-progress.json',
+        BASE / 'quantml-learning-state.json',
         STUDY / 'manifest-summary.json', STUDY / 'runtime-state.json', STUDY / 'progress.json',
     ]
     changed = 0
@@ -114,7 +115,7 @@ def main() -> None:
         if marker not in text:
             text += (f'\n\n{marker}\n\n'
                      f'- readback `{RUN_ID}` 明确 `metadata_cursor_committed=true`，但通用收尾脚本遗留了旧的 `latest_quantml_extract_cursor_committed=false`；这属于控制面字段遗漏，不是云端提取失败。\n'
-                     f'- 已在六份检查点将 authoritative cursor 统一纠正为 `{RUN_ID}`，并保留新增 {coverage.get("units_written_this_run")} units / {coverage.get("bytes_written_this_run")} bytes 与 semantic credit=0。\n'
+                     f'- 已在全部检查点将 authoritative cursor 统一纠正为 `{RUN_ID}`，并保留新增 {coverage.get("units_written_this_run")} units / {coverage.get("bytes_written_this_run")} bytes 与 semantic credit=0。\n'
                      '- 纠正摘要随后通过 sealed-research-journal 发布；下一步先消费去重归因，不把 transport 证据当作语义学习或 Canary。\n')
             path.write_text(text, encoding='utf-8')
     print(json.dumps(audit, ensure_ascii=False))
