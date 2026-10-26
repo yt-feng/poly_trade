@@ -380,6 +380,30 @@ class JournalPublisherTests(unittest.TestCase):
                 self.assertEqual(len(self.ref_writes()), 1)
                 sleep.assert_not_called()
 
+    def test_successful_ref_ack_tolerates_one_eventually_consistent_read(self):
+        self.prepare_ref('PATCH')
+        original = self.api
+        stale_ref = self.api.ref
+        stale_reads = 1
+        wrote = False
+
+        def eventually_consistent(method, path, payload=None):
+            nonlocal stale_reads, wrote
+            result = original(method, path, payload)
+            if method in {'PATCH', 'POST'} and '/git/refs' in path:
+                wrote = True
+            if wrote and method == 'GET' and path.endswith('/git/ref/heads/' + publisher.BRANCH) and stale_reads:
+                stale_reads -= 1
+                return {'object': {'sha': stale_ref}}
+            return result
+
+        with patch.object(publisher.time, 'sleep') as sleep:
+            self.assertEqual(self.publish(eventually_consistent)['status'], 'verified_remote')
+        self.assertEqual(stale_reads, 0)
+        self.assertEqual(len(self.ref_writes()), 1)
+        self.assertEqual(self.api.count('POST', '/commits'), 1)
+        sleep.assert_called_once_with(0.5)
+
     def test_ref_readback_conflict_fails_without_retry(self):
         self.api.seed_branch()
         original = self.api

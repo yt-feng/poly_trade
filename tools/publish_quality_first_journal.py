@@ -171,11 +171,23 @@ def publish(source, repository, run_id, run_attempt, recipient_id, api=github_ap
         })
         race_category = 'ref_non_fast_forward' if parent else 'ref_already_exists'
         failure = ApiError(category='unverified_write')
+        # GitHub's Git database can acknowledge a ref update before the next
+        # GET observes the new commit (eventual consistency).  Keep the
+        # acknowledgement so a stale read can be retried without replaying the
+        # mutation.  This is deliberately narrower than retrying an uncertain
+        # write: only an explicit response naming the commit is eligible.
+        ref_response = None
+        ref_acknowledged = False
         try:
             if parent:
-                api('PATCH', ref_path, {'sha': commit['sha'], 'force': False})
+                ref_response = api('PATCH', ref_path, {'sha': commit['sha'], 'force': False})
             else:
-                api('POST', prefix + '/git/refs', {'ref': 'refs/heads/' + BRANCH, 'sha': commit['sha']})
+                ref_response = api('POST', prefix + '/git/refs', {'ref': 'refs/heads/' + BRANCH, 'sha': commit['sha']})
+            ref_acknowledged = (
+                isinstance(ref_response, dict)
+                and isinstance(ref_response.get('object'), dict)
+                and ref_response['object'].get('sha') == commit['sha']
+            )
         except subprocess.TimeoutExpired:
             failure = ApiError(category='timeout')
         except ApiError as error:
@@ -183,14 +195,23 @@ def publish(source, repository, run_id, run_attempt, recipient_id, api=github_ap
                     or error.category in {'timeout', 'server_error', 'invalid_response'}):
                 raise
             failure = error
-        try:
-            new_parent, new_tree, actual = read_state()
-        except (ApiError, subprocess.TimeoutExpired, ValueError):
-            # A failed read cannot establish that an uncertain write did not
-            # execute. Preserve its cause and never replay it blindly.
-            raise failure from None
-        if verified(actual):
-            return dict(receipt, status='verified_remote', branch=BRANCH)
+        # A successful ref response is evidence that the mutation was applied;
+        # tolerate a short read-after-write lag while confirming the exact
+        # episode.  If the response was absent/ambiguous, preserve the old
+        # no-replay rule and fail closed after one read.
+        read_attempts = 5 if failure.category == 'unverified_write' and ref_acknowledged else 1
+        new_parent = new_tree = actual = None
+        for read_attempt in range(read_attempts):
+            try:
+                new_parent, new_tree, actual = read_state()
+            except (ApiError, subprocess.TimeoutExpired, ValueError):
+                # A failed read cannot establish that an uncertain write did
+                # not execute. Preserve its cause and never replay it blindly.
+                raise failure from None
+            if verified(actual):
+                return dict(receipt, status='verified_remote', branch=BRANCH)
+            if read_attempt + 1 < read_attempts:
+                time.sleep(min(0.5 * (2 ** read_attempt), 4.0))
         if (failure.status_code != 422 or failure.category != race_category
                 or new_parent is None or new_parent == parent or attempt == 5):
             raise failure
