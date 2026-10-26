@@ -47,12 +47,16 @@ def main() -> None:
         raise SystemExit('attribution_review_already_exists')
     if not PART.is_file() or PART.stat().st_size > vault.MAX_ENVELOPE:
         raise SystemExit('missing_or_oversized_ciphertext')
-    pin = getpass.getpass('Local recovery PIN (not echoed): ')
-    try:
-        private = vault.unlock_identity((IDENTITY / 'identity.keybundle').read_bytes(),
-                                        (IDENTITY / 'recovery.key').read_bytes(), pin)
-    finally:
-        del pin
+    direct_key = Path(os.environ['EXTRACT_PRIVATE_KEY']) if os.environ.get('EXTRACT_PRIVATE_KEY') else None
+    if direct_key is not None:
+        private = vault.X25519PrivateKey.from_private_bytes(direct_key.read_bytes())
+    else:
+        pin = getpass.getpass('Local recovery PIN (not echoed): ')
+        try:
+            private = vault.unlock_identity((IDENTITY / 'identity.keybundle').read_bytes(),
+                                            (IDENTITY / 'recovery.key').read_bytes(), pin)
+        finally:
+            del pin
     try:
         if vault.recipient_for(private)['recipient_id'] != RECIPIENT_ID:
             raise SystemExit('wrong_identity')
