@@ -7,16 +7,18 @@ import hashlib
 import json
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 ROOT = Path('/Users/ytfeng/Code_Pj/poly_trade/research-repair-20261015')
 BASE = Path('/Users/ytfeng/Code_Pj/poly_trade/output/continuous-research-20261016')
 STUDY = BASE / 'quantml-full-study'
-PREVIOUS_RUN = 40302264902
-SOURCE = STUDY / 'extract-0170-readback-20261026.json'
-PREFLIGHT = STUDY / 'extract-0172-preflight-20261026.json'
-DELIVERY = STUDY / 'extract-0172-preflight-delivery'
-RECEIPT = STUDY / 'extract-0172-preflight-publication.json'
+N = os.environ.get('EXTRACT_BATCH', '0172')
+PREVIOUS_RUN = int(os.environ.get('EXTRACT_PRIOR_RUN', '40302264902'))
+SOURCE = STUDY / f'extract-{os.environ.get("EXTRACT_PRIOR_BATCH", "0170")}-readback-20261026.json'
+PREFLIGHT = STUDY / f'extract-{N}-preflight-20261026.json'
+DELIVERY = STUDY / f'extract-{N}-preflight-delivery'
+RECEIPT = STUDY / f'extract-{N}-preflight-publication.json'
 RECIPIENT = ROOT / 'research_vault' / 'recipient.json'
 RECIPIENT_ID = '5d68eb70893219fd4281958caf0072d145babc30123714f070a3ba058956e7a9'
 CELL_ID = 'quantml-extract-0172-preflight'
@@ -42,9 +44,9 @@ def main() -> None:
     coverage = previous.get('coverage') or {}
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
     preflight = {
-        'format': 'quantml-extract-0172-preflight-v1',
+        'format': f'quantml-extract-{N}-preflight-v1',
         'created_utc': now,
-        'batch_id': 'extract-0172-normal-distinct-cursor-continuation',
+        'batch_id': f'extract-{N}-normal-distinct-cursor-continuation',
         'workflow': 'corpus-private-extract.yml',
         'mode': 'extract',
         'source_previous_batch': {
@@ -57,7 +59,7 @@ def main() -> None:
         'targeted_recovery': {
             'source_ids': [],
             'cursor_commit_expected': True,
-            'reason': 'normal distinct cursor tranche after 0170; 0171 targeted recovery was readback-only and is not replayed',
+            'reason': f'normal distinct cursor tranche after {os.environ.get("EXTRACT_PRIOR_BATCH", "0170")}; prior targeted recovery was readback-only and is not replayed',
         },
         'cloud_execution': {
             'backend': 'GitHub Actions corpus-private-extract',
@@ -90,7 +92,7 @@ def main() -> None:
             'verified_canary_before': 0,
             'buying_paused': True,
         },
-        'hypothesis': 'A distinct normal cursor tranche increases QuantML coverage without replaying the targeted 0171 source or treating transport as semantic learning.',
+        'hypothesis': f'A distinct normal cursor tranche {N} increases QuantML coverage without replaying targeted recovery or treating transport as semantic learning.',
         'success_contract': 'Persist encrypted report and direct readback; count only newly committed units while preserving the 3492-source denominator.',
         'failure_contract': 'Retain terminal or unknown result and do not retry an uncertain dispatch without readback; keep semantic credit 0 and trading disabled.',
     }
@@ -99,7 +101,7 @@ def main() -> None:
     vault.validate_recipient(recipient, RECIPIENT_ID)
     DELIVERY.mkdir(mode=0o700)
     vault.write_new(DELIVERY / 'part-0000.vault', vault.seal(vault.canonical({
-        'format': 'quantml-extract-0172-preflight-sealed-v1',
+        'format': f'quantml-extract-{N}-preflight-sealed-v1',
         'preflight': preflight,
         'source_sha256': hashlib.sha256(SOURCE.read_bytes()).hexdigest(),
         'actual_fills': 0,
@@ -126,7 +128,7 @@ def main() -> None:
         raise SystemExit(proc.stdout.strip() or 'preflight_publication_failed')
     publication = json.loads(proc.stdout)
     write_json(RECEIPT, {
-        'format': 'quantml-extract-0172-preflight-publication-v1',
+        'format': f'quantml-extract-{N}-preflight-publication-v1',
         'cell_id': CELL_ID,
         'source': str(PREFLIGHT),
         'source_sha256': hashlib.sha256(PREFLIGHT.read_bytes()).hexdigest(),
@@ -136,7 +138,7 @@ def main() -> None:
         'publication': publication,
         'plaintext_published': False,
     })
-    print(json.dumps({'status': publication.get('status'), 'batch': '0172', 'prior_cursor_run': PREVIOUS_RUN}, ensure_ascii=False))
+    print(json.dumps({'status': publication.get('status'), 'batch': N, 'prior_cursor_run': PREVIOUS_RUN}, ensure_ascii=False))
 
 
 if __name__ == '__main__':

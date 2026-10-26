@@ -13,15 +13,16 @@ from pathlib import Path
 ROOT = Path('/Users/ytfeng/Code_Pj/poly_trade')
 BASE = ROOT / 'output/continuous-research-20261016'
 STUDY = BASE / 'quantml-full-study'
+N = os.environ.get('EXTRACT_BATCH', '0172')
 RUN_ID = int(os.environ['EXTRACT_RUN_ID'])
-PREFLIGHT = STUDY / 'extract-0172-preflight-20261026.json'
-DISPATCH = STUDY / 'extract-0172-dispatch-20261026.json'
-DELIVERY = STUDY / 'extract-0172-dispatch-delivery'
-RECEIPT = STUDY / 'extract-0172-dispatch-publication.json'
+PREFLIGHT = STUDY / f'extract-{N}-preflight-20261026.json'
+DISPATCH = STUDY / f'extract-{N}-dispatch-20261026.json'
+DELIVERY = STUDY / f'extract-{N}-dispatch-delivery'
+RECEIPT = STUDY / f'extract-{N}-dispatch-publication.json'
 RECIPIENT = Path('/Users/ytfeng/Code_Pj/poly_trade/research-repair-20261015/research_vault/recipient.json')
 RECIPIENT_ID = '5d68eb70893219fd4281958caf0072d145babc30123714f070a3ba058956e7a9'
-CELL_ID = 'quantml-extract-0172-dispatch'
-PRIOR_RUN = 40302264902
+CELL_ID = f'quantml-extract-{N}-dispatch'
+PRIOR_RUN = int(os.environ.get('EXTRACT_PRIOR_RUN', '40302264902'))
 
 sys.path.insert(0, '/Users/ytfeng/Code_Pj/poly_trade/research-repair-20261015/tools')
 import research_vault as vault  # noqa: E402
@@ -68,7 +69,7 @@ def main() -> None:
             raise SystemExit('prior_cursor_identity_conflict')
         now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
         dispatch = {
-            'format': 'quantml-extract-0172-dispatch-v1',
+            'format': f'quantml-extract-{N}-dispatch-v1',
             'created_utc': now,
             'workflow': 'corpus-private-extract.yml',
             'run_id': RUN_ID,
@@ -91,9 +92,9 @@ def main() -> None:
         }
         write_json(DISPATCH, dispatch)
     action = (
-        f'Extract-0172 is the single registered in-flight normal cursor continuation (run {RUN_ID}); '
-        'poll and read it back before any further dispatch. It follows committed cursor run 40302264902, '
-        'does not replay targeted 0171, keeps semantic credit 0, BTC training frozen and buying paused.'
+        f'Extract-{N} is the single registered in-flight normal cursor continuation (run {RUN_ID}); '
+        f'poll and read it back before any further dispatch. It follows committed cursor run {PRIOR_RUN}, '
+        'does not replay targeted recovery, keeps semantic credit 0, BTC training frozen and buying paused.'
     )
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
     paths = [
@@ -105,7 +106,7 @@ def main() -> None:
             continue
         state = load(path)
         state.update({
-            'status': 'extract_0172_inflight',
+            'status': f'extract_{N}_inflight',
             'active_remote_task': dispatch,
             'active_run': RUN_ID,
             'current_inflight_run': RUN_ID,
@@ -137,7 +138,7 @@ def main() -> None:
         vault.validate_recipient(recipient, RECIPIENT_ID)
         DELIVERY.mkdir(mode=0o700, exist_ok=True)
         vault.write_new(DELIVERY / 'part-0000.vault', vault.seal(vault.canonical({
-            'format': 'quantml-extract-0172-dispatch-sealed-v1',
+            'format': f'quantml-extract-{N}-dispatch-sealed-v1',
             'dispatch': dispatch,
             'plaintext_published': False,
             'actual_fills': 0,
@@ -159,7 +160,7 @@ def main() -> None:
             raise SystemExit(proc.stdout.strip() or 'dispatch_publication_failed')
         publication = json.loads(proc.stdout)
         write_json(RECEIPT, {
-            'format': 'quantml-extract-0172-dispatch-publication-v1',
+            'format': f'quantml-extract-{N}-dispatch-publication-v1',
             'cell_id': CELL_ID,
             'source': str(DISPATCH),
             'source_sha256': hashlib.sha256(DISPATCH.read_bytes()).hexdigest(),
@@ -172,13 +173,13 @@ def main() -> None:
     for path in [BASE / 'QuantML-学习进度.md', STUDY / 'QuantML-学习进度.md']:
         if path.is_file():
             text = path.read_text(encoding='utf-8')
-            marker = '## EXTRACT-0172 云端普通续批登记（2026-10-26）'
+            marker = f'## EXTRACT-{N} 云端普通续批登记（2026-10-26）'
             if marker not in text:
                 path.write_text(text + f'\n\n{marker}\n\n'
-                    f'- 在 0170 run `{PRIOR_RUN}` 已提交游标、0171 定向恢复已归因且无游标推进后，只登记一次普通新游标 run `{RUN_ID}`（4 metadata / 4 files / 40 units）。\n'
-                    '- 不带定向 source id，不重复 0171；该批只推进 QuantML 覆盖，不训练、不评估 BTC 策略、不计 semantic credit 或 Canary。\n'
+                    f'- 在前一 authoritative run `{PRIOR_RUN}` 已提交游标、此前定向恢复已归因且无游标推进后，只登记一次普通新游标 run `{RUN_ID}`（4 metadata / 4 files / 40 units）。\n'
+                    f'- 不带定向 source id，不重复此前恢复；该批只推进 QuantML 覆盖，不训练、不评估 BTC 策略、不计 semantic credit 或 Canary。\n'
                     '- 预检、派发和状态登记均通过密文流程核验；终态回读前不重复派发，实盘买入继续暂停。\n', encoding='utf-8')
-    print(json.dumps({'status': 'registered', 'run_id': RUN_ID, 'run_status': run.get('status'), 'dispatch': str(DISPATCH)}, ensure_ascii=False))
+    print(json.dumps({'status': 'registered', 'batch': N, 'run_id': RUN_ID, 'run_status': run.get('status'), 'dispatch': str(DISPATCH)}, ensure_ascii=False))
 
 
 if __name__ == '__main__':
