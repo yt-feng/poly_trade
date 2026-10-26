@@ -23,7 +23,17 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import brier_score_loss, log_loss
 
-from causal_model_small_cash_replay import add_features, build_m1, make_events, replay
+from order_floor_contract import (
+    DEFAULT_MINIMUM_ORDER_SHARES,
+    DEFAULT_MINIMUM_ORDER_USD,
+    required_order_cost,
+)
+from causal_model_small_cash_replay import (
+    add_features,
+    build_m1,
+    make_events,
+    replay,
+)
 
 
 MODEL_NAMES = ("logistic_control", "gaussian_nb", "lda")
@@ -81,7 +91,13 @@ def block_names(names: list[str], sizes: tuple[int, ...]) -> list[list[str]]:
 
 
 def replay_metrics(events: pd.DataFrame, names: list[str], slippage: float) -> dict[str, Any]:
-    metrics, logs = replay(events, names, slippage)
+    metrics, logs = replay(
+        events,
+        names,
+        slippage,
+        minimum_order_usd=DEFAULT_MINIMUM_ORDER_USD,
+        minimum_order_shares=DEFAULT_MINIMUM_ORDER_SHARES,
+    )
     metrics = dict(metrics)
     metrics["min_cash_after_entry"] = float(logs["cash_after_entry"].min()) if not logs.empty else 10.0
     metrics["resolved_trades"] = int(metrics.get("trades", 0))
@@ -183,7 +199,15 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, A
         "selected_cell": selected,
         "same_ledger": True,
         "required_consecutive_resolved_fills": 10,
-        "protocol": {"initial_cash_usd": 10.0, "minimum_order_usd": 5.0, "fee_rate": 0.07, "settlement_plus_release_seconds": 900.0, "slippages": list(SLIPPAGES)},
+        "protocol": {
+            "initial_cash_usd": 10.0,
+            "minimum_order_usd": DEFAULT_MINIMUM_ORDER_USD,
+            "minimum_order_shares": DEFAULT_MINIMUM_ORDER_SHARES,
+            "minimum_order_resolution": "required_cash=max(usd_floor, share_floor*fill_price)",
+            "fee_rate": 0.07,
+            "settlement_plus_release_seconds": 900.0,
+            "slippages": list(SLIPPAGES),
+        },
         "promotion_gate": "selected cell must have >=10 holdout resolved trades, >=$10 ending cash, nonnegative minimum cash, and every holdout block >=$5 with nonnegative PnL at both slippages",
         "promotion_passed": bool(gate),
         "new_data_collected": False,

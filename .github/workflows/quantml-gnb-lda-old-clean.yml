@@ -86,7 +86,7 @@ jobs:
                   'models': ['logistic_control', 'gaussian_nb', 'lda'],
                   'selection_and_holdout': 'first 20 chronological test runs for selection, remaining 59 for holdout',
                   'execution_grid': 'fixed thresholds, price caps, spread caps; no post-hoc retuning',
-                  'cash_contract': '$10 initial, $5 minimum order, 7% fee, 900-second settlement-plus-release, two slippage cells',
+                  'cash_contract': '$10 initial, $5 Gamma USDC notional floor plus 5 CLOB-share floor, 7% fee, 900-second settlement-plus-release, two slippage cells',
                   'primary_gate': 'ten resolved holdout trades on one ledger with nonnegative cash and block stability',
                   'live_orders_enabled': False,
               },

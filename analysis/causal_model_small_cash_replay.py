@@ -23,6 +23,11 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 import all_monthly_clob_systematic_research_v2 as base
+from order_floor_contract import (
+    DEFAULT_MINIMUM_ORDER_SHARES,
+    DEFAULT_MINIMUM_ORDER_USD,
+    required_order_cost,
+)
 
 FILL_RATIO = 0.25
 SETTLEMENT_PLUS_RELEASE = 900.0
@@ -136,7 +141,14 @@ def trade_fee(shares: float, price: float) -> float:
     return round(float(shares) * 0.07 * float(price) * (1.0 - float(price)), 5)
 
 
-def replay(events: pd.DataFrame, run_names: list[str], slippage: float) -> tuple[dict[str, object], pd.DataFrame]:
+def replay(
+    events: pd.DataFrame,
+    run_names: list[str],
+    slippage: float,
+    *,
+    minimum_order_usd: float = DEFAULT_MINIMUM_ORDER_USD,
+    minimum_order_shares: float = DEFAULT_MINIMUM_ORDER_SHARES,
+) -> tuple[dict[str, object], pd.DataFrame]:
     ordered = events[events["run_name"].isin(run_names)].sort_values("first_quote_ts")
     cash = 10.0
     positions: deque[tuple[float, float]] = deque()
@@ -151,7 +163,11 @@ def replay(events: pd.DataFrame, run_names: list[str], slippage: float) -> tuple
         price = float(row["price"])
         fill_price = price + float(slippage)
         capacity = float(row["size"]) * FILL_RATIO * fill_price
-        required = max(5.0, 5.0 * fill_price)
+        required = required_order_cost(
+            fill_price,
+            minimum_order_usd=minimum_order_usd,
+            minimum_order_shares=minimum_order_shares,
+        )
         if cash + 1e-12 < required or capacity + 1e-12 < required or fill_price >= 0.98:
             blocked += 1
             continue
