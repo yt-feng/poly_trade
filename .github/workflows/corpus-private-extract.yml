@@ -63,7 +63,11 @@ permissions:
   contents: write
 concurrency:
   group: corpus-private-extract
-  cancel-in-progress: false
+  # A dispatch can remain in GitHub's pre-queue state indefinitely while the
+  # REST cancel endpoint rejects it as "not queued yet".  Let the next
+  # explicitly registered bounded batch take over that stale control-plane
+  # handle; the local checkpoint still prevents duplicate cursor credit.
+  cancel-in-progress: true
 jobs:
   extract:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
