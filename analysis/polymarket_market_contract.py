@@ -1,10 +1,10 @@
 """Explicit Polymarket market-order contract helpers.
 
 This module is intentionally independent from the frozen H508/H301 adapter.
-Polymarket's ``minimumOrderSize``/``orderMinSize`` is a USDC notional floor;
-it is not a share count.  Strategy share floors, when a protocol explicitly
-requires one, are kept as a separate input so the two units cannot be
-silently compared.
+Polymarket's market ``minimumOrderSize``/Gamma ``orderMinSize`` is a USDC
+notional floor, while the CLOB book's ``min_order_size`` is a share floor.
+They are kept as separate fields so the two units cannot be silently
+compared. Strategy share floors are a third, explicit input.
 """
 from __future__ import annotations
 
@@ -45,7 +45,8 @@ def _timestamp(value: Any) -> datetime:
 class MarketConstraints:
     """Market-level constraints with units made explicit."""
 
-    minimum_order_size_usd: float
+    minimum_order_size_usd: float | None
+    minimum_order_shares: float | None
     tick_size: float
     itode: bool
     observed_ts: datetime
@@ -54,24 +55,31 @@ class MarketConstraints:
 def parse_market_constraints(metadata: Mapping[str, Any]) -> MarketConstraints:
     """Parse official Gamma/CLOB fields without conflating USD and shares.
 
-    ``minimum_order_size_usd`` is preferred for new bundles.  ``min_order_size``
-    and ``orderMinSize`` are accepted aliases because these are the public
-    market-detail names used by existing captures.  If more than one alias is
-    present, their numeric values must agree.
+    ``minimum_order_size_usd`` and ``orderMinSize`` are the market-detail
+    notional fields. ``min_order_size`` and ``minimum_order_size_shares`` are
+    CLOB-book share fields. Both may be supplied and are validated separately.
     """
     if not isinstance(metadata, Mapping):
         raise ContractError("market_metadata_must_be_object")
-    aliases = [
+    usd_aliases = [
         metadata.get("minimum_order_size_usd"),
-        metadata.get("min_order_size"),
         metadata.get("orderMinSize"),
     ]
-    present = [_finite(value) for value in aliases if value is not None]
-    if not present or any(value is None or value <= 0 for value in present):
+    present_usd = [_finite(value) for value in usd_aliases if value is not None]
+    if any(value is None or value <= 0 for value in present_usd):
         raise ContractError("minimum_order_size_usd_invalid")
-    minimum_order_size_usd = present[0]
-    if any(abs(value - minimum_order_size_usd) > 1e-12 for value in present[1:]):
-        raise ContractError("minimum_order_size_alias_conflict")
+    minimum_order_size_usd = present_usd[0] if present_usd else None
+    if len(present_usd) > 1 and any(abs(value - minimum_order_size_usd) > 1e-12 for value in present_usd[1:]):
+        raise ContractError("minimum_order_size_usd_alias_conflict")
+    share_aliases = [metadata.get("minimum_order_size_shares"), metadata.get("min_order_size")]
+    present_shares = [_finite(value) for value in share_aliases if value is not None]
+    if any(value is None or value <= 0 for value in present_shares):
+        raise ContractError("minimum_order_size_shares_invalid")
+    minimum_order_shares = present_shares[0] if present_shares else None
+    if len(present_shares) > 1 and any(abs(value - minimum_order_shares) > 1e-12 for value in present_shares[1:]):
+        raise ContractError("minimum_order_shares_alias_conflict")
+    if minimum_order_size_usd is None and minimum_order_shares is None:
+        raise ContractError("minimum_order_constraint_missing")
     tick_size = _finite(metadata.get("tick_size"))
     if tick_size is None or tick_size <= 0:
         raise ContractError("tick_size_invalid")
@@ -80,7 +88,8 @@ def parse_market_constraints(metadata: Mapping[str, Any]) -> MarketConstraints:
         raise ContractError("itode_invalid")
     observed_ts = _timestamp(metadata.get("observed_ts"))
     return MarketConstraints(
-        minimum_order_size_usd=float(minimum_order_size_usd),
+        minimum_order_size_usd=(float(minimum_order_size_usd) if minimum_order_size_usd is not None else None),
+        minimum_order_shares=(float(minimum_order_shares) if minimum_order_shares is not None else None),
         tick_size=float(tick_size),
         itode=itode,
         observed_ts=observed_ts,
@@ -102,13 +111,16 @@ def required_order_notional_usd(
     numeric_price = _finite(price)
     if numeric_price is None or not 0 < numeric_price < 1:
         raise ContractError("price_invalid")
-    share_floor = 0.0
+    share_floor = (constraints.minimum_order_shares or 0.0) * numeric_price
     if strategy_minimum_shares is not None:
         numeric_shares = _finite(strategy_minimum_shares)
         if numeric_shares is None or numeric_shares <= 0:
             raise ContractError("strategy_minimum_shares_invalid")
-        share_floor = numeric_price * numeric_shares
-    return max(constraints.minimum_order_size_usd, share_floor)
+        share_floor = max(share_floor, numeric_price * numeric_shares)
+    candidates = [share_floor]
+    if constraints.minimum_order_size_usd is not None:
+        candidates.append(constraints.minimum_order_size_usd)
+    return max(candidates)
 
 
 def price_is_on_tick(price: Any, tick_size: Any) -> bool:
@@ -137,10 +149,12 @@ def validate_order_contract(
     result: dict[str, Any] = {
         "minimum_order_size_usd": constraints.minimum_order_size_usd,
         "tick_size": constraints.tick_size,
+        "minimum_order_shares": constraints.minimum_order_shares,
         "itode": constraints.itode,
         "observed_ts": constraints.observed_ts.isoformat(),
         "unit_semantics": {
-            "market_minimum": "usdc_notional",
+            "market_minimum_notional": "usdc_notional_optional",
+            "market_minimum_shares": "shares_optional",
             "strategy_minimum": "shares_optional",
         },
     }
