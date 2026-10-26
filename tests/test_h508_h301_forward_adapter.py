@@ -14,6 +14,7 @@ def _source():
         "h508_summary_sha256": digest,
         "h301_projection_sha256": digest,
         "market_constraints_sha256": digest,
+        "market_metadata_sha256": digest,
         "depth_source_sha256": digest,
         "fee_source_sha256": digest,
         "latency_source_sha256": digest,
@@ -61,6 +62,7 @@ def _document():
         "protocol": _protocol(),
         "rows": [_row()],
         "quotes": {"btc-up-1": [{"ts_iso": "2026-01-01T00:01:00+00:00", "sell_up_cents": 55, "sell_up_size": 20}]},
+        "market_metadata": {"btc-up-1": {"min_order_size": 5.0, "tick_size": 0.01, "itode": False, "observed_ts": "2026-01-01T00:00:00+00:00"}},
     }
 
 
@@ -79,6 +81,20 @@ def test_missing_execution_provenance_is_rejected():
     source.pop("depth_source_sha256")
     with pytest.raises(ContractError, match="missing_or_invalid_digest:depth_source_sha256"):
         validate_document({**_document(), "source": source})
+
+
+def test_missing_market_metadata_is_rejected():
+    document = _document()
+    document.pop("market_metadata")
+    with pytest.raises(ContractError, match="market_metadata_missing"):
+        validate_document(document)
+
+
+def test_market_metadata_requires_explicit_delay_flag_and_tick():
+    document = _document()
+    document["market_metadata"]["btc-up-1"]["itode"] = "false"
+    with pytest.raises(ContractError, match="market_metadata_itode_invalid"):
+        validate_document(document)
 
 
 def test_unverified_owner_row_cannot_enter_paper_adapter():

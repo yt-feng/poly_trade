@@ -73,7 +73,8 @@ def validate_document(document: Any) -> dict[str, Any]:
         errors.append("source_provenance_missing")
         source = {}
     for name in ("h508_summary_sha256", "h301_projection_sha256", "market_constraints_sha256",
-                 "depth_source_sha256", "fee_source_sha256", "latency_source_sha256"):
+                 "market_metadata_sha256", "depth_source_sha256", "fee_source_sha256",
+                 "latency_source_sha256"):
         _require_digest(source, name, errors)
     if source.get("source_commit") != "bbda5f2050685f63153621a54641ebdfab943487":
         errors.append("h508_source_commit_mismatch")
@@ -140,6 +141,32 @@ def validate_document(document: Any) -> dict[str, Any]:
             errors.append(f"row_price_invalid:{index}")
         if _finite(row.get("entry_depth")) is None or float(row["entry_depth"]) < 0:
             errors.append(f"row_depth_invalid:{index}")
+
+    # The official CLOB contract is market-specific and can change while a
+    # paper bundle is being assembled.  A numeric USD floor alone is not
+    # enough: bind every candidate row to the contemporaneous share floor,
+    # tick, taker-delay flag, and observation timestamp used for admission.
+    market_metadata = document.get("market_metadata")
+    if not isinstance(market_metadata, dict):
+        errors.append("market_metadata_missing")
+        market_metadata = {}
+    for index, row in enumerate(rows[:MAX_ROWS]):
+        if not isinstance(row, dict):
+            continue
+        slug = str(row.get("slug", "")).strip()
+        metadata = market_metadata.get(slug)
+        if not isinstance(metadata, dict):
+            errors.append(f"market_metadata_missing:{index}")
+            continue
+        for name in ("min_order_size", "tick_size", "itode", "observed_ts"):
+            if name not in metadata or metadata.get(name) in (None, ""):
+                errors.append(f"market_metadata_field_missing:{index}:{name}")
+        if _finite(metadata.get("min_order_size")) is None or float(metadata.get("min_order_size")) <= 0:
+            errors.append(f"market_metadata_min_order_size_invalid:{index}")
+        if _finite(metadata.get("tick_size")) is None or float(metadata.get("tick_size")) <= 0:
+            errors.append(f"market_metadata_tick_size_invalid:{index}")
+        if type(metadata.get("itode")) is not bool:
+            errors.append(f"market_metadata_itode_invalid:{index}")
 
     quotes = document.get("quotes")
     if not isinstance(quotes, dict):
