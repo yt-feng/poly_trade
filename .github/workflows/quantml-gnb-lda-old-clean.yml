@@ -1,0 +1,129 @@
+name: QuantML GaussianNB LDA old-clean challenger
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Immutable old-clean source commit
+        required: true
+        default: bbda5f2050685f63153621a54641ebdfab943487
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: quantml-gnb-lda-old-clean
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout poly_trade
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout immutable old-clean source
+        uses: actions/checkout@v4
+        with:
+          repository: yt-feng/poly
+          path: source_poly
+          fetch-depth: 1
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install private research dependencies
+        run: python -m pip install -r requirements.txt -r requirements-vault.txt pandas numpy scikit-learn
+      - name: Run frozen causal challenger
+        env:
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          PRIVATE_DIR="$RUNNER_TEMP/quantml-gnb-lda"
+          mkdir -m 700 "$PRIVATE_DIR"
+          python -u analysis/quantml_gnb_lda_small_cash.py \
+            --source-root source_poly/data/monthly_runs \
+            --source-commit "${{ inputs.source_commit }}" \
+            --output "$PRIVATE_DIR/results" > "$PRIVATE_DIR/analysis-output.txt"
+      - name: Seal encrypted outcome
+        if: always()
+        env:
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          EVALUATION_OUTCOME: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/quantml-gnb-lda" <<'PY'
+          import base64, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          import research_vault
+          private = Path(sys.argv[1])
+          encoded = os.environ.get('QUALITY_FIRST_RECIPIENT_JSON_B64', '')
+          recipient_id = os.environ.get('QUALITY_FIRST_RECIPIENT_ID', '')
+          if not encoded or not recipient_id:
+              raise SystemExit('recipient unavailable')
+          recipient = research_vault.load_json_bytes(base64.b64decode(encoded, validate=True), 4096)
+          research_vault.validate_recipient(recipient, recipient_id)
+          results = private / 'results'
+          try:
+              report = json.loads((results / 'meta.json').read_text())
+          except (OSError, ValueError):
+              report = {}
+          payload = {
+              'format': 'quantml-gnb-lda-old-clean-sealed-v1',
+              'preregistration': {
+                  'models': ['logistic_control', 'gaussian_nb', 'lda'],
+                  'selection_and_holdout': 'first 20 chronological test runs for selection, remaining 59 for holdout',
+                  'execution_grid': 'fixed thresholds, price caps, spread caps; no post-hoc retuning',
+                  'cash_contract': '$10 initial, $5 minimum order, 7% fee, 900-second settlement-plus-release, two slippage cells',
+                  'primary_gate': 'ten resolved holdout trades on one ledger with nonnegative cash and block stability',
+                  'live_orders_enabled': False,
+              },
+              'report': report,
+              'model_metrics_csv': (results / 'model_metrics.csv').read_text() if (results / 'model_metrics.csv').is_file() else '',
+              'grid_csv': (results / 'grid.csv').read_text() if (results / 'grid.csv').is_file() else '',
+              'analysis_output': (private / 'analysis-output.txt').read_text() if (private / 'analysis-output.txt').is_file() else '',
+              'workflow': {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'source_commit': os.environ['SOURCE_COMMIT'], 'evaluation_outcome': os.environ['EVALUATION_OUTCOME']},
+              'actual_fills': 0,
+              'verified_canary_fills': 0,
+              'live_orders_enabled': False,
+              'plaintext_published': False,
+          }
+          delivery = Path('sealed-delivery')
+          delivery.mkdir(mode=0o700)
+          research_vault.write_new(delivery / 'part-0000.vault', research_vault.seal(research_vault.canonical(payload), recipient, recipient_id), 0o600)
+          research_vault.write_new(delivery / 'status.json', research_vault.canonical({'version': 1, 'status': 'complete', 'stage': 'sealed_delivery', 'strategy_evaluated': bool(report.get('model_fit_calls')), 'live_orders_enabled': False, 'plaintext_published': False, 'sealed_parts': 1}) + b'\n', 0o644)
+          PY
+      - name: Persist only encrypted research outcome
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools python tools/publish_quality_first_journal.py \
+            --source sealed-delivery \
+            --repository yt-feng/poly_trade \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --recipient-id "$RESEARCH_RECIPIENT_ID"
+      - name: Write redacted summary
+        if: always()
+        run: |
+          echo '## QuantML GaussianNB/LDA old-clean challenger' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Old-clean source, causal expanding fits, fees, slippage and one-ledger cash gate were frozen before evaluation.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Detailed metrics remain encrypted; no order or canary was created.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove runner-local plaintext
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/quantml-gnb-lda" sealed-delivery
