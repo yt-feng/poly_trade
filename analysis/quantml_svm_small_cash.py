@@ -20,13 +20,14 @@ from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import LinearSVC, SVC
+from sklearn.kernel_approximation import Nystroem
+from sklearn.svm import LinearSVC
 from sklearn.metrics import brier_score_loss, log_loss
 
 from causal_model_small_cash_replay import add_features, build_m1, make_events, replay
 
 
-MODEL_NAMES = ("logistic_control", "linear_svm", "rbf_svm")
+MODEL_NAMES = ("logistic_control", "linear_svm", "rbf_svm_nystroem")
 THRESHOLDS = (0.55, 0.60, 0.65, 0.70, 0.75, 0.80)
 PRICE_CAPS = (0.50, 0.55, 0.60)
 SPREAD_CAPS = (0.04, 0.06)
@@ -44,15 +45,18 @@ def make_model(name: str) -> Pipeline:
             cv=3,
             n_jobs=1,
         )
-    elif name == "rbf_svm":
-        estimator = SVC(
-            kernel="rbf",
-            C=1.0,
-            gamma="scale",
-            probability=True,
-            random_state=0,
-            cache_size=256,
-        )
+    elif name == "rbf_svm_nystroem":
+        # Fixed finite RBF map keeps the expanding protocol causal while
+        # avoiding quadratic SVC probability calibration at every refit.
+        estimator = Pipeline([
+            ("rbf_map", Nystroem(kernel="rbf", gamma=0.5, n_components=128, random_state=0, n_jobs=1)),
+            ("calibrate", CalibratedClassifierCV(
+                estimator=LinearSVC(C=0.5, dual=True, max_iter=2000, random_state=0),
+                method="sigmoid",
+                cv=3,
+                n_jobs=1,
+            )),
+        ])
     else:
         raise ValueError(f"unknown_model:{name}")
     return Pipeline([
@@ -179,13 +183,13 @@ def evaluate(source_root: Path, output: Path, source_commit: str) -> dict[str, A
     grid.to_csv(output / "grid.csv", index=False)
     pd.DataFrame(model_rows).to_csv(output / "model_metrics.csv", index=False)
     report = {
-        "format": "quantml-svm-old-clean-small-cash-v1",
+        "format": "quantml-svm-nystroem-old-clean-small-cash-v2",
         "source_commit": source_commit,
         "complete_runs": len(runs),
         "usable_m1_markets": len(frame),
         "features": features,
         "models": list(MODEL_NAMES),
-        "calibration": {"linear_svm": "past-only training-window sigmoid cv=3", "rbf_svm": "past-only SVC probability calibration"},
+        "calibration": {"linear_svm": "past-only training-window sigmoid cv=3", "rbf_svm_nystroem": "past-only training-window Nystroem RBF (gamma=0.5, n_components=128) plus sigmoid cv=3"},
         "model_fit_calls": model_fit_calls,
         "model_predict_calls": model_predict_calls,
         "model_metrics": model_rows,

@@ -81,12 +81,12 @@ jobs:
           except (OSError, ValueError):
               report = {}
           payload = {
-              'format': 'quantml-svm-old-clean-sealed-v1',
+              'format': 'quantml-svm-nystroem-old-clean-sealed-v2',
               'preregistration': {
-                  'models': ['logistic_control', 'linear_svm', 'rbf_svm'],
+                  'models': ['logistic_control', 'linear_svm', 'rbf_svm_nystroem'],
                   'selection_and_holdout': 'first 20 chronological test runs for selection, remaining 59 for holdout',
                   'execution_grid': 'fixed thresholds, price caps, spread caps; no post-hoc retuning',
-                  'calibration': 'linear SVM past-only training-window sigmoid cv=3; RBF SVC probability calibration',
+                  'calibration': 'linear SVM past-only training-window sigmoid cv=3; fixed Nystroem RBF map gamma=0.5,n_components=128 then sigmoid cv=3',
                   'cash_contract': '$10 initial, $5 minimum order, 7% fee, 900-second settlement-plus-release, two slippage cells',
                   'primary_gate': 'ten resolved holdout trades on one ledger with nonnegative cash and block stability',
                   'live_orders_enabled': False,
@@ -123,7 +123,7 @@ jobs:
         if: always()
         run: |
           echo '## QuantML calibrated SVM old-clean challenger' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Past-only calibrated linear/RBF SVM and one-ledger cash gate were frozen before evaluation.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Past-only calibrated linear/Nystroem-RBF SVM and one-ledger cash gate were frozen before evaluation.' >> "$GITHUB_STEP_SUMMARY"
           echo '- Detailed metrics remain encrypted; no order or canary was created.' >> "$GITHUB_STEP_SUMMARY"
       - name: Remove runner-local plaintext
         if: always()
