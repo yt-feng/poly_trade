@@ -76,6 +76,8 @@ def main() -> int:
         raise RuntimeError("frozen_gate_changed")
 
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    prior_credit = max(int(read(STUDY / "progress.json").get("semantic_credit", 0)), 0)
+    cumulative_credit = prior_credit + 1
     response_digest = synthesis.get("response_sha256")
     card = {
         "schema": "quantml-semantic-learning-record-v2",
@@ -114,7 +116,7 @@ def main() -> int:
         "response_sha256": response_digest,
         "source_locator_count": len(locators),
         "semantic_units_credited": 1,
-        "semantic_credit": 1,
+        "semantic_credit": cumulative_credit,
         "new_hypotheses": 0,
         "strategy_evaluations": 0,
         "actual_fills": 0,
@@ -139,7 +141,7 @@ def main() -> int:
         state = read(path)
         state.update(
             {
-                "semantic_credit": max(int(state.get("semantic_credit", 0)), 1),
+                "semantic_credit": max(int(state.get("semantic_credit", 0)), cumulative_credit),
                 "semantic_backend_gate": "remote_probe_authenticated; bounded_synthesis_readback_verified",
                 "semantic_backend_credentials_present_by_name": True,
                 "semantic_backend_last_checked_utc": now,
@@ -152,7 +154,7 @@ def main() -> int:
     section = (
         "\n\n" + marker + "\n\n"
         f"- Actions run {run_id} 的 DeepSeek v4-pro 回读完成：HTTP 200，结构化字段完整，{len(locators)} 个 source_locator 均约束在 SOURCE 1/2；输入是同一已登记材料的受控证据单元。\n"
-        "- 只登记 1 个语义验证单元；没有新假设、策略评估、实际成交或 canary，full corpus 仍未完成，冻结 BTC 协议不变。\n"
+        f"- 只登记 1 个新的语义验证单元，累计 semantic_credit={cumulative_credit}；没有新假设、策略评估、实际成交或 canary，full corpus 仍未完成，冻结 BTC 协议不变。\n"
         "- 原始响应和语义内容仅在已核验公钥密文中保存；下一步不得重放该 cursor，需另行预注册 source cursor。\n"
     )
     for path in [BASE / "QuantML-学习进度.md", STUDY / "QuantML-学习进度.md"]:
