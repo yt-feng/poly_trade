@@ -210,11 +210,11 @@ def main() -> int:
         "remote_branch": receipt.get("branch"),
         "remote_episode_id": receipt.get("episode_id"),
         "plaintext_published": False,
-        "semantic_credit": 1,
+        "semantic_credit": cumulative_credit,
         "sealed_parts": receipt.get("sealed_parts"),
         "validation_scope": receipt.get("validation_scope"),
     })
-    print(json.dumps({"status": "verified_and_published", "semantic_credit": 1, "remote_episode_id": receipt.get("episode_id")}, ensure_ascii=False))
+    print(json.dumps({"status": "verified_and_published", "semantic_credit": cumulative_credit, "remote_episode_id": receipt.get("episode_id")}, ensure_ascii=False))
     return 0
 
 
