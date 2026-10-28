@@ -636,7 +636,8 @@ def build_unit_delivery(output, worker_hash, source_run, report):
         # but only for the exact source cursor supplied by the caller.  This is
         # a read-only reuse of an immutable artifact, not a new extraction or
         # semantic credit.
-        allow_acknowledged_target_readback = bool(priority_sources)
+        explicit_readback = bool(report.get('explicit_recovery_source_ids'))
+        allow_acknowledged_target_readback = bool(priority_sources) and explicit_readback
         report['unit_delivery_allow_acknowledged_target_readback'] = allow_acknowledged_target_readback
         if priority_sources and (output / 'manifest-state.jsonl').exists():
             # Close the parent->child relation without loading the complete
@@ -696,6 +697,8 @@ def build_unit_delivery(output, worker_hash, source_run, report):
             # currently deliverable units; doing so can silently synthesize the
             # wrong material under a valid-looking readback.
             deliver_pass(True)
+            if not explicit_readback and exhausted:
+                deliver_pass(False)
         else:
             deliver_pass(None)
     report.update(unit_delivery_complete_for_cloud_snapshot=exhausted and not pending_large_units,
@@ -967,6 +970,7 @@ def readback_existing_output(worker_raw, worker_hash):
             missing.append(sid)
     report['selected_manifest'] = selected_manifest
     report['recovery_source_ids'] = requested_ids
+    report['explicit_recovery_source_ids'] = requested_ids
     report['recovery_source_ids_missing'] = missing
     attach_output_snapshot(output, worker_hash, payload['run_id'], report)
     report['status'] = 'readback_observed'
