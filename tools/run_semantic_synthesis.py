@@ -138,7 +138,7 @@ def seal_and_publish(record: dict) -> dict:
     pub = subprocess.run(
         [
             sys.executable,
-            str(PROJECT / "research-repair-20261015/tools/publish_quality_first_journal.py"),
+            str(PROJECT / "tools/publish_quality_first_journal.py"),
             "--source", str(delivery),
             "--repository", "yt-feng/poly_trade",
             "--run-id", run_id,
@@ -146,7 +146,7 @@ def seal_and_publish(record: dict) -> dict:
             "--recipient-id", RECIPIENT_ID,
             "--cell-id", "semantic-synthesis-20261028",
         ],
-        cwd=PROJECT / "research-repair-20261015",
+        cwd=PROJECT,
         capture_output=True,
         text=True,
         timeout=180,
