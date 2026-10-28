@@ -937,6 +937,31 @@ def readback_existing_output(worker_raw, worker_hash):
     if worker_lock_busy(output / 'worker.lock'):
         report['status'] = 'deferred_active_worker'
         return
+    # In readback mode the worker cache is immutable, but the requested source
+    # cursor still defines the attribution boundary.  Reconstruct that bounded
+    # manifest from the small metadata records before building unit delivery;
+    # otherwise the delivery builder cannot distinguish the requested source
+    # from older unacknowledged queue entries.
+    requested_ids = payload.get('recovery_source_ids', [])
+    if not isinstance(requested_ids, list):
+        raise ValueError('invalid_readback_source_ids')
+    selected_manifest, missing = [], []
+    for sid in requested_ids:
+        try:
+            meta = json.loads(read_small(ROOT / 'metadata' / sid, 8192))
+            if meta.get('source_id') != sid or not isinstance(meta.get('relative_path'), str):
+                raise ValueError('metadata_source_identity')
+            selected_manifest.append({
+                'source_id': sid,
+                'relative_path': meta['relative_path'],
+                'size_bytes': meta.get('size_bytes'),
+                'sha256': meta.get('sha256'),
+            })
+        except (FileNotFoundError, ValueError, OSError, json.JSONDecodeError):
+            missing.append(sid)
+    report['selected_manifest'] = selected_manifest
+    report['recovery_source_ids'] = requested_ids
+    report['recovery_source_ids_missing'] = missing
     attach_output_snapshot(output, worker_hash, payload['run_id'], report)
     report['status'] = 'readback_observed'
 
