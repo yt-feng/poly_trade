@@ -109,8 +109,14 @@ def seal_and_publish(record: dict) -> dict:
     base.mkdir(parents=True, exist_ok=True)
     delivery = base / "semantic-synthesis-20261028-delivery"
     delivery.mkdir(mode=0o700, exist_ok=True)
-    recipient_file = PROJECT / "research-repair-20261015/research_vault/recipient.json"
-    recipient = vault.load_json_bytes(vault.read_bounded(recipient_file, 4096), 4096)
+    encoded_recipient = os.environ.get("QUALITY_FIRST_RECIPIENT_JSON_B64", "")
+    if not encoded_recipient:
+        raise RuntimeError("recipient_public_key_missing")
+    try:
+        recipient_raw = base64.b64decode(encoded_recipient, validate=True)
+    except Exception as exc:
+        raise RuntimeError("recipient_public_key_invalid") from exc
+    recipient = vault.load_json_bytes(recipient_raw, 4096)
     vault.validate_recipient(recipient, RECIPIENT_ID)
     vault.write_new(delivery / "part-0000.vault", vault.seal(vault.canonical(record), recipient, RECIPIENT_ID), 0o600)
     vault.write_new(
