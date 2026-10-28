@@ -128,7 +128,6 @@ def seal_and_publish(record: dict) -> dict:
             "strategy_evaluated": False,
             "live_orders_enabled": False,
             "plaintext_published": False,
-            "semantic_credit": 0,
             "sealed_parts": 1,
         }) + b"\n",
         0o644,
