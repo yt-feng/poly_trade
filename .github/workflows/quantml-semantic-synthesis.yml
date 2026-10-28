@@ -1,6 +1,12 @@
 name: quantml-semantic-synthesis
 on:
   workflow_dispatch:
+    inputs:
+      recovery_source_id:
+        description: 'One distinct registered QuantML source cursor; bounded readback only'
+        required: false
+        type: string
+        default: '095f61199323118a9c952831583a344760945c3a50d36429c57408b121cb5f60'
 permissions:
   contents: write
 concurrency:
@@ -28,7 +34,7 @@ jobs:
           CORPUS_MAX_METADATA: '1'
           CORPUS_MAX_FILES: '1'
           CORPUS_MAX_UNITS: '2'
-          CORPUS_RECOVERY_SOURCE_IDS: '0f3dffb24e62acef5fcf69d09f0232f9f8fb008a9533e1aef4a913258ae8ea33'
+          CORPUS_RECOVERY_SOURCE_IDS: ${{ inputs.recovery_source_id || '095f61199323118a9c952831583a344760945c3a50d36429c57408b121cb5f60' }}
           QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
           QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
           CORPUS_SSH_HOST: ${{ secrets.CORPUS_SSH_HOST }}
