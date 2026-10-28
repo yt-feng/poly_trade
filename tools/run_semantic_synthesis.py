@@ -48,7 +48,8 @@ def api_call(source_texts: list[dict]) -> dict:
         "data requirements, causal/time-leakage risks, and transfer limits. Return JSON "
         "with keys: source_cards, method_claims, formulas, data_quality_gaps, "
         "btc5m_transfer_limits, falsifiable_next_tests. Every claim must include a "
-        "short source_locator. Keep the JSON concise (under 700 output tokens). If the "
+        "source_locator that is exactly the literal string SOURCE 1 or SOURCE 2; never "
+        "copy a filesystem path into source_locator. Keep the JSON concise (under 700 output tokens). If the "
         "material has no executable edge, say so.\n\n"
         + joined
     )
