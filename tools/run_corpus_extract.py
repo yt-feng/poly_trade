@@ -685,9 +685,11 @@ def build_unit_delivery(output, worker_hash, source_run, report):
                         break
 
         if priority_sources:
+            # An explicit recovery cursor is an attribution boundary.  Never
+            # fall back to an older queue item when the requested source has no
+            # currently deliverable units; doing so can silently synthesize the
+            # wrong material under a valid-looking readback.
             deliver_pass(True)
-            if exhausted:
-                deliver_pass(False)
         else:
             deliver_pass(None)
     report.update(unit_delivery_complete_for_cloud_snapshot=exhausted and not pending_large_units,
