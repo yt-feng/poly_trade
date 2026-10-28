@@ -59,7 +59,10 @@ def api_call(source_texts: list[dict]) -> dict:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,
-        "max_tokens": 2400,
+        # v4-pro reasoning can consume >2k completion tokens before the
+        # concise JSON body; keep the output cap bounded but avoid truncating a
+        # valid response at finish_reason=length.
+        "max_tokens": 4800,
         "response_format": {"type": "json_object"},
     }
     raw_body = json.dumps(body, ensure_ascii=False).encode("utf-8")
