@@ -79,12 +79,34 @@ def api_call(source_texts: list[dict]) -> dict:
     if len(response_raw) > MAX_OUTPUT_CHARS:
         return {"status": "response_too_large", "http_status": status, "semantic_worker_credit": 0}
     digest = hashlib.sha256(response_raw).hexdigest()
+    def parse_json_content(content: object) -> dict:
+        if isinstance(content, dict):
+            return content
+        if not isinstance(content, str):
+            raise ValueError("response_content_not_text")
+        candidate = content.strip()
+        if candidate.startswith("```"):
+            lines = candidate.splitlines()
+            if lines and lines[0].lstrip().startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            candidate = "\n".join(lines).strip()
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            start, end = candidate.find("{"), candidate.rfind("}")
+            if start < 0 or end <= start:
+                raise
+            parsed = json.loads(candidate[start:end + 1])
+        if not isinstance(parsed, dict):
+            raise ValueError("response_not_object")
+        return parsed
+
     try:
         envelope = json.loads(response_raw)
         content = envelope["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
-        if not isinstance(parsed, dict):
-            raise ValueError("response_not_object")
+        parsed = parse_json_content(content)
     except Exception as exc:
         return {
             "status": "invalid_json_response",
