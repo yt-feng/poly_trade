@@ -1,0 +1,51 @@
+name: quantml-semantic-synthesis
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: quantml-semantic-synthesis
+  cancel-in-progress: false
+jobs:
+  synthesize:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-vault.txt
+      - name: Compile cloud-only semantic controller
+        run: python -m py_compile tools/run_semantic_synthesis.py tools/run_corpus_extract.py tools/corpus_worker.py
+      - name: Read back one source cursor and synthesize through DeepSeek
+        env:
+          CORPUS_EXTRACT_MODE: readback
+          CORPUS_PDF_OCR: 'false'
+          CORPUS_MAX_METADATA: '1'
+          CORPUS_MAX_FILES: '1'
+          CORPUS_MAX_UNITS: '2'
+          CORPUS_RECOVERY_SOURCE_IDS: '0f3dffb24e62acef5fcf69d09f0232f9f8fb008a9533e1aef4a913258ae8ea33'
+          QUALITY_FIRST_RECIPIENT_JSON_B64: ${{ vars.QUALITY_FIRST_RECIPIENT_JSON_B64 }}
+          QUALITY_FIRST_RECIPIENT_ID: ${{ vars.QUALITY_FIRST_RECIPIENT_ID }}
+          CORPUS_SSH_HOST: ${{ secrets.CORPUS_SSH_HOST }}
+          CORPUS_SSH_USER: ${{ secrets.CORPUS_SSH_USER }}
+          CORPUS_SSH_KNOWN_HOSTS: ${{ secrets.CORPUS_SSH_KNOWN_HOSTS }}
+          CORPUS_DELIVERY_ACK_B64: ${{ secrets.CORPUS_DELIVERY_ACK_B64 }}
+          AWS_ADMIN_SSH_KEY: ${{ secrets.AWS_ADMIN_SSH_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/run_semantic_synthesis.py
+      - name: Upload sealed result only
+        uses: actions/upload-artifact@v4
+        with:
+          name: quantml-semantic-synthesis-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/continuous-research-20261016/semantic-synthesis-20261028-delivery/*.vault
+            output/continuous-research-20261016/semantic-synthesis-20261028-delivery/status.json
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
