@@ -48,7 +48,8 @@ def api_call(source_texts: list[dict]) -> dict:
         "data requirements, causal/time-leakage risks, and transfer limits. Return JSON "
         "with keys: source_cards, method_claims, formulas, data_quality_gaps, "
         "btc5m_transfer_limits, falsifiable_next_tests. Every claim must include a "
-        "short source_locator. If the material has no executable edge, say so.\n\n"
+        "short source_locator. Keep the JSON concise (under 700 output tokens). If the "
+        "material has no executable edge, say so.\n\n"
         + joined
     )
     body = {
@@ -58,7 +59,7 @@ def api_call(source_texts: list[dict]) -> dict:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,
-        "max_tokens": 1400,
+        "max_tokens": 2400,
         "response_format": {"type": "json_object"},
     }
     raw_body = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -125,6 +126,7 @@ def api_call(source_texts: list[dict]) -> dict:
             raise ValueError("response_not_object")
         return parsed
 
+    envelope = None
     content = None
     try:
         envelope = json.loads(response_raw)
@@ -134,8 +136,12 @@ def api_call(source_texts: list[dict]) -> dict:
         return {
             "status": "invalid_json_response",
             "http_status": status,
+            "model": "deepseek-v4-pro",
             "response_sha256": digest,
             "response_text": content if isinstance(content, str) else None,
+            "response_len": len(content) if isinstance(content, str) else 0,
+            "finish_reason": (envelope.get("choices") or [{}])[0].get("finish_reason") if isinstance(envelope, dict) else None,
+            "usage": envelope.get("usage") if isinstance(envelope, dict) else None,
             "error_class": type(exc).__name__,
             "semantic_worker_credit": 0,
         }
