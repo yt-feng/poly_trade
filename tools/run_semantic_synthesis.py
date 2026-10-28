@@ -233,6 +233,14 @@ def main() -> int:
     created = now_utc()
     extracted = record.get("extraction") if isinstance(record, dict) else None
     texts: list[dict] = []
+    source_path_by_id: dict[str, str] = {}
+    if isinstance(extracted, dict):
+        for entry in extracted.get("selected_manifest", []):
+            if isinstance(entry, dict) and isinstance(entry.get("source_id"), str) and isinstance(entry.get("relative_path"), str):
+                source_path_by_id[entry["source_id"]] = entry["relative_path"]
+        for entry in extracted.get("source_receipts", []):
+            if isinstance(entry, dict) and isinstance(entry.get("source_id"), str) and isinstance(entry.get("relative_path"), str):
+                source_path_by_id.setdefault(entry["source_id"], entry["relative_path"])
     if isinstance(extracted, dict):
         for item in extracted.get("unit_texts", []):
             if not isinstance(item, dict) or not item.get("artifact_complete"):
@@ -240,7 +248,11 @@ def main() -> int:
             text = item.get("artifact_utf8")
             unit = item.get("unit") if isinstance(item.get("unit"), dict) else {}
             if isinstance(text, str) and text:
-                texts.append({"path": unit.get("relative_path", "unknown"), "text": text})
+                source_id = unit.get("source_id")
+                path = unit.get("relative_path") if isinstance(unit.get("relative_path"), str) else source_path_by_id.get(source_id)
+                if not isinstance(path, str) or not path:
+                    continue
+                texts.append({"path": path, "source_id": source_id, "text": text})
             if len(texts) >= 2:
                 break
     synthesis = api_call(texts) if texts else {"status": "no_bounded_text_readback", "semantic_worker_credit": 0}
@@ -251,6 +263,7 @@ def main() -> int:
         "source_scope": "one explicit source-cursor readback; not full corpus",
         "source_text_count_sent": len(texts),
         "source_paths_sent": [item["path"] for item in texts],
+        "source_ids_sent": [item.get("source_id") for item in texts],
         "synthesis": synthesis,
         "semantic_credit": 0,
         "strategy_evaluations": 0,
