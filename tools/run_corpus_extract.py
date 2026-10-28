@@ -632,6 +632,12 @@ def build_unit_delivery(output, worker_hash, source_run, report):
         # sources) while retaining the original order for all other evidence.
         priority_sources = {entry.get('source_id') for entry in (report.get('selected_manifest') or [])
                             if isinstance(entry, dict) and isinstance(entry.get('source_id'), str)}
+        # Explicit semantic readback may request already-acknowledged evidence,
+        # but only for the exact source cursor supplied by the caller.  This is
+        # a read-only reuse of an immutable artifact, not a new extraction or
+        # semantic credit.
+        allow_acknowledged_target_readback = bool(priority_sources)
+        report['unit_delivery_allow_acknowledged_target_readback'] = allow_acknowledged_target_readback
         if priority_sources and (output / 'manifest-state.jsonl').exists():
             # Close the parent->child relation without loading the complete
             # manifest into memory.  A bounded number of passes is sufficient
@@ -667,7 +673,7 @@ def build_unit_delivery(output, worker_hash, source_run, report):
                         content_hash = item.get('artifact_sha256')
                         exact_ack = (acknowledged.get(key) == digest or cross_worker_acknowledged.get(key) == digest
                                      or digest in versioned_acknowledged.get(key, {}))
-                        if complete and exact_ack:
+                        if complete and exact_ack and not (allow_acknowledged_target_readback and is_priority):
                             skipped += 1
                             continue
                         report['unit_texts'].append(item)
