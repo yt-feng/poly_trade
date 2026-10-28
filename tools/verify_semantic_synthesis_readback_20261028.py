@@ -53,8 +53,13 @@ def main() -> int:
         raise RuntimeError("synthesis_not_complete")
     if synthesis.get("http_status") != 200 or synthesis.get("model") != "deepseek-v4-pro":
         raise RuntimeError("backend_status_mismatch")
-    if not isinstance(response, dict) or sorted(response) != sorted(expected):
+    # Treat additive response fields as forward-compatible.  The controller
+    # owns the six required evidence lists; optional model annotations must not
+    # invalidate an otherwise attributable synthesis.  We still ignore those
+    # fields for semantic credit and validate every required field below.
+    if not isinstance(response, dict) or not set(expected).issubset(response):
         raise RuntimeError("response_schema_mismatch")
+    extra_response_fields = sorted(set(response) - set(expected))
     source_paths = d.get("source_paths_sent")
     if not isinstance(source_paths, list) or not source_paths or len(set(source_paths)) != 1:
         raise RuntimeError("source_scope_not_single_registered_material")
@@ -91,6 +96,7 @@ def main() -> int:
             "http_status": 200,
             "model": "deepseek-v4-pro",
             "response_schema": expected,
+            "response_extra_fields_ignored": extra_response_fields,
             "source_locator_count": len(locators),
             "source_locators_in_scope": True,
             "full_text_review_new": 0,
@@ -114,6 +120,7 @@ def main() -> int:
         "workflow_run_id": run_id,
         "source_scope": card["source_scope"],
         "response_sha256": response_digest,
+        "response_extra_fields_ignored": extra_response_fields,
         "source_locator_count": len(locators),
         "semantic_units_credited": 1,
         "semantic_credit": cumulative_credit,
