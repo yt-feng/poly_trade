@@ -8,10 +8,12 @@ validate the response and citations first.
 from __future__ import annotations
 
 import base64
+import ast
 import datetime as dt
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.request
@@ -50,7 +52,7 @@ def api_call(source_texts: list[dict]) -> dict:
         + joined
     )
     body = {
-        "model": "deepseek-flash",
+        "model": "deepseek-v4-pro",
         "messages": [
             {"role": "system", "content": "Return strict JSON only; preserve uncertainty."},
             {"role": "user", "content": prompt},
@@ -92,17 +94,38 @@ def api_call(source_texts: list[dict]) -> dict:
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
             candidate = "\n".join(lines).strip()
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            start, end = candidate.find("{"), candidate.rfind("}")
-            if start < 0 or end <= start:
-                raise
-            parsed = json.loads(candidate[start:end + 1])
+        candidates = [candidate]
+        start, end = candidate.find("{"), candidate.rfind("}")
+        if start >= 0 and end > start:
+            candidates.append(candidate[start:end + 1])
+        last_error: Exception | None = None
+        parsed = None
+        for item in candidates:
+            try:
+                parsed = json.loads(item)
+                break
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                try:
+                    parsed = ast.literal_eval(item)
+                    break
+                except (SyntaxError, ValueError, TypeError) as exc2:
+                    last_error = exc2
+                    repaired = re.sub(r",\s*([}\]])", r"\1", item)
+                    try:
+                        parsed = json.loads(repaired)
+                        break
+                    except json.JSONDecodeError as exc3:
+                        last_error = exc3
+        if parsed is None:
+            if last_error is not None:
+                raise last_error
+            raise ValueError("response_not_json")
         if not isinstance(parsed, dict):
             raise ValueError("response_not_object")
         return parsed
 
+    content = None
     try:
         envelope = json.loads(response_raw)
         content = envelope["choices"][0]["message"]["content"]
@@ -112,13 +135,14 @@ def api_call(source_texts: list[dict]) -> dict:
             "status": "invalid_json_response",
             "http_status": status,
             "response_sha256": digest,
+            "response_text": content if isinstance(content, str) else None,
             "error_class": type(exc).__name__,
             "semantic_worker_credit": 0,
         }
     return {
         "status": "complete_pending_readback_verification",
         "http_status": status,
-        "model": "deepseek-flash",
+        "model": "deepseek-v4-pro",
         "response_sha256": digest,
         "response": parsed,
         "usage": envelope.get("usage"),
