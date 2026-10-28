@@ -37,6 +37,7 @@ def main() -> int:
         raise SystemExit("usage: verify_semantic_synthesis_readback_20261028.py DECRYPTED_JSON WORKFLOW_RUN_ID")
     decrypted = Path(sys.argv[1])
     run_id = sys.argv[2]
+    batch = os.environ.get("SEMANTIC_VERIFICATION_BATCH", "0175")
     d = read(decrypted)
     synthesis = d.get("synthesis")
     response = synthesis.get("response") if isinstance(synthesis, dict) else None
@@ -63,6 +64,9 @@ def main() -> int:
         if not isinstance(value, list):
             raise RuntimeError("response_field_not_list")
         for row in value:
+            if key == "source_cards" and isinstance(row, str) and re.fullmatch(r"SOURCE\s*[12]", row.strip(), re.IGNORECASE):
+                locators.append(row.strip())
+                continue
             if not isinstance(row, dict) or not isinstance(row.get("source_locator"), str):
                 raise RuntimeError("source_locator_missing")
             locators.append(row["source_locator"])
@@ -75,7 +79,7 @@ def main() -> int:
     response_digest = synthesis.get("response_sha256")
     card = {
         "schema": "quantml-semantic-learning-record-v2",
-        "record_id": "semantic-0175-bounded-synthesis-readback-20261028",
+        "record_id": f"semantic-{batch}-bounded-synthesis-readback-20261028",
         "recorded_utc": now,
         "workflow_run_id": run_id,
         "source_scope": "one explicit source-cursor readback; two evidence units from one registered material; not full corpus",
@@ -120,7 +124,7 @@ def main() -> int:
         "plaintext_published": False,
         "next_action": card["next_action"],
     }
-    atomic(STUDY / "semantic-0175-readback-verification-20261028.json", summary)
+    atomic(STUDY / f"semantic-{batch}-readback-verification-20261028.json", summary)
     for path in [
         BASE / "active-episode.json",
         BASE / "cycle-progress.json",
@@ -144,10 +148,10 @@ def main() -> int:
             }
         )
         atomic(path, state)
-    marker = "## semantic synthesis readback verification（2026-10-28）"
+    marker = f"## semantic synthesis {batch} readback verification（2026-10-28）"
     section = (
         "\n\n" + marker + "\n\n"
-        f"- Actions run {run_id} 的 DeepSeek v4-pro 回读完成：HTTP 200，结构化字段完整，10 个 source_locator 均约束在 SOURCE 1/2；输入是同一已登记材料的两个证据单元。\n"
+        f"- Actions run {run_id} 的 DeepSeek v4-pro 回读完成：HTTP 200，结构化字段完整，{len(locators)} 个 source_locator 均约束在 SOURCE 1/2；输入是同一已登记材料的受控证据单元。\n"
         "- 只登记 1 个语义验证单元；没有新假设、策略评估、实际成交或 canary，full corpus 仍未完成，冻结 BTC 协议不变。\n"
         "- 原始响应和语义内容仅在已核验公钥密文中保存；下一步不得重放该 cursor，需另行预注册 source cursor。\n"
     )
@@ -159,7 +163,7 @@ def main() -> int:
 
     import research_vault as vault
 
-    delivery = BASE / "semantic-0175-readback-verification-delivery"
+    delivery = BASE / f"semantic-{batch}-readback-verification-delivery"
     delivery.mkdir(mode=0o700, exist_ok=True)
     recipient = vault.load_json_bytes(vault.read_bounded(ROOT / "research-repair-20261015/research_vault/recipient.json", 4096), 4096)
     vault.validate_recipient(recipient, RECIPIENT_ID)
@@ -186,7 +190,7 @@ def main() -> int:
             "--run-id", run_id,
             "--run-attempt", "1",
             "--recipient-id", RECIPIENT_ID,
-            "--cell-id", "semantic-0175-readback-verification-20261028",
+            "--cell-id", f"semantic-{batch}-readback-verification-20261028",
         ],
         cwd=ROOT / "research-repair-20261015",
         capture_output=True,
@@ -197,8 +201,8 @@ def main() -> int:
     if pub.returncode:
         raise RuntimeError("journal_publish_failed")
     receipt = json.loads(pub.stdout)
-    atomic(BASE / "semantic-0175-readback-verification-publication.json", {
-        "format": "quantml-semantic-0175-publication-v1",
+    atomic(BASE / f"semantic-{batch}-readback-verification-publication.json", {
+        "format": f"quantml-semantic-{batch}-publication-v1",
         "created_utc": now,
         "status": receipt.get("status"),
         "remote_branch": receipt.get("branch"),
