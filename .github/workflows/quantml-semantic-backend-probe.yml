@@ -1,0 +1,19 @@
+name: QuantML semantic backend probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe documented APIs without corpus data
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          MINERU_API_TOKEN: ${{ secrets.MINERU_API_TOKEN }}
+        run: python3 tools/semantic_backend_contract_probe.py
