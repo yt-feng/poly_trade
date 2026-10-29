@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -66,6 +67,8 @@ def gh_runs() -> list[dict]:
 
 
 def main() -> None:
+    if not re.fullmatch(r'[0-9a-f]{64}', SOURCE_ID):
+        raise SystemExit('invalid_source_id_length_or_format')
     state = read(STUDY / 'progress.json')
     if state.get('quantml_inflight_extract_run') or state.get('semantic_inflight_run'):
         raise SystemExit('inflight_exists')
