@@ -99,7 +99,16 @@ jobs:
           python -u analysis/acquire_event_evidence.py \
             --manifest forward_inputs/acquisition_manifest.json \
             --output forward_inputs/event_evidence \
+            --status-file forward_inputs/raw_sample_status.json \
             > forward_inputs/event_evidence_stdout.txt 2>&1
+      - name: Show sanitized raw sample transport status
+        if: ${{ !cancelled() && steps.regression.outcome == 'success' }}
+        run: |
+          if [ -f forward_inputs/raw_sample_status.json ]; then
+            cat forward_inputs/raw_sample_status.json
+          else
+            echo 'Raw sample did not reach collection; inspect the preceding gate.'
+          fi
       - name: Independent public outcome backfill
         if: ${{ !cancelled() && steps.regression.outcome == 'success' }}
         id: outcomes
@@ -117,6 +126,7 @@ jobs:
           # sealed research is the only encrypted delivery path.
           path: |
             forward_inputs/deployment_status.json
+            forward_inputs/raw_sample_status.json
           retention-days: 14
           compression-level: 0
           if-no-files-found: error
